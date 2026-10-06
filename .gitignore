@@ -147,3 +147,9 @@ vite.config.ts.timestamp-*
 
 # Turbo Repo
 .turbo
+
+# CommonVeil generated/private artifacts
+contracts/managed/
+.env*
+private-state/
+out/

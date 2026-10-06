@@ -1,0 +1,13 @@
+pragma language_version >= 0.23;
+import CompactStandardLibrary;
+
+// CV-001: prove knowledge of a private preimage; publish only its commitment.
+export ledger commitments: Set<Bytes<32>>;
+export ledger accepted: Counter;
+
+export circuit attest(secret: Bytes<32>, salt: Bytes<32>): [] {
+  const commitment = persistentCommit<Bytes<32>>(secret, salt);
+  assert(!commitments.member(disclose(commitment)), "Duplicate commitment");
+  commitments.insert(disclose(commitment));
+  accepted.increment(1);
+}

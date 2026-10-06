@@ -1,0 +1,14 @@
+{
+  "name": "commonveil",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "compile": "compact compile contracts/commonveil.compact contracts/managed/commonveil",
+    "test": "node --test tests/*.test.mjs",
+    "doctor": "node scripts/doctor.mjs"
+  },
+  "dependencies": {
+    "@midnight-ntwrk/compact-runtime": "0.16.0"
+  }
+}
