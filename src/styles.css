@@ -9,8 +9,8 @@ header p { max-width: 680px; color: #afbeb3; font-size: 1.08rem; line-height: 1.
 .status-card { margin: 42px 0 24px; padding: 18px 20px; display: flex; gap: 14px; align-items: center; border: 1px solid #254332; background: #0c1812; border-radius: 14px; }
 .status-card small { display: block; color: #789282; margin-bottom: 3px; }.status-card strong { display: block; }
 .dot { width: 11px; height: 11px; border-radius: 50%; background: #718078; box-shadow: 0 0 0 5px #71807818; }
-.dot.connected,.dot.deployed,.dot.enrolled,.dot.ready,.dot.verified { background: #6ee797; box-shadow: 0 0 0 5px #6ee79718; }
-.dot.connecting,.dot.deploying,.dot.enrolling,.dot.registering,.dot.proving { background: #f3cf72; box-shadow: 0 0 0 5px #f3cf7218; }.dot.failed { background: #ff7c72; }
+.dot.connected,.dot.deployed,.dot.enrolled,.dot.committed,.dot.ready,.dot.verified { background: #6ee797; box-shadow: 0 0 0 5px #6ee79718; }
+.dot.connecting,.dot.deploying,.dot.enrolling,.dot.committing,.dot.registering,.dot.proving { background: #f3cf72; box-shadow: 0 0 0 5px #f3cf7218; }.dot.failed { background: #ff7c72; }
 .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
 article, .evidence, .error { border: 1px solid #21392c; background: #0c1812dd; border-radius: 16px; padding: 24px; }
 article h2 { font-size: 1.25rem; margin: 12px 0; } article p { color: #91a297; line-height: 1.55; min-height: 76px; }

@@ -48,4 +48,15 @@ CV-003 is complete for the exact affected-release predicate demonstrated above. 
 
 Policy references inspected on 2026-10-07: the XZ Utils project incident page and Red Hat CVE-2024-3094 advisory, both identifying the malicious release tarballs as versions 5.6.0 and 5.6.1.
 
+## CV-004 implementation status — 2026-10-07 (Africa/Lagos)
+
+- An admitted member can create a salted commitment to a private product/version inventory snapshot while the commitment window is open.
+- Registering the first affected release activates the public policy and permanently closes the inventory commitment window for this milestone contract.
+- `attest` now proves that the same private credential, product, version, and snapshot salt reproduce a commitment already present before policy activation.
+- The generated-circuit test covers outsider commitment rejection, post-policy commitment rejection, wrong snapshot salt, a committed but unaffected release, valid committed exposure, replay rejection, and a separate-advisory success path.
+- The browser flow adds a distinct pre-policy inventory transaction and retains the snapshot salt only inside the browser session until proof completion.
+- Compilation, generated-circuit test, production build, and Preprod transaction evidence remain to be measured before CV-004 is marked complete.
+
+CV-004 strengthens timing integrity but not data-source authenticity: a member still supplies the controlled demonstration inventory. Trusted scanner or device attestation remains a future milestone.
+
 References inspected: official example-hello-world commit fa01af37511e955672f484af6f1ef31cb6509798 and the official midnight-leaderboard Connector v4 browser implementation available on 2026-10-07.

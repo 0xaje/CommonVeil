@@ -1,24 +1,49 @@
 pragma language_version >= 0.23;
 import CompactStandardLibrary;
 
-// CV-003: a registrar admits opaque member commitments and registers exact
-// affected releases. A member proves membership and an affected private
-// product/version while publishing only an advisory-scoped nullifier.
+// CV-004: an admitted member commits a private inventory snapshot before the
+// registrar activates an affected-release policy, then proves the committed
+// snapshot matches that policy without publishing its product or version.
 export new type AdminKey = Bytes<32>;
 export new type MemberCredential = Bytes<32>;
 export new type AdvisoryId = Bytes<32>;
 export new type ProductId = Bytes<32>;
 export new type ReleaseId = Bytes<32>;
+export new type InventoryCommitment = Bytes<32>;
 export new type Nullifier = Bytes<32>;
 
 export ledger admin: AdminKey;
 export ledger memberCredentials: Set<MemberCredential>;
 export ledger affectedReleases: Set<ReleaseId>;
+export ledger inventoryCommitments: Set<InventoryCommitment>;
+export ledger policyActive: Boolean;
 export ledger usedNullifiers: Set<Nullifier>;
 export ledger accepted: Counter;
 
 constructor(adminKey: AdminKey) {
   admin = disclose(adminKey);
+  policyActive = false;
+}
+
+export pure circuit deriveInventoryCommitment(
+  credential: MemberCredential,
+  productId: ProductId,
+  major: Uint<16>,
+  minor: Uint<16>,
+  patch: Uint<16>,
+  snapshotSalt: Bytes<32>
+): InventoryCommitment {
+  return persistentHash<[
+    Bytes<23>, MemberCredential, ProductId, Uint<16>, Uint<16>, Uint<16>, Bytes<32>
+  ]>([
+    "commonveil:inventory:v1",
+    credential,
+    productId,
+    major,
+    minor,
+    patch,
+    snapshotSalt
+  ]) as InventoryCommitment;
 }
 
 export pure circuit deriveAdminKey(adminSecret: Bytes<32>): AdminKey {
@@ -80,6 +105,25 @@ export circuit registerMember(
   memberCredentials.insert(disclose(credential));
 }
 
+export circuit commitInventory(
+  memberSecret: Bytes<32>,
+  memberSalt: Bytes<32>,
+  productId: ProductId,
+  major: Uint<16>,
+  minor: Uint<16>,
+  patch: Uint<16>,
+  snapshotSalt: Bytes<32>
+): [] {
+  assert(!policyActive, "Inventory commitment window is closed");
+  const credential = deriveMemberCredential(memberSecret, memberSalt);
+  assert(memberCredentials.member(disclose(credential)), "Member credential not admitted");
+  const commitment = deriveInventoryCommitment(
+    credential, productId, major, minor, patch, snapshotSalt
+  );
+  assert(!inventoryCommitments.member(disclose(commitment)), "Inventory snapshot already committed");
+  inventoryCommitments.insert(disclose(commitment));
+}
+
 export circuit registerAffectedRelease(
   adminSecret: Bytes<32>,
   advisoryId: AdvisoryId,
@@ -92,6 +136,7 @@ export circuit registerAffectedRelease(
   const releaseId = deriveReleaseId(advisoryId, productId, major, minor, patch);
   assert(!affectedReleases.member(disclose(releaseId)), "Affected release already registered");
   affectedReleases.insert(disclose(releaseId));
+  policyActive = true;
 }
 
 export circuit attest(
@@ -101,10 +146,19 @@ export circuit attest(
   productId: ProductId,
   major: Uint<16>,
   minor: Uint<16>,
-  patch: Uint<16>
+  patch: Uint<16>,
+  snapshotSalt: Bytes<32>
 ): [] {
   const credential = deriveMemberCredential(memberSecret, memberSalt);
   assert(memberCredentials.member(disclose(credential)), "Member credential not admitted");
+
+  const inventoryCommitment = deriveInventoryCommitment(
+    credential, productId, major, minor, patch, snapshotSalt
+  );
+  assert(
+    inventoryCommitments.member(disclose(inventoryCommitment)),
+    "Inventory snapshot was not committed before policy activation"
+  );
 
   // Only the release commitment is disclosed. Product and version remain
   // private circuit inputs, but must match an exact registrar-approved tuple.
