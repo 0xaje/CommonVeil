@@ -36,6 +36,18 @@ Open `http://localhost:3000` in Chrome with a funded Connector v4 wallet on Prep
 
 The connector prefers the wallet's proving provider, which lets 1AM prove in-browser. If the wallet does not expose a prover, it uses the wallet-configured prover URI or the local server at `http://localhost:6300`.
 
+## Live inventory measurement
+
+Run the scanner inside the Linux or WSL environment whose package inventory you want to inspect:
+
+```sh
+npm run scan
+```
+
+The command queries the host package manager and then the installed `xz` binary. It emits a JSON report marked `live-host-scan`, including the observed package version, a one-way host fingerprint, the exact-policy assessment, and a SHA-256 measurement digest. It understands Debian/Ubuntu `+really` rollback versions so a patched `5.6.1+really5.4.5` package is not falsely reported as affected. If XZ cannot be detected, it exits with code `2` and does not invent a version or create an exposure claim.
+
+The scanner is real host measurement, but it is not yet hardware attestation: a production certifier must authenticate the scanner and bind its signed output to the member credential before calling `certifyInventory`. The browser's affected-version selector remains an explicitly controlled protocol test vector and must not be described as a scan of the host.
+
 ## Security boundary
 
 The registrar, certifier, and member secrets plus snapshot salts, product, and version are private circuit inputs. The ledger contains derived role keys, opaque member credentials, salted certified-inventory commitments, registered release commitments, advisory-scoped nullifiers, and the accepted counter. CV-005 enforces certifier authorization in Compact, but the demo generates all roles in one browser and does not yet integrate an independent production scanner or device root of trust.

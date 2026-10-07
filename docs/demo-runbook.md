@@ -26,6 +26,14 @@ Expected compiler circuits:
 
 The generated-circuit test must report one pass and zero failures.
 
+## Scan the actual host
+
+```sh
+npm run scan
+```
+
+Record the JSON exactly as produced. `provenance` must be `live-host-scan`. If the installed version is not 5.6.0 or 5.6.1, say that the host is not a positive CVE-2024-3094 demonstration target. Do not alter the output or claim the controlled browser test vector came from this scan.
+
 ## Start proving and the DApp
 
 ```sh
@@ -43,7 +51,7 @@ Open `http://localhost:3000` and keep the wallet unlocked during each operation.
 1. Connect the Preprod wallet.
 2. Deploy CV-005 with distinct derived registrar and certifier keys.
 3. Admit the demo member's opaque credential.
-4. Select XZ Utils 5.6.1 and certify the private snapshot.
+4. Select XZ Utils 5.6.1 as the clearly labelled protocol test vector and certify the private snapshot.
 5. Enter exactly `CVE-2024-3094` and register the exact policy. Approve both release-registration transactions.
 6. Generate and submit the private certified-exposure proof.
 
