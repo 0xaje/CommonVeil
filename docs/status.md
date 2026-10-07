@@ -7,11 +7,12 @@
 - Devtools compiler installer failed fetching releases. Downloaded official compactc-v0.31.1 Linux release directly; compactc --version returned 0.31.1. Full compilation succeeded with no skip flags. Generated contract, prover/verifier keys and ZKIR included.
 - Actual generated-circuit test PASSED (1 test): first private commitment increments accepted to 1; same secret/salt replay rejected. This is local execution, not a generated network proof.
 - Docker command unavailable. Proof server NOT started.
-- No wallet configured or funded in this workspace.
-- No generated proof, deployment, contract address, transaction ID, or Preprod verification exists.
+- Browser Connector v4 deployment and attestation surface implemented and production bundle verified locally.
+- The browser path prefers wallet-provided proving (1AM) and falls back to a configured/local proof server.
+- No generated network proof, deployment, contract address, transaction ID, or Preprod verification has been recorded in this repository yet.
 
-CV-001 remains BLOCKED / incomplete. The archive is source foundation, not proof of a functioning Midnight deployment.
+CV-001 remains incomplete until the browser flow records a real Preprod deployment and private-input attestation.
 
-Next: run scripts/validate.sh in WSL with Docker Desktop integration enabled, start the loopback-bound proof server from README, and wire the official 4.1.1 providers to a locally controlled funded Preprod wallet. Do not paste wallet recovery material into chat.
+Next: run the browser DApp in WSL, connect a locally controlled funded Preprod wallet, deploy, submit one attestation, and record the returned contract/transaction identifiers. Do not paste wallet recovery material into chat.
 
-Reference inspected: official example-hello-world commit fa01af37511e955672f484af6f1ef31cb6509798. Provider/deployment integration is not included yet because it has not been validated.
+References inspected: official example-hello-world commit fa01af37511e955672f484af6f1ef31cb6509798 and the official midnight-leaderboard Connector v4 browser implementation available on 2026-10-07.

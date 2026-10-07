@@ -153,3 +153,7 @@ contracts/managed/
 .env*
 private-state/
 out/
+public/keys/
+public/zkir/
+dist/
+.vite/
