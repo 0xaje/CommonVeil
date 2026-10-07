@@ -10,6 +10,7 @@ export new type Nullifier = Bytes<32>;
 
 export ledger admin: AdminKey;
 export ledger memberCredentials: Set<MemberCredential>;
+export ledger advisories: Set<AdvisoryId>;
 export ledger usedNullifiers: Set<Nullifier>;
 export ledger accepted: Counter;
 
@@ -57,6 +58,15 @@ export circuit registerMember(
   memberCredentials.insert(disclose(credential));
 }
 
+export circuit registerAdvisory(
+  adminSecret: Bytes<32>,
+  advisoryId: AdvisoryId
+): [] {
+  assert(admin == deriveAdminKey(adminSecret), "Only the registrar can register advisories");
+  assert(!advisories.member(disclose(advisoryId)), "Advisory already registered");
+  advisories.insert(disclose(advisoryId));
+}
+
 export circuit attest(
   advisoryId: AdvisoryId,
   memberSecret: Bytes<32>,
@@ -65,7 +75,12 @@ export circuit attest(
   const credential = deriveMemberCredential(memberSecret, memberSalt);
   assert(memberCredentials.member(disclose(credential)), "Member credential not admitted");
 
-  const nullifier = deriveNullifier(advisoryId, memberSecret);
+  // The advisory is intentionally public and must have been registered by the
+  // registrar. This prevents a prover from inventing a private alternate scope
+  // to bypass the one-member-per-advisory rule.
+  const publicAdvisoryId = disclose(advisoryId);
+  assert(advisories.member(publicAdvisoryId), "Advisory not registered");
+  const nullifier = deriveNullifier(publicAdvisoryId, memberSecret);
   assert(!usedNullifiers.member(disclose(nullifier)), "Member already attested for this advisory");
   usedNullifiers.insert(disclose(nullifier));
   accepted.increment(1);
