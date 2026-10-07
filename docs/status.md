@@ -28,4 +28,15 @@ CV-002 is complete for the demonstrated enrollment policy and advisory. It prove
 
 Next: bind the report to an exact affected product/version predicate before claiming verified vulnerability exposure.
 
+## CV-003 implementation status — 2026-10-07 (Africa/Lagos)
+
+- The contract now registers exact affected-release commitments and requires the private product/version tuple to match one before accepting an attestation.
+- The browser policy is deliberately narrow: `CVE-2024-3094`, product `pkg:generic/xz-utils`, and exact releases 5.6.0 or 5.6.1.
+- The generated-circuit test covers unauthorized policy registration, unregistered releases, an unadmitted member, wrong product, wrong version, valid affected release, advisory replay, and a separate-advisory success path.
+- The product/version inputs are not stored as ledger fields. A release commitment is disclosed for set membership, and a successful proof establishes membership in the small public policy set.
+- This is controlled protocol-demonstration inventory, not a claim that the test machine is exposed. Scanner/device authenticity and inventory completeness remain outside CV-003.
+- Compilation, generated-circuit test, production build, and Preprod transaction evidence remain to be measured before CV-003 is marked complete.
+
+Policy references inspected on 2026-10-07: the XZ Utils project incident page and Red Hat CVE-2024-3094 advisory, both identifying the malicious release tarballs as versions 5.6.0 and 5.6.1.
+
 References inspected: official example-hello-world commit fa01af37511e955672f484af6f1ef31cb6509798 and the official midnight-leaderboard Connector v4 browser implementation available on 2026-10-07.

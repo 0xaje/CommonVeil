@@ -13,7 +13,7 @@ type Evidence = { readonly label: string; readonly txId: string };
 type PublicState = {
   readonly accepted: bigint;
   readonly members: bigint;
-  readonly advisories: bigint;
+  readonly affectedReleases: bigint;
   readonly nullifiers: bigint;
 };
 
@@ -33,6 +33,15 @@ async function advisoryDigest(label: string): Promise<Uint8Array> {
   return new Uint8Array(await crypto.subtle.digest('SHA-256', input));
 }
 
+async function productDigest(label: string): Promise<Uint8Array> {
+  const input = new TextEncoder().encode(`commonveil:product:v1:${label}`);
+  return new Uint8Array(await crypto.subtle.digest('SHA-256', input));
+}
+
+const POLICY_ADVISORY = 'CVE-2024-3094';
+const POLICY_PRODUCT = 'pkg:generic/xz-utils';
+const AFFECTED_PATCHES = [0n, 1n] as const;
+
 export default function App() {
   const [stage, setStage] = useState<Stage>('idle');
   const [wallet, setWallet] = useState<ConnectedWallet>();
@@ -40,8 +49,9 @@ export default function App() {
   const [memberAdmitted, setMemberAdmitted] = useState(false);
   const [advisoryLabel, setAdvisoryLabel] = useState('');
   const [advisoryId, setAdvisoryId] = useState<Uint8Array>();
+  const [inventoryPatch, setInventoryPatch] = useState<'0' | '1'>('1');
   const [evidence, setEvidence] = useState<Evidence[]>([]);
-  const [publicState, setPublicState] = useState<PublicState>({ accepted: 0n, members: 0n, advisories: 0n, nullifiers: 0n });
+  const [publicState, setPublicState] = useState<PublicState>({ accepted: 0n, members: 0n, affectedReleases: 0n, nullifiers: 0n });
   const [error, setError] = useState('');
 
   const adminSecret = useRef<Uint8Array | undefined>(undefined);
@@ -64,10 +74,10 @@ export default function App() {
     deployed: 'Contract deployed',
     enrolling: 'Admitting opaque member credential',
     enrolled: 'Member credential admitted',
-    registering: 'Registering public advisory scope',
-    ready: 'Ready for private membership proof',
-    proving: 'Generating membership and nullifier proof',
-    verified: 'Private member attestation verified',
+    registering: 'Registering exact affected releases',
+    ready: 'Ready for private exposure proof',
+    proving: 'Proving private product and version match',
+    verified: 'Private affected-release proof verified',
     failed: 'Operation stopped safely',
   }[stage]), [stage]);
 
@@ -139,14 +149,17 @@ export default function App() {
     setStage('registering'); setError('');
     try {
       const digest = await advisoryDigest(advisoryLabel);
-      pendingEvidenceLabel.current = 'Advisory registration';
-      await submitCallTx(wallet.providers, {
-        compiledContract: CompiledCommonVeilContract,
-        contractAddress,
-        privateStateId: PRIVATE_STATE_ID,
-        circuitId: 'registerAdvisory',
-        args: [adminSecret.current, digest],
-      });
+      const productId = await productDigest(POLICY_PRODUCT);
+      for (const patch of AFFECTED_PATCHES) {
+        pendingEvidenceLabel.current = `Affected release 5.6.${patch} registration`;
+        await submitCallTx(wallet.providers, {
+          compiledContract: CompiledCommonVeilContract,
+          contractAddress,
+          privateStateId: PRIVATE_STATE_ID,
+          circuitId: 'registerAffectedRelease',
+          args: [adminSecret.current, digest, productId, 5n, 6n, patch],
+        });
+      }
       erase(adminSecret.current); adminSecret.current = undefined;
       setAdvisoryId(digest); setStage('ready');
     } catch (reason) { fail(reason); }
@@ -156,13 +169,14 @@ export default function App() {
     if (!wallet || !contractAddress || !advisoryId || !memberSecret.current || !memberSalt.current) return;
     setStage('proving'); setError('');
     try {
-      pendingEvidenceLabel.current = 'Private attestation';
+      const productId = await productDigest(POLICY_PRODUCT);
+      pendingEvidenceLabel.current = 'Private affected-release proof';
       await submitCallTx(wallet.providers, {
         compiledContract: CompiledCommonVeilContract,
         contractAddress,
         privateStateId: PRIVATE_STATE_ID,
         circuitId: 'attest',
-        args: [advisoryId, memberSecret.current, memberSalt.current],
+        args: [advisoryId, memberSecret.current, memberSalt.current, productId, 5n, 6n, BigInt(inventoryPatch)],
       });
       erase(memberSecret.current); erase(memberSalt.current);
       memberSecret.current = undefined; memberSalt.current = undefined;
@@ -174,9 +188,9 @@ export default function App() {
   return (
     <main>
       <header>
-        <div className="eyebrow">COMMONVEIL · CV-002</div>
-        <h1>Prove membership. Prevent duplicate disclosure.</h1>
-        <p>An admitted member privately proves eligibility for a registered advisory while publishing only an advisory-scoped nullifier on Midnight Preprod.</p>
+        <div className="eyebrow">COMMONVEIL · CV-003</div>
+        <h1>Prove affected inventory without publishing it.</h1>
+        <p>An admitted member proves a private product/version matches an exact public advisory policy while publishing only an advisory-scoped nullifier on Midnight Preprod.</p>
       </header>
 
       <section className="status-card">
@@ -195,7 +209,7 @@ export default function App() {
         <article>
           <div className="step">02</div><h2>Deploy registrar</h2>
           <p>Create a fresh registrar secret locally and bind its derived public key into the contract constructor.</p>
-          <button onClick={deploy} disabled={busy || !wallet || !!contractAddress}>{contractAddress ? 'Deployed' : 'Deploy CV-002'}</button>
+          <button onClick={deploy} disabled={busy || !wallet || !!contractAddress}>{contractAddress ? 'Deployed' : 'Deploy CV-003'}</button>
           {contractAddress && <dl><dt>Contract</dt><dd title={contractAddress}>{short(contractAddress)}</dd></dl>}
         </article>
 
@@ -207,25 +221,30 @@ export default function App() {
         </article>
 
         <article>
-          <div className="step">04</div><h2>Register advisory</h2>
-          <p>Enter a real public advisory identifier. CommonVeil hashes it to the canonical 32-byte scope registered on-chain.</p>
+          <div className="step">04</div><h2>Register affected releases</h2>
+          <p>Register the exact public policy: XZ Utils release tarballs 5.6.0 and 5.6.1 for CVE-2024-3094.</p>
           <label htmlFor="advisory">Advisory identifier</label>
-          <input id="advisory" value={advisoryLabel} onChange={(event) => setAdvisoryLabel(event.target.value)} placeholder="e.g. a real CVE or vendor advisory ID" disabled={busy || !!advisoryId} />
-          <button onClick={registerAdvisory} disabled={busy || !memberAdmitted || !advisoryLabel.trim() || !!advisoryId}>{advisoryId ? 'Advisory registered' : 'Register advisory'}</button>
+          <input id="advisory" value={advisoryLabel} onChange={(event) => setAdvisoryLabel(event.target.value)} placeholder={POLICY_ADVISORY} disabled={busy || !!advisoryId} />
+          <button onClick={registerAdvisory} disabled={busy || !memberAdmitted || advisoryLabel.trim() !== POLICY_ADVISORY || !!advisoryId}>{advisoryId ? 'Policy registered' : 'Register exact policy'}</button>
           {advisoryId && <dl><dt>Scope hash</dt><dd title={bytesToHex(advisoryId)}>{short(bytesToHex(advisoryId))}</dd></dl>}
         </article>
 
         <article>
-          <div className="step">05</div><h2>Prove private membership</h2>
-          <p>Prove the admitted credential and emit one nullifier for this advisory without revealing the member secret.</p>
+          <div className="step">05</div><h2>Prove private affected release</h2>
+          <p>Choose controlled demonstration inventory. The product and version enter the circuit privately and are not published as ledger fields.</p>
+          <label htmlFor="version">Private demonstration version</label>
+          <select id="version" value={inventoryPatch} onChange={(event) => setInventoryPatch(event.target.value as '0' | '1')} disabled={busy || stage === 'verified'}>
+            <option value="0">XZ Utils 5.6.0</option>
+            <option value="1">XZ Utils 5.6.1</option>
+          </select>
           <button onClick={attest} disabled={busy || !advisoryId || stage === 'verified'}>{stage === 'verified' ? 'Verified' : 'Generate & submit proof'}</button>
-          <dl><dt>Accepted reports</dt><dd>{publicState.accepted.toString()}</dd><dt>Used nullifiers</dt><dd>{publicState.nullifiers.toString()}</dd><dt>Member identity</dt><dd>Not published</dd></dl>
+          <dl><dt>Accepted reports</dt><dd>{publicState.accepted.toString()}</dd><dt>Used nullifiers</dt><dd>{publicState.nullifiers.toString()}</dd><dt>Inventory value</dt><dd>Not published</dd></dl>
         </article>
       </section>
 
       {evidence.length > 0 && <section className="evidence"><h2>Network evidence</h2>{evidence.map(({ label, txId }) => <div key={txId}><span>{label}</span><code>{txId}</code></div>)}</section>}
       {error && <section className="error"><strong>Stopped safely</strong><p>{error}</p></section>}
-      <footer>Network: Midnight Preprod · Registrar, member secret, and salt remain inside this browser session.</footer>
+      <footer>Network: Midnight Preprod · Demonstration input only; this milestone does not attest scanner or device authenticity.</footer>
     </main>
   );
 }
@@ -243,7 +262,7 @@ async function readPublicState(
         return {
           accepted: value.accepted,
           members: value.memberCredentials.size(),
-          advisories: value.advisories.size(),
+          affectedReleases: value.affectedReleases.size(),
           nullifiers: value.usedNullifiers.size(),
         };
       }

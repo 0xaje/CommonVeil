@@ -1,16 +1,19 @@
 pragma language_version >= 0.23;
 import CompactStandardLibrary;
 
-// CV-002: a registrar admits opaque member commitments. A member can then
-// prove membership and publish only an advisory-scoped nullifier.
+// CV-003: a registrar admits opaque member commitments and registers exact
+// affected releases. A member proves membership and an affected private
+// product/version while publishing only an advisory-scoped nullifier.
 export new type AdminKey = Bytes<32>;
 export new type MemberCredential = Bytes<32>;
 export new type AdvisoryId = Bytes<32>;
+export new type ProductId = Bytes<32>;
+export new type ReleaseId = Bytes<32>;
 export new type Nullifier = Bytes<32>;
 
 export ledger admin: AdminKey;
 export ledger memberCredentials: Set<MemberCredential>;
-export ledger advisories: Set<AdvisoryId>;
+export ledger affectedReleases: Set<ReleaseId>;
 export ledger usedNullifiers: Set<Nullifier>;
 export ledger accepted: Counter;
 
@@ -47,6 +50,25 @@ export pure circuit deriveNullifier(
   ]) as Nullifier;
 }
 
+export pure circuit deriveReleaseId(
+  advisoryId: AdvisoryId,
+  productId: ProductId,
+  major: Uint<16>,
+  minor: Uint<16>,
+  patch: Uint<16>
+): ReleaseId {
+  return persistentHash<[
+    Bytes<21>, AdvisoryId, ProductId, Uint<16>, Uint<16>, Uint<16>
+  ]>([
+    "commonveil:release:v1",
+    advisoryId,
+    productId,
+    major,
+    minor,
+    patch
+  ]) as ReleaseId;
+}
+
 // The registrar receives only the opaque credential commitment. The member's
 // secret and salt do not need to be disclosed during enrollment.
 export circuit registerMember(
@@ -58,28 +80,37 @@ export circuit registerMember(
   memberCredentials.insert(disclose(credential));
 }
 
-export circuit registerAdvisory(
+export circuit registerAffectedRelease(
   adminSecret: Bytes<32>,
-  advisoryId: AdvisoryId
+  advisoryId: AdvisoryId,
+  productId: ProductId,
+  major: Uint<16>,
+  minor: Uint<16>,
+  patch: Uint<16>
 ): [] {
-  assert(admin == deriveAdminKey(adminSecret), "Only the registrar can register advisories");
-  assert(!advisories.member(disclose(advisoryId)), "Advisory already registered");
-  advisories.insert(disclose(advisoryId));
+  assert(admin == deriveAdminKey(adminSecret), "Only the registrar can register affected releases");
+  const releaseId = deriveReleaseId(advisoryId, productId, major, minor, patch);
+  assert(!affectedReleases.member(disclose(releaseId)), "Affected release already registered");
+  affectedReleases.insert(disclose(releaseId));
 }
 
 export circuit attest(
   advisoryId: AdvisoryId,
   memberSecret: Bytes<32>,
-  memberSalt: Bytes<32>
+  memberSalt: Bytes<32>,
+  productId: ProductId,
+  major: Uint<16>,
+  minor: Uint<16>,
+  patch: Uint<16>
 ): [] {
   const credential = deriveMemberCredential(memberSecret, memberSalt);
   assert(memberCredentials.member(disclose(credential)), "Member credential not admitted");
 
-  // The advisory is intentionally public and must have been registered by the
-  // registrar. This prevents a prover from inventing a private alternate scope
-  // to bypass the one-member-per-advisory rule.
+  // Only the release commitment is disclosed. Product and version remain
+  // private circuit inputs, but must match an exact registrar-approved tuple.
   const publicAdvisoryId = disclose(advisoryId);
-  assert(advisories.member(publicAdvisoryId), "Advisory not registered");
+  const releaseId = deriveReleaseId(publicAdvisoryId, productId, major, minor, patch);
+  assert(affectedReleases.member(disclose(releaseId)), "Product version is not an affected release");
   const nullifier = deriveNullifier(publicAdvisoryId, memberSecret);
   assert(!usedNullifiers.member(disclose(nullifier)), "Member already attested for this advisory");
   usedNullifiers.insert(disclose(nullifier));

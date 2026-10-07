@@ -1,6 +1,6 @@
-# Commonveil — CV-001 foundation
+# CommonVeil — confidential exposure coordination
 
-Confidential exposure coordination on Midnight. This milestone is deliberately only a private-preimage commitment circuit. It does not yet prove vulnerability exposure, inventory authenticity, anonymous membership, or organizational uniqueness.
+CommonVeil is progressing through measured Midnight Preprod milestones. CV-003 adds an exact affected-product/version predicate to the admitted-member and advisory-scoped-nullifier guarantees completed in CV-002.
 
 ## Run in Linux or WSL
 
@@ -24,26 +24,28 @@ After compiling and starting the proof server:
 npm run dev
 ```
 
-Open `http://localhost:3000` in Chrome with a funded Connector v4 wallet on Preprod. The CV-001 surface performs three explicit operations: connect the wallet, deploy the Compact contract, and submit a private `attest(secret, salt)` call. Transaction identifiers shown by the page come directly from finalized transactions submitted by the connected wallet.
+Open `http://localhost:3000` in Chrome with a funded Connector v4 wallet on Preprod. The CV-003 surface connects the wallet, deploys the contract, admits an opaque member credential, registers the exact CVE-2024-3094 policy for XZ Utils 5.6.0 and 5.6.1, then proves a controlled private product/version input matches that policy. Transaction identifiers shown by the page come directly from finalized transactions submitted by the connected wallet.
 
 The connector prefers the wallet's proving provider, which lets 1AM prove in-browser. If the wallet does not expose a prover, it uses the wallet-configured prover URI or the local server at `http://localhost:6300`.
 
 ## Security boundary
 
-The secret and salt are private circuit inputs. Only their salted commitment and a counter are public. Reusing the commitment is rejected. Changing the salt creates another commitment: this is not Sybil resistance.
+The member secret, salt, product, and version are private circuit inputs. The ledger contains opaque member credentials, registered release commitments, advisory-scoped nullifiers, and the accepted counter. The CV-003 demo proves the predicate over controlled browser input; it does not yet prove that a trusted scanner or device supplied that inventory.
 
 Never upload wallet seeds, mnemonics, private inventory, or private state. A Preprod wallet must be funded and registered for DUST locally before deployment.
 
 ## Status
 
-CV-001 and CV-002 are complete. Genuine Compact deployments, member admission, advisory registration, and private membership attestation finalized on Midnight Preprod; their transaction IDs and measured results are recorded in `docs/status.md`. No transaction ID is invented.
+CV-001 and CV-002 are complete. CV-003 source and generated-circuit tests are ready for validation and Preprod evidence. Genuine finalized transaction IDs and measured results are recorded in `docs/status.md`; no transaction ID is invented.
 
-## Next contract requirements
+## Current contract requirements
 
-CV-002 now uses an admitted credential commitment and advisory-scoped nullifier. The registrar controls credential issuance in the demonstration; claims of distinct organizations still require an external enrollment policy.
+CV-003 uses an admitted credential commitment, exact registrar-approved affected release commitments, and an advisory-scoped nullifier. The registrar controls credential issuance in the demonstration; claims of distinct organizations still require an external enrollment policy.
 
 A proof over freely chosen inventory inputs proves only the predicate over those inputs. Binding to a previously committed inventory is required before claiming historical inventory assurance. Authenticity and completeness still require a separate trust model.
 
-The exposed predicate must be constrained inside Compact, not merely computed by a TypeScript witness. Start with one exact affected product/version, not general NVD version-range semantics. Local no-match is not a verified non-exposure proof. Remediation is deferred.
+The affected-release predicate is constrained inside Compact, not merely computed by TypeScript. Local no-match is not a verified non-exposure proof. Trusted inventory provenance, general version-range semantics, and remediation are deferred.
+
+CV-003 policy sources: https://tukaani.org/xz-backdoor/ and https://access.redhat.com/security/cve/cve-2024-3094
 
 Official references: https://docs.midnight.network/relnotes/support-matrix and https://docs.midnight.network/guides/deploy-and-operate
