@@ -48,15 +48,25 @@ CV-003 is complete for the exact affected-release predicate demonstrated above. 
 
 Policy references inspected on 2026-10-07: the XZ Utils project incident page and Red Hat CVE-2024-3094 advisory, both identifying the malicious release tarballs as versions 5.6.0 and 5.6.1.
 
-## CV-004 implementation status — 2026-10-07 (Africa/Lagos)
+## CV-004 measured status — 2026-10-07 (Africa/Lagos)
 
 - An admitted member can create a salted commitment to a private product/version inventory snapshot while the commitment window is open.
 - Registering the first affected release activates the public policy and permanently closes the inventory commitment window for this milestone contract.
 - `attest` now proves that the same private credential, product, version, and snapshot salt reproduce a commitment already present before policy activation.
-- The generated-circuit test covers outsider commitment rejection, post-policy commitment rejection, wrong snapshot salt, a committed but unaffected release, valid committed exposure, replay rejection, and a separate-advisory success path.
+- Four circuits compiled with Compact 0.31.1: `attest` (k=15, 19,049 rows), `commitInventory` (k=14, 10,945 rows), `registerAffectedRelease` (k=13, 6,872 rows), and `registerMember` (k=13, 2,605 rows).
+- The generated-circuit test PASSED and covers outsider commitment rejection, post-policy commitment rejection, wrong snapshot salt, a committed but unaffected release, valid committed exposure, replay rejection, and a separate-advisory success path.
+- The production TypeScript/Vite build completed successfully.
 - The browser flow adds a distinct pre-policy inventory transaction and retains the snapshot salt only inside the browser session until proof completion.
-- Compilation, generated-circuit test, production build, and Preprod transaction evidence remain to be measured before CV-004 is marked complete.
+- Registrar-bound deployment finalized with transaction ID `009854a5656188cb3f24d29d40a678f4cf7f54d7eaa35e982e75c0f38dd9c79186`.
+- Opaque member admission finalized with transaction ID `00245060790ed111d044dcbc1b536737cd63bdfa9dc7f18b26e8cca72a7e0f096d`.
+- The pre-policy private inventory commitment finalized with transaction ID `00f6f10c687b7fc2fdf424c612aa9eb3027c1fb6702b631e5372c25a1a977cfc4f`.
+- Affected XZ Utils 5.6.0 policy registration finalized with transaction ID `008a2d76c2f2e979d08304e047254dd005c5b49cc9d7db3fb78fe238c5f3f91882`.
+- Affected XZ Utils 5.6.1 policy registration finalized with transaction ID `000b369a606577da3002ee430efbe474dcd9e117094b091db1c6df3ea826e6680b`.
+- The private committed affected-release proof finalized with transaction ID `00df7a831d6ea5e007edc6f6e56aaf7e8dd2d010954ed3399320adf77118221471`.
+- Indexed public state reported 1 accepted report and 1 used nullifier; the page reported `Verified` and `Inventory value: Not published`.
 
 CV-004 strengthens timing integrity but not data-source authenticity: a member still supplies the controlled demonstration inventory. Trusted scanner or device attestation remains a future milestone.
+
+CV-004 is complete for the pre-policy inventory-commitment guarantee demonstrated above. All network evidence is from finalized Midnight Preprod transactions; no transaction identifier or exposure result is fabricated.
 
 References inspected: official example-hello-world commit fa01af37511e955672f484af6f1ef31cb6509798 and the official midnight-leaderboard Connector v4 browser implementation available on 2026-10-07.
