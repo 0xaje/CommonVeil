@@ -36,7 +36,7 @@ Never upload wallet seeds, mnemonics, private inventory, or private state. A Pre
 
 ## Status
 
-See docs/status.md for measured outcomes. CV-001 is incomplete until a genuine proof and finalized Preprod call have been recorded. No transaction ID is invented.
+CV-001 is complete. A genuine Compact contract deployment and private-input attestation finalized on Midnight Preprod; their transaction IDs and the measured local results are recorded in `docs/status.md`. No transaction ID is invented.
 
 ## Next contract requirements
 
