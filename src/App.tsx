@@ -166,7 +166,7 @@ export default function App() {
       });
       erase(memberSecret.current); erase(memberSalt.current);
       memberSecret.current = undefined; memberSalt.current = undefined;
-      setPublicState(await readPublicState(wallet.providers, contractAddress));
+      setPublicState(await readPublicState(wallet.providers, contractAddress, publicState.accepted + 1n));
       setStage('verified');
     } catch (reason) { fail(reason); }
   };
@@ -230,17 +230,23 @@ export default function App() {
   );
 }
 
-async function readPublicState(providers: CommonVeilProviders, address: ContractAddress): Promise<PublicState> {
+async function readPublicState(
+  providers: CommonVeilProviders,
+  address: ContractAddress,
+  minimumAccepted: bigint,
+): Promise<PublicState> {
   for (let attempt = 0; attempt < 12; attempt++) {
     const state = await providers.publicDataProvider.queryContractState(address);
     if (state) {
       const value = CommonVeil.ledger(state.data);
-      return {
-        accepted: value.accepted,
-        members: value.memberCredentials.size(),
-        advisories: value.advisories.size(),
-        nullifiers: value.usedNullifiers.size(),
-      };
+      if (value.accepted >= minimumAccepted && value.usedNullifiers.size() >= minimumAccepted) {
+        return {
+          accepted: value.accepted,
+          members: value.memberCredentials.size(),
+          advisories: value.advisories.size(),
+          nullifiers: value.usedNullifiers.size(),
+        };
+      }
     }
     await new Promise((resolve) => setTimeout(resolve, 1_500));
   }

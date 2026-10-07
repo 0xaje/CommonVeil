@@ -36,11 +36,11 @@ Never upload wallet seeds, mnemonics, private inventory, or private state. A Pre
 
 ## Status
 
-CV-001 is complete. A genuine Compact contract deployment and private-input attestation finalized on Midnight Preprod; their transaction IDs and the measured local results are recorded in `docs/status.md`. No transaction ID is invented.
+CV-001 and CV-002 are complete. Genuine Compact deployments, member admission, advisory registration, and private membership attestation finalized on Midnight Preprod; their transaction IDs and measured results are recorded in `docs/status.md`. No transaction ID is invented.
 
 ## Next contract requirements
 
-Use an admitted credential membership proof and advisory-scoped nullifier. Public membership lookup keyed by a participant commitment may link exposure to registration; anonymity must be demonstrated, not assumed. A registrar controls credential issuance in the demonstration; claims of distinct organizations require an external enrollment policy.
+CV-002 now uses an admitted credential commitment and advisory-scoped nullifier. The registrar controls credential issuance in the demonstration; claims of distinct organizations still require an external enrollment policy.
 
 A proof over freely chosen inventory inputs proves only the predicate over those inputs. Binding to a previously committed inventory is required before claiming historical inventory assurance. Authenticity and completeness still require a separate trust model.
 
