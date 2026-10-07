@@ -28,14 +28,23 @@ CV-002 is complete for the demonstrated enrollment policy and advisory. It prove
 
 Next: bind the report to an exact affected product/version predicate before claiming verified vulnerability exposure.
 
-## CV-003 implementation status — 2026-10-07 (Africa/Lagos)
+## CV-003 measured status — 2026-10-07 (Africa/Lagos)
 
 - The contract now registers exact affected-release commitments and requires the private product/version tuple to match one before accepting an attestation.
 - The browser policy is deliberately narrow: `CVE-2024-3094`, product `pkg:generic/xz-utils`, and exact releases 5.6.0 or 5.6.1.
-- The generated-circuit test covers unauthorized policy registration, unregistered releases, an unadmitted member, wrong product, wrong version, valid affected release, advisory replay, and a separate-advisory success path.
+- Three circuits compiled with Compact 0.31.1: `attest` (k=14, 12,953 rows), `registerAffectedRelease` (k=13, 6,872 rows), and `registerMember` (k=13, 2,605 rows).
+- The generated-circuit test PASSED and covers unauthorized policy registration, unregistered releases, an unadmitted member, wrong product, wrong version, valid affected release, advisory replay, and a separate-advisory success path.
+- The production TypeScript/Vite build completed successfully.
+- Registrar-bound deployment finalized with transaction ID `0023665f966744a83ca90cd2ed14dd7d70b921d9b4d61fa32720b85da5f6c2d638`.
+- Opaque member admission finalized with transaction ID `0029f070b71adff055015ef2dc62eb7aa8807ecf9dac31029f53365037db2ab15a`.
+- Affected XZ Utils 5.6.0 policy registration finalized with transaction ID `00d692b2782ffae3c91b9af3bd9f94ec0b05e73f53fa79a41fc98a07154d20b1c2`.
+- Affected XZ Utils 5.6.1 policy registration finalized with transaction ID `00d858d5b15ffa54485ac971f4703af7f3b8f2d879663781fc75e48182c46d81df`.
+- The private affected-release proof finalized with transaction ID `00ee2d2c8c077f5b0bf800deb94073814fda47f5f66dbf1af140989b4bb81e9433`.
+- Indexed public state reported 1 accepted report and 1 used nullifier; the page reported `Verified` and `Inventory value: Not published`.
 - The product/version inputs are not stored as ledger fields. A release commitment is disclosed for set membership, and a successful proof establishes membership in the small public policy set.
 - This is controlled protocol-demonstration inventory, not a claim that the test machine is exposed. Scanner/device authenticity and inventory completeness remain outside CV-003.
-- Compilation, generated-circuit test, production build, and Preprod transaction evidence remain to be measured before CV-003 is marked complete.
+
+CV-003 is complete for the exact affected-release predicate demonstrated above. All network evidence is from finalized Midnight Preprod transactions; no transaction identifier or exposure result is fabricated.
 
 Policy references inspected on 2026-10-07: the XZ Utils project incident page and Red Hat CVE-2024-3094 advisory, both identifying the malicious release tarballs as versions 5.6.0 and 5.6.1.
 

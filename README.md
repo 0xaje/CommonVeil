@@ -36,7 +36,7 @@ Never upload wallet seeds, mnemonics, private inventory, or private state. A Pre
 
 ## Status
 
-CV-001 and CV-002 are complete. CV-003 source and generated-circuit tests are ready for validation and Preprod evidence. Genuine finalized transaction IDs and measured results are recorded in `docs/status.md`; no transaction ID is invented.
+CV-001, CV-002, and CV-003 are complete. CV-003 compiled, passed its generated-circuit test and production build, and finalized deployment, enrollment, two exact affected-release registrations, and one private affected-release proof on Midnight Preprod. Genuine finalized transaction IDs and measured results are recorded in `docs/status.md`; no transaction ID is invented.
 
 ## Current contract requirements
 
