@@ -10,7 +10,8 @@ import semver from 'semver';
 import { inMemoryPrivateStateProvider } from './private-state-provider';
 
 export const PRIVATE_STATE_ID = 'commonveilPrivateState';
-export type CommonVeilProviders = MidnightProviders<'attest', typeof PRIVATE_STATE_ID, Record<string, never>>;
+export type CommonVeilCircuit = 'registerMember' | 'registerAdvisory' | 'attest';
+export type CommonVeilProviders = MidnightProviders<CommonVeilCircuit, typeof PRIVATE_STATE_ID, Record<string, never>>;
 
 export interface ConnectedWallet {
   readonly name: string;
@@ -65,7 +66,7 @@ export const connectProviders = async (
     connectedAPI.getUnshieldedAddress(),
     connectedAPI.getDustBalance(),
   ]);
-  const zkConfigProvider = new FetchZkConfigProvider<'attest'>(window.location.origin, fetch.bind(window));
+  const zkConfigProvider = new FetchZkConfigProvider<CommonVeilCircuit>(window.location.origin, fetch.bind(window));
 
   let proofMode: ConnectedWallet['proofMode'] = 'wallet';
   let proofProvider;
