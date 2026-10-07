@@ -2,15 +2,23 @@
 
 CommonVeil is progressing through measured Midnight Preprod milestones. CV-005 adds a cryptographically separate authorized certifier that must originate the private inventory commitment before the affected-release policy activates.
 
+## What CV-005 proves
+
+- A registrar admitted the reporting credential.
+- An authorized certifier committed the private inventory before policy activation.
+- The same private product/version belongs to the exact registered affected set.
+- The member has not already reported for that advisory.
+- The accepted count can increase without publishing member identity or inventory value.
+
+The final CV-005 flow is verified by six genuine Midnight Preprod transactions. See [docs/evidence.md](docs/evidence.md).
+
 ## Run in Linux or WSL
 
 Install Compact through the official Midnight installer. Pin compiler 0.31.1 with `compact update 0.31.1`. Node 22+ and Docker are required.
 
 ```sh
 npm ci
-npm run doctor
-npm run compile
-npm test
+npm run verify
 docker run --rm -p 127.0.0.1:6300:6300 midnightntwrk/proof-server:8.1.0 midnight-proof-server -v
 ```
 
@@ -49,3 +57,11 @@ Both commitment membership and the affected-release predicate are constrained in
 CV-003 policy sources: https://tukaani.org/xz-backdoor/ and https://access.redhat.com/security/cve/cve-2024-3094
 
 Official references: https://docs.midnight.network/relnotes/support-matrix and https://docs.midnight.network/guides/deploy-and-operate
+
+## Documentation
+
+- [Architecture and circuit flow](docs/architecture.md)
+- [Threat model and claim boundary](docs/threat-model.md)
+- [Verified Preprod evidence](docs/evidence.md)
+- [Judge demo runbook](docs/demo-runbook.md)
+- [Measured milestone history](docs/status.md)

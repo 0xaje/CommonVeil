@@ -233,6 +233,17 @@ export default function App() {
         <p>A separate authorized certifier anchors an admitted member's private inventory before policy activation. The member later proves that snapshot is affected.</p>
       </header>
 
+      <section className="explainer" aria-label="Protocol summary">
+        <div><small>Proves</small><strong>Admitted member + certified snapshot + exact affected release</strong></div>
+        <div><small>Publishes</small><strong>Commitments, scoped nullifier, and aggregate count</strong></div>
+        <div><small>Does not publish</small><strong>Member identity, product, version, or private salts</strong></div>
+      </section>
+
+      <section className="boundary">
+        <strong>Demonstration boundary</strong>
+        <p>Registrar, certifier, and member authorities are cryptographically distinct, but this Preprod demo runs them in one browser. It does not claim production scanner or device attestation.</p>
+      </section>
+
       <section className="status-card">
         <span className={`dot ${stage}`} />
         <div><small>Current stage</small><strong>{statusLabel}</strong></div>
