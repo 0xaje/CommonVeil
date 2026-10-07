@@ -1,13 +1,72 @@
 pragma language_version >= 0.23;
 import CompactStandardLibrary;
 
-// CV-001: prove knowledge of a private preimage; publish only its commitment.
-export ledger commitments: Set<Bytes<32>>;
+// CV-002: a registrar admits opaque member commitments. A member can then
+// prove membership and publish only an advisory-scoped nullifier.
+export new type AdminKey = Bytes<32>;
+export new type MemberCredential = Bytes<32>;
+export new type AdvisoryId = Bytes<32>;
+export new type Nullifier = Bytes<32>;
+
+export ledger admin: AdminKey;
+export ledger memberCredentials: Set<MemberCredential>;
+export ledger usedNullifiers: Set<Nullifier>;
 export ledger accepted: Counter;
 
-export circuit attest(secret: Bytes<32>, salt: Bytes<32>): [] {
-  const commitment = persistentCommit<Bytes<32>>(secret, salt);
-  assert(!commitments.member(disclose(commitment)), "Duplicate commitment");
-  commitments.insert(disclose(commitment));
+constructor(adminKey: AdminKey) {
+  admin = disclose(adminKey);
+}
+
+export pure circuit deriveAdminKey(adminSecret: Bytes<32>): AdminKey {
+  return persistentHash<[Bytes<19>, Bytes<32>]>([
+    "commonveil:admin:v1",
+    adminSecret
+  ]) as AdminKey;
+}
+
+export pure circuit deriveMemberCredential(
+  memberSecret: Bytes<32>,
+  memberSalt: Bytes<32>
+): MemberCredential {
+  return persistentHash<[Bytes<20>, Bytes<32>, Bytes<32>]>([
+    "commonveil:member:v1",
+    memberSecret,
+    memberSalt
+  ]) as MemberCredential;
+}
+
+export pure circuit deriveNullifier(
+  advisoryId: AdvisoryId,
+  memberSecret: Bytes<32>
+): Nullifier {
+  return persistentHash<[Bytes<23>, AdvisoryId, Bytes<32>]>([
+    "commonveil:nullifier:v1",
+    advisoryId,
+    memberSecret
+  ]) as Nullifier;
+}
+
+// The registrar receives only the opaque credential commitment. The member's
+// secret and salt do not need to be disclosed during enrollment.
+export circuit registerMember(
+  adminSecret: Bytes<32>,
+  credential: MemberCredential
+): [] {
+  assert(admin == deriveAdminKey(adminSecret), "Only the registrar can admit members");
+  assert(!memberCredentials.member(disclose(credential)), "Member credential already admitted");
+  memberCredentials.insert(disclose(credential));
+}
+
+export circuit attest(
+  advisoryId: AdvisoryId,
+  memberSecret: Bytes<32>,
+  memberSalt: Bytes<32>
+): [] {
+  const credential = deriveMemberCredential(memberSecret, memberSalt);
+  assert(memberCredentials.member(disclose(credential)), "Member credential not admitted");
+
+  const nullifier = deriveNullifier(advisoryId, memberSecret);
+  assert(!usedNullifiers.member(disclose(nullifier)), "Member already attested for this advisory");
+  usedNullifiers.insert(disclose(nullifier));
   accepted.increment(1);
 }
