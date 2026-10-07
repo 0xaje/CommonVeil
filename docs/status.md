@@ -69,15 +69,25 @@ CV-004 strengthens timing integrity but not data-source authenticity: a member s
 
 CV-004 is complete for the pre-policy inventory-commitment guarantee demonstrated above. All network evidence is from finalized Midnight Preprod transactions; no transaction identifier or exposure result is fabricated.
 
-## CV-005 implementation status — 2026-10-07 (Africa/Lagos)
+## CV-005 measured status — 2026-10-07 (Africa/Lagos)
 
 - The constructor now binds two independent public role keys: registrar and inventory certifier.
 - `certifyInventory` requires the private certifier secret, an admitted opaque member credential, and a still-open pre-policy certification window.
 - The member cannot create a valid inventory commitment using only its membership secret; unauthorized certifier secrets are rejected inside Compact.
-- The generated-circuit test covers wrong registrar, wrong certifier, unadmitted credential, authorized certification, post-policy certification rejection, wrong snapshot salt, committed-but-unaffected inventory, valid proof, replay rejection, and a separate-advisory success path.
+- Four circuits compiled with Compact 0.31.1: `attest` (k=15, 19,049 rows), `certifyInventory` (k=14, 9,061 rows), `registerAffectedRelease` (k=13, 6,872 rows), and `registerMember` (k=13, 2,605 rows).
+- The generated-circuit test PASSED and covers wrong registrar, wrong certifier, unadmitted credential, authorized certification, post-policy certification rejection, wrong snapshot salt, committed-but-unaffected inventory, valid proof, replay rejection, and a separate-advisory success path.
+- The production TypeScript/Vite build completed successfully.
 - The browser generates separate registrar and certifier secrets, uses each only for its authorized circuit, and overwrites the certifier secret immediately after certification.
-- Compilation, generated-circuit test, production build, and Preprod transaction evidence remain to be measured before CV-005 is marked complete.
+- Registrar-and-certifier-bound deployment finalized with transaction ID `0044682865b940b3054c6fb1f065f4d19acc2627daa543dff4aaedbc88e8bcaf9c`.
+- Opaque member admission finalized with transaction ID `00ed9c0173c6dfa599c494f5cef901ea999e034c1e0d615cf658289ff7cc8af0ec`.
+- Authorized inventory certification finalized with transaction ID `00162a6cea69226e4731b519f76ca71e14e011eca434cfe2a08b88dda51f02f66b`.
+- Affected XZ Utils 5.6.0 policy registration finalized with transaction ID `00ddf48a2547cce14bb422981a1ebb69e7a7e94f275e2ba9b24ac6de8d555d58ea`.
+- Affected XZ Utils 5.6.1 policy registration finalized with transaction ID `00e7b17f940d9a156286ecfda8e222aa8604886774ca0c92a4f159457752591887`.
+- The private certified affected-release proof finalized with transaction ID `009c158f65b339b14130f7fc41fddc1735fad1acded068fcc429e23e6ec716ad47`.
+- Indexed public state reported 1 accepted report and 1 used nullifier; the page reported `Verified` and `Inventory value: Not published`.
 
 Boundary: this demonstrates cryptographic role separation, not an independently operated production scanner. All three roles run in one controlled browser session for Preprod testing; scanner deployment, hardware/device roots of trust, and measurement completeness remain future work.
+
+CV-005 is complete for the authorized-certifier guarantee demonstrated above. All network evidence is from finalized Midnight Preprod transactions; no transaction identifier, certification, or exposure result is fabricated.
 
 References inspected: official example-hello-world commit fa01af37511e955672f484af6f1ef31cb6509798 and the official midnight-leaderboard Connector v4 browser implementation available on 2026-10-07.
