@@ -42,6 +42,14 @@ async function productDigest(label: string): Promise<Uint8Array> {
 const POLICY_ADVISORY = 'CVE-2024-3094';
 const POLICY_PRODUCT = 'pkg:generic/xz-utils';
 const AFFECTED_PATCHES = [0n, 1n] as const;
+const VERIFIED_REFERENCE_EVIDENCE: Evidence[] = [
+  { label: 'Deployment', txId: '0044682865b940b3054c6fb1f065f4d19acc2627daa543dff4aaedbc88e8bcaf9c' },
+  { label: 'Member admission', txId: '00ed9c0173c6dfa599c494f5cef901ea999e034c1e0d615cf658289ff7cc8af0ec' },
+  { label: 'Inventory certification', txId: '00162a6cea69226e4731b519f76ca71e14e011eca434cfe2a08b88dda51f02f66b' },
+  { label: 'XZ 5.6.0 policy', txId: '00ddf48a2547cce14bb422981a1ebb69e7a7e94f275e2ba9b24ac6de8d555d58ea' },
+  { label: 'XZ 5.6.1 policy', txId: '00e7b17f940d9a156286ecfda8e222aa8604886774ca0c92a4f159457752591887' },
+  { label: 'Private exposure proof', txId: '009c158f65b339b14130f7fc41fddc1735fad1acded068fcc429e23e6ec716ad47' },
+];
 
 export default function App() {
   const [stage, setStage] = useState<Stage>('idle');
@@ -227,22 +235,49 @@ export default function App() {
 
   return (
     <main>
-      <header>
-        <div className="eyebrow">COMMONVEIL · CV-005</div>
-        <h1>Certify inventory before the advisory. Prove exposure privately.</h1>
-        <p>A separate authorized certifier anchors an admitted member's private inventory before policy activation. The member later proves that snapshot is affected.</p>
+      <nav>
+        <a className="brand" href="#top" aria-label="CommonVeil home"><span>CV</span> CommonVeil</a>
+        <div className="nav-links">
+          <a href="#protocol">Protocol</a><a href="#demo">Live demo</a><a href="#evidence">Evidence</a>
+          <a className="repo-link" href="https://github.com/0xaje/CommonVeil" target="_blank" rel="noreferrer">GitHub ↗</a>
+        </div>
+      </nav>
+
+      <header id="top" className="hero">
+        <div className="hero-copy">
+          <div className="eyebrow">MIDNIGHT PREPROD · CV-005</div>
+          <h1>Prove exposure.<br /><span>Keep inventory private.</span></h1>
+          <p>CommonVeil lets an admitted organization prove that an authorized pre-policy inventory snapshot is affected—without publishing its identity, product, or version.</p>
+          <div className="hero-actions"><a className="primary-link" href="#demo">Run verified flow</a><a className="secondary-link" href="#evidence">Inspect evidence</a></div>
+        </div>
+        <aside className="proof-card">
+          <div className="proof-top"><span className="pulse" /> Verified on Preprod</div>
+          <div className="proof-number">1</div><div className="proof-caption">accepted private report</div>
+          <div className="proof-rows"><span>Member identity <b>Hidden</b></span><span>Inventory value <b>Hidden</b></span><span>Duplicate report <b>Rejected</b></span></div>
+        </aside>
       </header>
 
-      <section className="explainer" aria-label="Protocol summary">
+      <section id="protocol" className="section-heading"><div className="eyebrow">THE PROTOCOL</div><h2>Useful coordination without public exposure lists.</h2><p>Every accepted report satisfies four Compact-enforced conditions.</p></section>
+
+      <section className="explainer" aria-label="Protocol guarantees">
         <div><small>Proves</small><strong>Admitted member + certified snapshot + exact affected release</strong></div>
         <div><small>Publishes</small><strong>Commitments, scoped nullifier, and aggregate count</strong></div>
         <div><small>Does not publish</small><strong>Member identity, product, version, or private salts</strong></div>
       </section>
 
+      <section className="role-flow">
+        <div><span>01</span><h3>Registrar</h3><p>Admits an opaque member credential and registers the exact affected-release policy.</p></div>
+        <div><span>02</span><h3>Certifier</h3><p>Commits salted private inventory for that credential before policy activation.</p></div>
+        <div><span>03</span><h3>Member</h3><p>Proves the certified snapshot matches the affected set without revealing its value.</p></div>
+        <div><span>04</span><h3>Contract</h3><p>Rejects outsiders, late certification, mismatches, and advisory replay.</p></div>
+      </section>
+
       <section className="boundary">
-        <strong>Demonstration boundary</strong>
+        <strong>Honest demonstration boundary</strong>
         <p>Registrar, certifier, and member authorities are cryptographically distinct, but this Preprod demo runs them in one browser. It does not claim production scanner or device attestation.</p>
       </section>
+
+      <section id="demo" className="section-heading demo-heading"><div className="eyebrow">LIVE PROTOCOL DEMO</div><h2>Six real Midnight transactions. No mocked backend.</h2><p>Connect a funded Preprod wallet to execute a fresh run, or inspect the verified reference run below.</p></section>
 
       <section className="status-card">
         <span className={`dot ${stage}`} />
@@ -300,9 +335,18 @@ export default function App() {
         </article>
       </section>
 
-      {evidence.length > 0 && <section className="evidence"><h2>Network evidence</h2>{evidence.map(({ label, txId }) => <div key={txId}><span>{label}</span><code>{txId}</code></div>)}</section>}
+      {evidence.length > 0 && <section className="evidence"><div className="evidence-title"><div><small>CURRENT SESSION</small><h2>Network evidence</h2></div><span className="evidence-badge">Submitted by connected wallet</span></div>{evidence.map(({ label, txId }) => <div key={txId}><span>{label}</span><code>{txId}</code></div>)}</section>}
       {error && <section className="error"><strong>Stopped safely</strong><p>{error}</p></section>}
-      <footer>Network: Midnight Preprod · Separate certifier key enforced; production scanner integration remains outside this milestone.</footer>
+
+      <section id="evidence" className="section-heading evidence-heading"><div className="eyebrow">VERIFIED REFERENCE RUN</div><h2>Recorded, reproducible, and inspectable.</h2><p>These identifiers came from the completed CV-005 Preprod run—not placeholders or simulated transactions.</p></section>
+      <section className="evidence reference-evidence">
+        <div className="reference-summary"><div><strong>1</strong><span>Accepted report</span></div><div><strong>1</strong><span>Used nullifier</span></div><div><strong>6</strong><span>Finalized transactions</span></div></div>
+        {VERIFIED_REFERENCE_EVIDENCE.map(({ label, txId }) => <div key={txId}><span>{label}</span><code>{txId}</code></div>)}
+      </section>
+
+      <section className="closing"><div><div className="eyebrow">CURRENT SCOPE</div><h2>A verified privacy protocol—not a pretend production scanner.</h2></div><p>CommonVeil CV-005 proves authorization, pre-policy certification, exact affected-set membership, and duplicate prevention. Independent scanner deployment, hardware-backed measurement, and multi-organization operations remain explicit production work.</p></section>
+
+      <footer><span>CommonVeil · Built on Midnight Preprod</span><span>Separate certifier key enforced · Inventory value remains private</span></footer>
     </main>
   );
 }
