@@ -69,4 +69,15 @@ CV-004 strengthens timing integrity but not data-source authenticity: a member s
 
 CV-004 is complete for the pre-policy inventory-commitment guarantee demonstrated above. All network evidence is from finalized Midnight Preprod transactions; no transaction identifier or exposure result is fabricated.
 
+## CV-005 implementation status — 2026-10-07 (Africa/Lagos)
+
+- The constructor now binds two independent public role keys: registrar and inventory certifier.
+- `certifyInventory` requires the private certifier secret, an admitted opaque member credential, and a still-open pre-policy certification window.
+- The member cannot create a valid inventory commitment using only its membership secret; unauthorized certifier secrets are rejected inside Compact.
+- The generated-circuit test covers wrong registrar, wrong certifier, unadmitted credential, authorized certification, post-policy certification rejection, wrong snapshot salt, committed-but-unaffected inventory, valid proof, replay rejection, and a separate-advisory success path.
+- The browser generates separate registrar and certifier secrets, uses each only for its authorized circuit, and overwrites the certifier secret immediately after certification.
+- Compilation, generated-circuit test, production build, and Preprod transaction evidence remain to be measured before CV-005 is marked complete.
+
+Boundary: this demonstrates cryptographic role separation, not an independently operated production scanner. All three roles run in one controlled browser session for Preprod testing; scanner deployment, hardware/device roots of trust, and measurement completeness remain future work.
+
 References inspected: official example-hello-world commit fa01af37511e955672f484af6f1ef31cb6509798 and the official midnight-leaderboard Connector v4 browser implementation available on 2026-10-07.

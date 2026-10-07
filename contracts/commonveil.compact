@@ -1,10 +1,11 @@
 pragma language_version >= 0.23;
 import CompactStandardLibrary;
 
-// CV-004: an admitted member commits a private inventory snapshot before the
-// registrar activates an affected-release policy, then proves the committed
-// snapshot matches that policy without publishing its product or version.
+// CV-005: a cryptographically separate certifier commits an admitted member's
+// private inventory before policy activation. The member later proves that
+// certified snapshot matches an affected release without publishing it.
 export new type AdminKey = Bytes<32>;
+export new type CertifierKey = Bytes<32>;
 export new type MemberCredential = Bytes<32>;
 export new type AdvisoryId = Bytes<32>;
 export new type ProductId = Bytes<32>;
@@ -13,6 +14,7 @@ export new type InventoryCommitment = Bytes<32>;
 export new type Nullifier = Bytes<32>;
 
 export ledger admin: AdminKey;
+export ledger certifier: CertifierKey;
 export ledger memberCredentials: Set<MemberCredential>;
 export ledger affectedReleases: Set<ReleaseId>;
 export ledger inventoryCommitments: Set<InventoryCommitment>;
@@ -20,8 +22,9 @@ export ledger policyActive: Boolean;
 export ledger usedNullifiers: Set<Nullifier>;
 export ledger accepted: Counter;
 
-constructor(adminKey: AdminKey) {
+constructor(adminKey: AdminKey, certifierKey: CertifierKey) {
   admin = disclose(adminKey);
+  certifier = disclose(certifierKey);
   policyActive = false;
 }
 
@@ -51,6 +54,13 @@ export pure circuit deriveAdminKey(adminSecret: Bytes<32>): AdminKey {
     "commonveil:admin:v1",
     adminSecret
   ]) as AdminKey;
+}
+
+export pure circuit deriveCertifierKey(certifierSecret: Bytes<32>): CertifierKey {
+  return persistentHash<[Bytes<23>, Bytes<32>]>([
+    "commonveil:certifier:v1",
+    certifierSecret
+  ]) as CertifierKey;
 }
 
 export pure circuit deriveMemberCredential(
@@ -105,17 +115,17 @@ export circuit registerMember(
   memberCredentials.insert(disclose(credential));
 }
 
-export circuit commitInventory(
-  memberSecret: Bytes<32>,
-  memberSalt: Bytes<32>,
+export circuit certifyInventory(
+  certifierSecret: Bytes<32>,
+  credential: MemberCredential,
   productId: ProductId,
   major: Uint<16>,
   minor: Uint<16>,
   patch: Uint<16>,
   snapshotSalt: Bytes<32>
 ): [] {
-  assert(!policyActive, "Inventory commitment window is closed");
-  const credential = deriveMemberCredential(memberSecret, memberSalt);
+  assert(certifier == deriveCertifierKey(certifierSecret), "Only the authorized certifier can commit inventory");
+  assert(!policyActive, "Inventory certification window is closed");
   assert(memberCredentials.member(disclose(credential)), "Member credential not admitted");
   const commitment = deriveInventoryCommitment(
     credential, productId, major, minor, patch, snapshotSalt

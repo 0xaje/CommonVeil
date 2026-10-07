@@ -6,7 +6,7 @@ import { connectProviders, PRIVATE_STATE_ID, type CommonVeilProviders, type Conn
 
 type Stage =
   | 'idle' | 'connecting' | 'connected' | 'deploying' | 'deployed'
-  | 'enrolling' | 'enrolled' | 'committing' | 'committed' | 'registering' | 'ready'
+  | 'enrolling' | 'enrolled' | 'certifying' | 'certified' | 'registering' | 'ready'
   | 'proving' | 'verified' | 'failed';
 
 type Evidence = { readonly label: string; readonly txId: string };
@@ -57,16 +57,20 @@ export default function App() {
   const [error, setError] = useState('');
 
   const adminSecret = useRef<Uint8Array | undefined>(undefined);
+  const certifierSecret = useRef<Uint8Array | undefined>(undefined);
   const memberSecret = useRef<Uint8Array | undefined>(undefined);
   const memberSalt = useRef<Uint8Array | undefined>(undefined);
+  const memberCredential = useRef<Uint8Array | undefined>(undefined);
   const snapshotSalt = useRef<Uint8Array | undefined>(undefined);
   const pendingEvidenceLabel = useRef('Transaction');
-  const busy = ['connecting', 'deploying', 'enrolling', 'committing', 'registering', 'proving'].includes(stage);
+  const busy = ['connecting', 'deploying', 'enrolling', 'certifying', 'registering', 'proving'].includes(stage);
 
   useEffect(() => () => {
     erase(adminSecret.current);
+    erase(certifierSecret.current);
     erase(memberSecret.current);
     erase(memberSalt.current);
+    erase(memberCredential.current);
     erase(snapshotSalt.current);
   }, []);
 
@@ -78,8 +82,8 @@ export default function App() {
     deployed: 'Contract deployed',
     enrolling: 'Admitting opaque member credential',
     enrolled: 'Member credential admitted',
-    committing: 'Committing private inventory snapshot',
-    committed: 'Inventory committed before policy activation',
+    certifying: 'Authorized certifier is committing inventory',
+    certified: 'Inventory certified before policy activation',
     registering: 'Registering exact affected releases',
     ready: 'Ready for private exposure proof',
     proving: 'Proving private product and version match',
@@ -107,21 +111,25 @@ export default function App() {
     if (!wallet) return;
     setStage('deploying'); setError('');
     const nextAdminSecret = crypto.getRandomValues(new Uint8Array(32));
+    const nextCertifierSecret = crypto.getRandomValues(new Uint8Array(32));
     try {
       const adminKey = CommonVeil.pureCircuits.deriveAdminKey(nextAdminSecret);
+      const certifierKey = CommonVeil.pureCircuits.deriveCertifierKey(nextCertifierSecret);
       pendingEvidenceLabel.current = 'Deployment';
       const deployed = await deployContract(wallet.providers, {
         compiledContract: CompiledCommonVeilContract,
         privateStateId: PRIVATE_STATE_ID,
         initialPrivateState: {},
-        args: [adminKey],
+        args: [adminKey, certifierKey],
       });
       const address = deployed.deployTxData.public.contractAddress;
       wallet.providers.privateStateProvider.setContractAddress(address);
       adminSecret.current = nextAdminSecret;
+      certifierSecret.current = nextCertifierSecret;
       setContractAddress(address); setStage('deployed');
     } catch (reason) {
       erase(nextAdminSecret);
+      erase(nextCertifierSecret);
       fail(reason);
     }
   };
@@ -143,6 +151,7 @@ export default function App() {
       });
       memberSecret.current = nextMemberSecret;
       memberSalt.current = nextMemberSalt;
+      memberCredential.current = credential;
       setMemberAdmitted(true); setStage('enrolled');
     } catch (reason) {
       erase(nextMemberSecret); erase(nextMemberSalt);
@@ -171,22 +180,24 @@ export default function App() {
     } catch (reason) { fail(reason); }
   };
 
-  const commitInventory = async () => {
-    if (!wallet || !contractAddress || !memberSecret.current || !memberSalt.current) return;
-    setStage('committing'); setError('');
+  const certifyInventory = async () => {
+    if (!wallet || !contractAddress || !certifierSecret.current || !memberCredential.current) return;
+    setStage('certifying'); setError('');
     const nextSnapshotSalt = crypto.getRandomValues(new Uint8Array(32));
     try {
       const productId = await productDigest(POLICY_PRODUCT);
-      pendingEvidenceLabel.current = 'Pre-policy inventory commitment';
+      pendingEvidenceLabel.current = 'Authorized inventory certification';
       await submitCallTx(wallet.providers, {
         compiledContract: CompiledCommonVeilContract,
         contractAddress,
         privateStateId: PRIVATE_STATE_ID,
-        circuitId: 'commitInventory',
-        args: [memberSecret.current, memberSalt.current, productId, 5n, 6n, BigInt(inventoryPatch), nextSnapshotSalt],
+        circuitId: 'certifyInventory',
+        args: [certifierSecret.current, memberCredential.current, productId, 5n, 6n, BigInt(inventoryPatch), nextSnapshotSalt],
       });
       snapshotSalt.current = nextSnapshotSalt;
-      setInventoryCommitted(true); setStage('committed');
+      erase(certifierSecret.current); certifierSecret.current = undefined;
+      erase(memberCredential.current); memberCredential.current = undefined;
+      setInventoryCommitted(true); setStage('certified');
     } catch (reason) {
       erase(nextSnapshotSalt);
       fail(reason);
@@ -217,9 +228,9 @@ export default function App() {
   return (
     <main>
       <header>
-        <div className="eyebrow">COMMONVEIL · CV-004</div>
-        <h1>Commit inventory before the advisory. Prove exposure later.</h1>
-        <p>An admitted member anchors a private inventory snapshot before policy activation, then proves that same snapshot matches an exact affected-release policy.</p>
+        <div className="eyebrow">COMMONVEIL · CV-005</div>
+        <h1>Certify inventory before the advisory. Prove exposure privately.</h1>
+        <p>A separate authorized certifier anchors an admitted member's private inventory before policy activation. The member later proves that snapshot is affected.</p>
       </header>
 
       <section className="status-card">
@@ -237,8 +248,8 @@ export default function App() {
 
         <article>
           <div className="step">02</div><h2>Deploy registrar</h2>
-          <p>Create a fresh registrar secret locally and bind its derived public key into the contract constructor.</p>
-          <button onClick={deploy} disabled={busy || !wallet || !!contractAddress}>{contractAddress ? 'Deployed' : 'Deploy CV-004'}</button>
+          <p>Create independent registrar and certifier secrets locally and bind both derived public keys into the contract constructor.</p>
+          <button onClick={deploy} disabled={busy || !wallet || !!contractAddress}>{contractAddress ? 'Deployed' : 'Deploy CV-005'}</button>
           {contractAddress && <dl><dt>Contract</dt><dd title={contractAddress}>{short(contractAddress)}</dd></dl>}
         </article>
 
@@ -250,15 +261,15 @@ export default function App() {
         </article>
 
         <article>
-          <div className="step">04</div><h2>Commit private inventory</h2>
-          <p>Choose controlled demonstration inventory and commit it before any affected-release policy is activated.</p>
+          <div className="step">04</div><h2>Certify private inventory</h2>
+          <p>The authorized certifier commits controlled demonstration inventory for the admitted opaque credential before policy activation.</p>
           <label htmlFor="version">Private demonstration version</label>
           <select id="version" value={inventoryPatch} onChange={(event) => setInventoryPatch(event.target.value as '0' | '1')} disabled={busy || inventoryCommitted}>
             <option value="0">XZ Utils 5.6.0</option>
             <option value="1">XZ Utils 5.6.1</option>
           </select>
-          <button onClick={commitInventory} disabled={busy || !memberAdmitted || inventoryCommitted}>{inventoryCommitted ? 'Inventory committed' : 'Commit inventory snapshot'}</button>
-          <dl><dt>Product/version</dt><dd>Not published</dd><dt>Policy active</dt><dd>No</dd></dl>
+          <button onClick={certifyInventory} disabled={busy || !memberAdmitted || inventoryCommitted}>{inventoryCommitted ? 'Inventory certified' : 'Certify inventory snapshot'}</button>
+          <dl><dt>Product/version</dt><dd>Not published</dd><dt>Certifier role</dt><dd>Authorized key</dd></dl>
         </article>
 
         <article>
@@ -271,8 +282,8 @@ export default function App() {
         </article>
 
         <article>
-          <div className="step">06</div><h2>Prove committed exposure</h2>
-          <p>Prove the earlier private snapshot matches the now-active affected-release policy and emit one advisory-scoped nullifier.</p>
+          <div className="step">06</div><h2>Prove certified exposure</h2>
+          <p>Prove the certifier-originated private snapshot matches the active affected-release policy and emit one advisory-scoped nullifier.</p>
           <button onClick={attest} disabled={busy || !advisoryId || stage === 'verified'}>{stage === 'verified' ? 'Verified' : 'Generate & submit proof'}</button>
           <dl><dt>Accepted reports</dt><dd>{publicState.accepted.toString()}</dd><dt>Used nullifiers</dt><dd>{publicState.nullifiers.toString()}</dd><dt>Inventory value</dt><dd>Not published</dd></dl>
         </article>
@@ -280,7 +291,7 @@ export default function App() {
 
       {evidence.length > 0 && <section className="evidence"><h2>Network evidence</h2>{evidence.map(({ label, txId }) => <div key={txId}><span>{label}</span><code>{txId}</code></div>)}</section>}
       {error && <section className="error"><strong>Stopped safely</strong><p>{error}</p></section>}
-      <footer>Network: Midnight Preprod · Prior commitment proven; scanner and device authenticity remain outside this milestone.</footer>
+      <footer>Network: Midnight Preprod · Separate certifier key enforced; production scanner integration remains outside this milestone.</footer>
     </main>
   );
 }

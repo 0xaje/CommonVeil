@@ -10,7 +10,7 @@ import semver from 'semver';
 import { inMemoryPrivateStateProvider } from './private-state-provider';
 
 export const PRIVATE_STATE_ID = 'commonveilPrivateState';
-export type CommonVeilCircuit = 'registerMember' | 'commitInventory' | 'registerAffectedRelease' | 'attest';
+export type CommonVeilCircuit = 'registerMember' | 'certifyInventory' | 'registerAffectedRelease' | 'attest';
 export type CommonVeilProviders = MidnightProviders<CommonVeilCircuit, typeof PRIVATE_STATE_ID, Record<string, never>>;
 
 export interface ConnectedWallet {
