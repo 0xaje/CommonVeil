@@ -40,6 +40,7 @@
     "vite-plugin-wasm": "3.5.0"
   },
   "overrides": {
+    "@midnight-ntwrk/ledger-v8": "8.1.0",
     "smoldot": "npm:@aspect-build/empty@0.0.0"
   }
 }
