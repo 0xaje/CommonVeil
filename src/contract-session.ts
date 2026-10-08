@@ -48,15 +48,21 @@ export type ContractSessionErrorCode =
   | 'INVALID_CONTRACT_ADDRESS'
   | 'CONTRACT_NOT_FOUND'
   | 'INCOMPATIBLE_CONTRACT'
+  | 'INDEXER_QUERY_FAILED'
   | 'INVALID_SECRET_LENGTH';
 
 export class ContractSessionError extends Error {
   readonly code: ContractSessionErrorCode;
+  readonly internalCause?: unknown;
 
-  constructor(code: ContractSessionErrorCode, message: string) {
+  constructor(code: ContractSessionErrorCode, message: string, options?: { cause?: unknown }) {
     super(message);
     this.name = 'ContractSessionError';
     this.code = code;
+    if (options?.cause !== undefined) {
+      this.internalCause = options.cause;
+      (this as any).cause = options.cause;
+    }
     Object.setPrototypeOf(this, ContractSessionError.prototype);
   }
 }
@@ -90,7 +96,8 @@ function decodeLedgerState(
   } catch (error) {
     throw new ContractSessionError(
       'INCOMPATIBLE_CONTRACT',
-      `State at address '${contractAddress}' could not be decoded as CommonVeil ledger: ${error instanceof Error ? error.message : String(error)}`,
+      'The indexed state is not compatible with this CommonVeil build.',
+      { cause: error },
     );
   }
 
@@ -131,7 +138,8 @@ function decodeLedgerState(
   } catch (error) {
     throw new ContractSessionError(
       'INCOMPATIBLE_CONTRACT',
-      `State at address '${contractAddress}' is incompatible with CommonVeil: ${error instanceof Error ? error.message : String(error)}`,
+      'The indexed state is not compatible with this CommonVeil build.',
+      { cause: error },
     );
   }
 }
@@ -160,15 +168,16 @@ export async function queryCommonVeilContract(
     state = await providers.publicDataProvider.queryContractState(validatedAddress);
   } catch (error) {
     throw new ContractSessionError(
-      'CONTRACT_NOT_FOUND',
-      `Failed to query contract state at '${validatedAddress}': ${error instanceof Error ? error.message : String(error)}`,
+      'INDEXER_QUERY_FAILED',
+      'The Midnight indexer could not complete the contract lookup.',
+      { cause: error },
     );
   }
 
   if (!state || !('data' in state) || state.data === null || state.data === undefined) {
     throw new ContractSessionError(
       'CONTRACT_NOT_FOUND',
-      `Contract not found or not indexed at address '${validatedAddress}'`,
+      'No indexed contract state exists at the supplied address.',
     );
   }
 

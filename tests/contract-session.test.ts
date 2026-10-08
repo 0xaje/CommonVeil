@@ -37,7 +37,7 @@ function createTestDoubleProviders(stateData: any = null) {
     },
     getBoundAddress: () => boundContractAddress,
     getSubmitTxCount: () => submitTxCallCount,
-  };
+  } as any;
 }
 
 // Generate valid Compact ledger state using the generated contract
@@ -262,4 +262,108 @@ test('17. Query-only inspection does not set the private-state provider address'
 
   await queryCommonVeilContract(providers, SAMPLE_ADDRESS);
   assert.equal(providers.getBoundAddress(), null, 'Read-only query must not set private-state provider address');
+});
+
+// 18. Thrown indexer/provider error produces INDEXER_QUERY_FAILED and sanitizes public error
+test('18. Thrown indexer/provider error produces INDEXER_QUERY_FAILED and sanitizes public error', async () => {
+  const sensitiveErrorText = 'Internal connection reset to https://secret-node.midnight.internal:9999/rpc?auth=super-secret-token-xyz';
+  const throwingProviders = {
+    publicDataProvider: {
+      queryContractState: async () => {
+        throw new Error(sensitiveErrorText);
+      },
+    },
+    privateStateProvider: {
+      setContractAddress: () => {},
+      getContractAddress: () => null,
+    },
+  };
+
+  await assert.rejects(
+    () => queryCommonVeilContract(throwingProviders as any, SAMPLE_ADDRESS),
+    (err: any) => {
+      assert.equal(err instanceof ContractSessionError, true);
+      assert.equal(err.code, 'INDEXER_QUERY_FAILED');
+      assert.equal(err.message, 'The Midnight indexer could not complete the contract lookup.');
+      assert.equal(err.message.includes('secret-node'), false, 'Public message must not leak sensitive endpoints');
+      assert.equal(err.message.includes('super-secret-token'), false, 'Public message must not leak tokens');
+      assert.equal(err.internalCause instanceof Error, true);
+      return true;
+    },
+  );
+});
+
+// 19. Sanitized error messages for CONTRACT_NOT_FOUND and INCOMPATIBLE_CONTRACT without decoder leaks
+test('19. Sanitized error messages for CONTRACT_NOT_FOUND and INCOMPATIBLE_CONTRACT without decoder leaks', async () => {
+  // CONTRACT_NOT_FOUND sanitized message
+  const nullProviders = createTestDoubleProviders(null);
+  await assert.rejects(
+    () => queryCommonVeilContract(nullProviders, SAMPLE_ADDRESS),
+    (err: any) => {
+      assert.equal(err instanceof ContractSessionError, true);
+      assert.equal(err.code, 'CONTRACT_NOT_FOUND');
+      assert.equal(err.message, 'No indexed contract state exists at the supplied address.');
+      return true;
+    },
+  );
+
+  // INCOMPATIBLE_CONTRACT sanitized message
+  const badStateProviders = createTestDoubleProviders({ corruptBytes: 'xyz123' });
+  await assert.rejects(
+    () => queryCommonVeilContract(badStateProviders, SAMPLE_ADDRESS),
+    (err: any) => {
+      assert.equal(err instanceof ContractSessionError, true);
+      assert.equal(err.code, 'INCOMPATIBLE_CONTRACT');
+      assert.equal(err.message, 'The indexed state is not compatible with this CommonVeil build.');
+      assert.equal(err.message.includes('corruptBytes'), false, 'Public message must not leak raw state details');
+      return true;
+    },
+  );
+});
+
+// 20. All failed cases leave privateStateProvider unscoped
+test('20. All failed attachment cases leave privateStateProvider unscoped', async () => {
+  // A. Thrown provider error
+  const throwingProviders = {
+    boundAddress: null as string | null,
+    publicDataProvider: {
+      queryContractState: async () => {
+        throw new Error('Network failure');
+      },
+    },
+    privateStateProvider: {
+      setContractAddress: (addr: string) => {
+        throwingProviders.boundAddress = addr;
+      },
+    },
+  };
+  await assert.rejects(
+    () => attachCommonVeilContract(throwingProviders as any, SAMPLE_ADDRESS),
+    (err: any) => err instanceof ContractSessionError && err.code === 'INDEXER_QUERY_FAILED',
+  );
+  assert.equal(throwingProviders.boundAddress, null, 'Thrown provider error must not scope provider');
+
+  // B. Not found
+  const notFoundProviders = createTestDoubleProviders(null);
+  await assert.rejects(
+    () => attachCommonVeilContract(notFoundProviders, SAMPLE_ADDRESS),
+    (err: any) => err instanceof ContractSessionError && err.code === 'CONTRACT_NOT_FOUND',
+  );
+  assert.equal(notFoundProviders.getBoundAddress(), null, 'Not found must not scope provider');
+
+  // C. Incompatible contract
+  const corruptProviders = createTestDoubleProviders({ corrupt: true });
+  await assert.rejects(
+    () => attachCommonVeilContract(corruptProviders, SAMPLE_ADDRESS),
+    (err: any) => err instanceof ContractSessionError && err.code === 'INCOMPATIBLE_CONTRACT',
+  );
+  assert.equal(corruptProviders.getBoundAddress(), null, 'Incompatible contract must not scope provider');
+
+  // D. Invalid address
+  const invalidAddressProviders = createTestDoubleProviders(null);
+  await assert.rejects(
+    () => attachCommonVeilContract(invalidAddressProviders, '   '),
+    (err: any) => err instanceof ContractSessionError && err.code === 'INVALID_CONTRACT_ADDRESS',
+  );
+  assert.equal(invalidAddressProviders.getBoundAddress(), null, 'Invalid address must not scope provider');
 });
