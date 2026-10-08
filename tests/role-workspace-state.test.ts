@@ -75,6 +75,18 @@ import {
   mapAdmissionInspectionError,
   canInitiateAdmission,
   ADMISSION_VERIFICATION_ERROR_MESSAGES,
+  hasPasswordWhitespaceWarning,
+  validatePasswordConfirmation,
+  onBackupExported,
+  onBackupRecoveryTested,
+  canExportMemberAdmissionPackage,
+  canExportCertifierKeyPackage,
+  buildCertifierBackupPackage,
+  validateCertifierBackupPackage,
+  buildCertifierKeyPackage,
+  CERTIFIER_BACKUP_SCHEMA,
+  INITIAL_CERTIFIER_SECRET_UI_STATE,
+  generateCertifierSecret,
 } from '../src/role-workspace-state.ts';
 import {
   bytesToHex,
@@ -1998,4 +2010,252 @@ test('78. Corrected registerMember invocation omits privateStateId and proceeds 
 
   assert.equal(result.status, 'ready-to-prove-and-balance');
   assert.equal(getCallCount, 0, 'No private state lookup should occur for circuit with vacant witness state');
+});
+
+// 79. Password confirmation and minimum length enforcement
+test('79. Password confirmation and minimum length enforcement', () => {
+  // Short password (<12 chars)
+  const shortRes = validatePasswordConfirmation('short-pass', 'short-pass');
+  assert.equal(shortRes.valid, false);
+  assert.match(shortRes.error!, /at least 12 characters/i);
+
+  // Mismatch
+  const mismatchRes = validatePasswordConfirmation('correct-passphrase-12', 'different-passphrase-12');
+  assert.equal(mismatchRes.valid, false);
+  assert.match(mismatchRes.error!, /does not match/i);
+
+  // Exact match >= 12 chars
+  const validRes = validatePasswordConfirmation('correct-passphrase-12', 'correct-passphrase-12');
+  assert.equal(validRes.valid, true);
+  assert.equal(validRes.error, null);
+});
+
+// 80. Leading and trailing whitespace detection and exact preservation without trimming
+test('80. Leading and trailing whitespace detection and exact preservation without trimming', async () => {
+  // Whitespace detection
+  assert.equal(hasPasswordWhitespaceWarning('  leading-spaces-1234'), true);
+  assert.equal(hasPasswordWhitespaceWarning('trailing-spaces-1234  '), true);
+  assert.equal(hasPasswordWhitespaceWarning('\tleading-tab-12345'), true);
+  assert.equal(hasPasswordWhitespaceWarning('no-edge-whitespace-1234'), false);
+  assert.equal(hasPasswordWhitespaceWarning('inner spaces preserved-12'), false);
+
+  // Exact preservation in envelope encryption without trimming or normalization
+  const passwordWithSpaces = '  untrimmed-password-2026!  ';
+  const secret = generateRegistrarSecret();
+  const pkg = buildRegistrarBackupPackage(secret);
+  const envelope = await encryptToEnvelope(pkg, passwordWithSpaces);
+
+  // Trimmed password must NOT decrypt it (proves it was not silently trimmed)
+  await assert.rejects(
+    () => decryptAndValidateEnvelope(envelope, passwordWithSpaces.trim(), validateRegistrarBackupPackage),
+    /Failed to decrypt envelope|incorrect passphrase/i,
+  );
+
+  // Exact password with whitespace decrypts successfully
+  const restored = await decryptAndValidateEnvelope(envelope, passwordWithSpaces, validateRegistrarBackupPackage);
+  assert.equal(restored.registrarSecret, bytesToHex(secret));
+});
+
+// 81. Immediate in-memory encrypt and decrypt validation before download
+test('81. Immediate in-memory encrypt and decrypt validation before download', async () => {
+  const secret = generateRegistrarSecret();
+  const passphrase = 'valid-passphrase-12345';
+  const pkg = buildRegistrarBackupPackage(secret);
+  const envelope = await encryptToEnvelope(pkg, passphrase);
+
+  // Immediate roundtrip decrypt
+  const restored = await decryptAndValidateEnvelope(envelope, passphrase, validateRegistrarBackupPackage);
+  const restoredSecret = parseRegistrarSecretHex(restored.registrarSecret);
+  const originalKey = bytesToHex(pureCircuits.deriveAdminKey(secret));
+  const restoredKey = bytesToHex(pureCircuits.deriveAdminKey(restoredSecret));
+
+  assert.equal(originalKey, restoredKey);
+});
+
+// 82. Downloaded backup recovery testing and role identity validation
+test('82. Downloaded backup recovery testing and role identity validation', async () => {
+  const secret = generateCertifierSecret();
+  const passphrase = 'certifier-strong-pass-12';
+  const pkg = buildCertifierBackupPackage(secret);
+  const envelope = await encryptToEnvelope(pkg, passphrase);
+
+  // Test downloaded envelope
+  const restored = await decryptAndValidateEnvelope(envelope, passphrase, validateCertifierBackupPackage);
+  const restoredSecret = parseRegistrarSecretHex(restored.certifierSecret);
+  const currentKey = bytesToHex(pureCircuits.deriveCertifierKey(secret));
+  const restoredKey = bytesToHex(pureCircuits.deriveCertifierKey(restoredSecret));
+
+  assert.equal(currentKey, restoredKey);
+
+  // Different secret causes identity mismatch
+  const differentSecret = generateCertifierSecret();
+  const differentKey = bytesToHex(pureCircuits.deriveCertifierKey(differentSecret));
+  assert.notEqual(currentKey, differentKey);
+});
+
+// 83. Wrong-password and tampered-file rejection during recovery test
+test('83. Wrong-password and tampered-file rejection during recovery test', async () => {
+  const secret = generateMemberSecretOrSalt();
+  const salt = generateMemberSecretOrSalt();
+  const passphrase = 'member-safe-passphrase-2026';
+  const pkg = buildMemberBackupPackage(secret, salt);
+  const envelope = await encryptToEnvelope(pkg, passphrase);
+
+  // Wrong password
+  await assert.rejects(
+    () => decryptAndValidateEnvelope(envelope, 'wrong-passphrase-2026', validateMemberBackupPackage),
+    /Failed to decrypt envelope|incorrect passphrase/i,
+  );
+
+  // Tampered ciphertext
+  const tamperedEnvelope: EncryptedEnvelope = {
+    ...envelope,
+    ciphertext: envelope.ciphertext.slice(0, -8) + 'ffffffff',
+  };
+  await assert.rejects(
+    () => decryptAndValidateEnvelope(tamperedEnvelope, passphrase, validateMemberBackupPackage),
+    /Failed to decrypt envelope|tampered/i,
+  );
+});
+
+// 84. Wrong-role package schema rejection
+test('84. Wrong-role package schema rejection', async () => {
+  const secret = generateRegistrarSecret();
+  const passphrase = 'valid-passphrase-12345';
+  const regPkg = buildRegistrarBackupPackage(secret);
+  const envelope = await encryptToEnvelope(regPkg, passphrase);
+
+  // Attempting to validate a registrar package with the member validator fails schema validation
+  await assert.rejects(
+    () => decryptAndValidateEnvelope(envelope, passphrase, validateMemberBackupPackage),
+    /Invalid backup schema|expected 'commonveil\.member-backup/i,
+  );
+});
+
+// 85. Recovery-tested status lifecycle invalidation
+test('85. Recovery-tested status lifecycle invalidation', () => {
+  let state: RegistrarSecretUiState = INITIAL_REGISTRAR_SECRET_UI_STATE;
+  assert.equal(state.backupRecoveryStatus, 'none');
+
+  // After secret generated
+  state = onSecretGeneratedOrImported(state);
+  assert.equal(state.backupRecoveryStatus, 'none');
+
+  // After backup exported
+  state = onBackupExported(state);
+  assert.equal(state.backupRecoveryStatus, 'created-untested');
+
+  // After recovery tested
+  state = onBackupRecoveryTested(state);
+  assert.equal(state.backupRecoveryStatus, 'recovery-tested');
+
+  // On session lock or clearing
+  state = onSecretClearedOrLocked(state, true);
+  assert.equal(state.backupRecoveryStatus, 'none');
+  assert.equal(state.hasSecret, false);
+});
+
+// 86. Registrar deployment gating enforces recovery-tested backup
+test('86. Registrar deployment gating enforces recovery-tested backup', () => {
+  const dummyCertifierKey = '11'.repeat(32);
+  const baseParams = {
+    isConnected: true,
+    hasSecret: true,
+    backupConfirmed: true,
+    isDeploying: false,
+    proofProviderAvailable: true,
+    certifierPublicKey: dummyCertifierKey,
+  };
+
+  // Blocked when backupRecoveryStatus is 'none'
+  assert.equal(
+    canInitiateDeployment({
+      ...baseParams,
+      backupRecoveryStatus: 'none',
+    }),
+    false,
+  );
+
+  // Blocked when backupRecoveryStatus is 'created-untested'
+  assert.equal(
+    canInitiateDeployment({
+      ...baseParams,
+      backupRecoveryStatus: 'created-untested',
+    }),
+    false,
+  );
+
+  // Enabled only when 'recovery-tested'
+  assert.equal(
+    canInitiateDeployment({
+      ...baseParams,
+      backupRecoveryStatus: 'recovery-tested',
+    }),
+    true,
+  );
+});
+
+// 87. Certifier public-key export gating enforces recovery-tested backup
+test('87. Certifier public-key export gating enforces recovery-tested backup', () => {
+  // Blocked without secret
+  assert.equal(
+    canExportCertifierKeyPackage({
+      hasSecret: false,
+      backupRecoveryStatus: 'recovery-tested',
+    }),
+    false,
+  );
+
+  // Blocked when untested
+  assert.equal(
+    canExportCertifierKeyPackage({
+      hasSecret: true,
+      backupRecoveryStatus: 'created-untested',
+    }),
+    false,
+  );
+
+  // Enabled when recovery-tested
+  assert.equal(
+    canExportCertifierKeyPackage({
+      hasSecret: true,
+      backupRecoveryStatus: 'recovery-tested',
+    }),
+    true,
+  );
+});
+
+// 88. Member admission package export gating enforces recovery-tested backup
+test('88. Member admission package export gating enforces recovery-tested backup', () => {
+  const contractAddress = 'b62b97709f7629cede3bcbcd52ecda4fe2ad204ceac2946fda484789d104d23b';
+
+  // Blocked without attached contract
+  assert.equal(
+    canExportMemberAdmissionPackage({
+      hasSecret: true,
+      attachedContractAddress: null,
+      backupRecoveryStatus: 'recovery-tested',
+    }),
+    false,
+  );
+
+  // Blocked when backup untested
+  assert.equal(
+    canExportMemberAdmissionPackage({
+      hasSecret: true,
+      attachedContractAddress: contractAddress,
+      backupRecoveryStatus: 'created-untested',
+    }),
+    false,
+  );
+
+  // Enabled when recovery-tested with attached contract
+  assert.equal(
+    canExportMemberAdmissionPackage({
+      hasSecret: true,
+      attachedContractAddress: contractAddress,
+      backupRecoveryStatus: 'recovery-tested',
+    }),
+    true,
+  );
 });

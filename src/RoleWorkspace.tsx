@@ -101,6 +101,12 @@ import {
   mapAdmissionInspectionError,
   canInitiateAdmission,
   ADMISSION_VERIFICATION_ERROR_MESSAGES,
+  hasPasswordWhitespaceWarning,
+  validatePasswordConfirmation,
+  onBackupExported,
+  onBackupRecoveryTested,
+  canExportMemberAdmissionPackage,
+  canExportCertifierKeyPackage,
 } from './role-workspace-state';
 import './role-workspace.css';
 
@@ -131,6 +137,12 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
   // Registrar input states (cleared immediately upon processing)
   const [importHexInput, setImportHexInput] = useState('');
   const [exportPassphrase, setExportPassphrase] = useState('');
+  const [exportConfirmPassphrase, setExportConfirmPassphrase] = useState('');
+  const [showExportPassphrase, setShowExportPassphrase] = useState(false);
+  const [ackWhitespaceRegistrar, setAckWhitespaceRegistrar] = useState(false);
+  const [testBackupFileContent, setTestBackupFileContent] = useState<string | null>(null);
+  const [testBackupPassphrase, setTestBackupPassphrase] = useState('');
+  const [showTestPassphrase, setShowTestPassphrase] = useState(false);
   const [importPassphrase, setImportPassphrase] = useState('');
   const [registrarError, setRegistrarError] = useState<string | null>(null);
   const [registrarNotice, setRegistrarNotice] = useState<string | null>(null);
@@ -144,6 +156,12 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
   // Certifier input states (cleared immediately upon processing)
   const [certifierImportHexInput, setCertifierImportHexInput] = useState('');
   const [certifierExportPassphrase, setCertifierExportPassphrase] = useState('');
+  const [certifierExportConfirmPassphrase, setCertifierExportConfirmPassphrase] = useState('');
+  const [certifierShowExportPassphrase, setCertifierShowExportPassphrase] = useState(false);
+  const [ackWhitespaceCertifier, setAckWhitespaceCertifier] = useState(false);
+  const [certifierTestBackupFileContent, setCertifierTestBackupFileContent] = useState<string | null>(null);
+  const [certifierTestBackupPassphrase, setCertifierTestBackupPassphrase] = useState('');
+  const [certifierShowTestPassphrase, setCertifierShowTestPassphrase] = useState(false);
   const [certifierImportPassphrase, setCertifierImportPassphrase] = useState('');
   const [certifierError, setCertifierError] = useState<string | null>(null);
   const [certifierNotice, setCertifierNotice] = useState<string | null>(null);
@@ -158,6 +176,12 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
   const [memberImportSecretHexInput, setMemberImportSecretHexInput] = useState('');
   const [memberImportSaltHexInput, setMemberImportSaltHexInput] = useState('');
   const [memberExportPassphrase, setMemberExportPassphrase] = useState('');
+  const [memberExportConfirmPassphrase, setMemberExportConfirmPassphrase] = useState('');
+  const [memberShowExportPassphrase, setMemberShowExportPassphrase] = useState(false);
+  const [ackWhitespaceMember, setAckWhitespaceMember] = useState(false);
+  const [memberTestBackupFileContent, setMemberTestBackupFileContent] = useState<string | null>(null);
+  const [memberTestBackupPassphrase, setMemberTestBackupPassphrase] = useState('');
+  const [memberShowTestPassphrase, setMemberShowTestPassphrase] = useState(false);
   const [memberImportPassphrase, setMemberImportPassphrase] = useState('');
   const [memberError, setMemberError] = useState<string | null>(null);
   const [memberNotice, setMemberNotice] = useState<string | null>(null);
@@ -259,6 +283,10 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
     setAdmissionUi((prev) => onAdmissionReset(prev));
     setImportHexInput('');
     setExportPassphrase('');
+    setExportConfirmPassphrase('');
+    setAckWhitespaceRegistrar(false);
+    setTestBackupFileContent(null);
+    setTestBackupPassphrase('');
     setImportPassphrase('');
     setBackupFileContent(null);
     setRegistrarError(null);
@@ -274,6 +302,10 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
     setCertifierUi((prev) => onSecretClearedOrLocked(prev, isLocked));
     setCertifierImportHexInput('');
     setCertifierExportPassphrase('');
+    setCertifierExportConfirmPassphrase('');
+    setAckWhitespaceCertifier(false);
+    setCertifierTestBackupFileContent(null);
+    setCertifierTestBackupPassphrase('');
     setCertifierImportPassphrase('');
     setCertifierBackupFileContent(null);
     setCertifierError(null);
@@ -291,6 +323,10 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
     setMemberImportSecretHexInput('');
     setMemberImportSaltHexInput('');
     setMemberExportPassphrase('');
+    setMemberExportConfirmPassphrase('');
+    setAckWhitespaceMember(false);
+    setMemberTestBackupFileContent(null);
+    setMemberTestBackupPassphrase('');
     setMemberImportPassphrase('');
     setMemberBackupFileContent(null);
     setMemberError(null);
@@ -347,11 +383,18 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
     clearMemberSecret(false);
     const next = handleAddressInputChange(contractState, e.target.value);
     setContractState(next);
-    // Address changed: reset verification and remove any copy capability
+    // Address changed: reset verification, invalidate backupRecoveryStatus, and remove any copy capability
     setRegistrarUi((prev) => ({
       ...prev,
       verificationStatus: 'unverified',
       canCopyOnce: false,
+      backupRecoveryStatus: 'none',
+    }));
+    setCertifierUi((prev) => ({
+      ...prev,
+      verificationStatus: 'unverified',
+      canCopyOnce: false,
+      backupRecoveryStatus: 'none',
     }));
     setDeploymentUi((prev) => onDeploymentReset(prev));
     setAdmissionUi((prev) => onAdmissionReset(prev));
@@ -612,8 +655,13 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
       setRegistrarError('No registrar secret available to backup.');
       return;
     }
-    if (exportPassphrase.length < 12) {
-      setRegistrarError('Passphrase must be at least 12 characters.');
+    const val = validatePasswordConfirmation(exportPassphrase, exportConfirmPassphrase);
+    if (!val.valid) {
+      setRegistrarError(val.error);
+      return;
+    }
+    if (hasPasswordWhitespaceWarning(exportPassphrase) && !ackWhitespaceRegistrar) {
+      setRegistrarError('Please acknowledge the leading or trailing whitespace warning before exporting.');
       return;
     }
 
@@ -623,6 +671,19 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
         backupPackage,
         exportPassphrase,
       );
+
+      // Pre-download validation: immediately decrypt and validate envelope in memory
+      const restored = await decryptAndValidateEnvelope(
+        envelope,
+        exportPassphrase,
+        validateRegistrarBackupPackage,
+      );
+      const restoredSecretBytes = parseRegistrarSecretHex(restored.registrarSecret);
+      const currentAdminKey = bytesToHex(CommonVeil.pureCircuits.deriveAdminKey(plaintextSecretRef.current));
+      const restoredAdminKey = bytesToHex(CommonVeil.pureCircuits.deriveAdminKey(restoredSecretBytes));
+      if (currentAdminKey.toLowerCase() !== restoredAdminKey.toLowerCase()) {
+        throw new Error('Pre-download backup validation failed: derived admin key mismatch.');
+      }
 
       const blob = new Blob([JSON.stringify(envelope, null, 2)], {
         type: 'application/json',
@@ -635,9 +696,79 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
       URL.revokeObjectURL(url);
 
       setExportPassphrase('');
+      setExportConfirmPassphrase('');
+      setAckWhitespaceRegistrar(false);
+      setRegistrarUi((prev) => onBackupExported(prev));
       setRegistrarNotice(
-        'Encrypted backup exported. Store the backup file and passphrase securely.',
+        'Encrypted backup created and downloaded. Test the downloaded backup below to complete recovery verification.',
       );
+    } catch (err: unknown) {
+      setRegistrarError(mapRegistrarOperationError(err));
+    }
+  };
+
+  const handleTestBackupFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setRegistrarError(null);
+    setRegistrarNotice(null);
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const content = event.target?.result;
+      if (typeof content === 'string') {
+        setTestBackupFileContent(content);
+        setRegistrarNotice('Downloaded backup file loaded for recovery test. Enter passphrase to test.');
+      }
+    };
+    reader.onerror = () => {
+      setRegistrarError('Could not read the selected backup file.');
+    };
+    reader.readAsText(file);
+  };
+
+  const handleTestDownloadedRegistrarBackup = async () => {
+    setRegistrarError(null);
+    setRegistrarNotice(null);
+    if (!testBackupFileContent) {
+      setRegistrarError('The selected file is not a valid CommonVeil encrypted backup.');
+      return;
+    }
+    if (!plaintextSecretRef.current) {
+      setRegistrarError('No active registrar secret in memory to verify against.');
+      return;
+    }
+    if (testBackupPassphrase.length < 12) {
+      setRegistrarError('Passphrase must be at least 12 characters.');
+      return;
+    }
+
+    try {
+      let parsedEnvelope: unknown;
+      try {
+        parsedEnvelope = JSON.parse(testBackupFileContent);
+      } catch {
+        throw new Error('The selected file is not a valid CommonVeil encrypted backup.');
+      }
+
+      const restored = await decryptAndValidateEnvelope(
+        parsedEnvelope as EncryptedEnvelope,
+        testBackupPassphrase,
+        validateRegistrarBackupPackage,
+      );
+
+      const restoredSecretBytes = parseRegistrarSecretHex(restored.registrarSecret);
+      const activeAdminKey = bytesToHex(CommonVeil.pureCircuits.deriveAdminKey(plaintextSecretRef.current));
+      const restoredAdminKey = bytesToHex(CommonVeil.pureCircuits.deriveAdminKey(restoredSecretBytes));
+
+      if (activeAdminKey.toLowerCase() !== restoredAdminKey.toLowerCase()) {
+        throw new Error('Recovery test failed: backup identity does not match active session identity.');
+      }
+
+      setRegistrarUi((prev) => onBackupRecoveryTested(prev));
+      setTestBackupPassphrase('');
+      setTestBackupFileContent(null);
+      setRegistrarNotice('Downloaded backup successfully tested and verified! Recovery is confirmed.');
     } catch (err: unknown) {
       setRegistrarError(mapRegistrarOperationError(err));
     }
@@ -835,8 +966,13 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
       setCertifierError('No Certifier secret available to backup.');
       return;
     }
-    if (certifierExportPassphrase.length < 12) {
-      setCertifierError('Passphrase must be at least 12 characters.');
+    const val = validatePasswordConfirmation(certifierExportPassphrase, certifierExportConfirmPassphrase);
+    if (!val.valid) {
+      setCertifierError(val.error);
+      return;
+    }
+    if (hasPasswordWhitespaceWarning(certifierExportPassphrase) && !ackWhitespaceCertifier) {
+      setCertifierError('Please acknowledge the leading or trailing whitespace warning before exporting.');
       return;
     }
 
@@ -846,6 +982,19 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
         backupPackage,
         certifierExportPassphrase,
       );
+
+      // Pre-download validation: immediately decrypt and validate envelope in memory
+      const restored = await decryptAndValidateEnvelope(
+        envelope,
+        certifierExportPassphrase,
+        validateCertifierBackupPackage,
+      );
+      const restoredSecretBytes = parseCertifierSecretHex(restored.certifierSecret);
+      const currentCertifierKey = bytesToHex(CommonVeil.pureCircuits.deriveCertifierKey(plaintextCertifierSecretRef.current));
+      const restoredCertifierKey = bytesToHex(CommonVeil.pureCircuits.deriveCertifierKey(restoredSecretBytes));
+      if (currentCertifierKey.toLowerCase() !== restoredCertifierKey.toLowerCase()) {
+        throw new Error('Pre-download backup validation failed: derived certifier key mismatch.');
+      }
 
       const blob = new Blob([JSON.stringify(envelope, null, 2)], {
         type: 'application/json',
@@ -858,9 +1007,79 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
       URL.revokeObjectURL(url);
 
       setCertifierExportPassphrase('');
+      setCertifierExportConfirmPassphrase('');
+      setAckWhitespaceCertifier(false);
+      setCertifierUi((prev) => onBackupExported(prev));
       setCertifierNotice(
-        'Encrypted backup exported. Store the backup file and passphrase securely.',
+        'Encrypted backup created and downloaded. Test the downloaded backup below to complete recovery verification.',
       );
+    } catch (err: unknown) {
+      setCertifierError(mapCertifierOperationError(err));
+    }
+  };
+
+  const handleCertifierTestBackupFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setCertifierError(null);
+    setCertifierNotice(null);
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const content = event.target?.result;
+      if (typeof content === 'string') {
+        setCertifierTestBackupFileContent(content);
+        setCertifierNotice('Downloaded certifier backup loaded for recovery test. Enter passphrase to test.');
+      }
+    };
+    reader.onerror = () => {
+      setCertifierError('Could not read the selected backup file.');
+    };
+    reader.readAsText(file);
+  };
+
+  const handleTestDownloadedCertifierBackup = async () => {
+    setCertifierError(null);
+    setCertifierNotice(null);
+    if (!certifierTestBackupFileContent) {
+      setCertifierError('The selected file is not a valid CommonVeil encrypted backup.');
+      return;
+    }
+    if (!plaintextCertifierSecretRef.current) {
+      setCertifierError('No active Certifier secret in memory to verify against.');
+      return;
+    }
+    if (certifierTestBackupPassphrase.length < 12) {
+      setCertifierError('Passphrase must be at least 12 characters.');
+      return;
+    }
+
+    try {
+      let parsedEnvelope: unknown;
+      try {
+        parsedEnvelope = JSON.parse(certifierTestBackupFileContent);
+      } catch {
+        throw new Error('The selected file is not a valid CommonVeil encrypted backup.');
+      }
+
+      const restored = await decryptAndValidateEnvelope(
+        parsedEnvelope as EncryptedEnvelope,
+        certifierTestBackupPassphrase,
+        validateCertifierBackupPackage,
+      );
+
+      const restoredSecretBytes = parseCertifierSecretHex(restored.certifierSecret);
+      const activeCertifierKey = bytesToHex(CommonVeil.pureCircuits.deriveCertifierKey(plaintextCertifierSecretRef.current));
+      const restoredCertifierKey = bytesToHex(CommonVeil.pureCircuits.deriveCertifierKey(restoredSecretBytes));
+
+      if (activeCertifierKey.toLowerCase() !== restoredCertifierKey.toLowerCase()) {
+        throw new Error('Recovery test failed: backup identity does not match active session identity.');
+      }
+
+      setCertifierUi((prev) => onBackupRecoveryTested(prev));
+      setCertifierTestBackupPassphrase('');
+      setCertifierTestBackupFileContent(null);
+      setCertifierNotice('Downloaded Certifier backup successfully tested and verified! Recovery is confirmed.');
     } catch (err: unknown) {
       setCertifierError(mapCertifierOperationError(err));
     }
@@ -941,6 +1160,13 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
     setCertifierNotice(null);
     if (!plaintextCertifierSecretRef.current) {
       setCertifierError('No active Certifier secret in memory to derive public key.');
+      return;
+    }
+    if (!canExportCertifierKeyPackage({
+      hasSecret: certifierUi.hasSecret,
+      backupRecoveryStatus: certifierUi.backupRecoveryStatus,
+    })) {
+      setCertifierError('Certifier backup must be tested and verified before exporting the public key package.');
       return;
     }
 
@@ -1357,8 +1583,13 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
       setMemberError('No Member secret and salt available to backup.');
       return;
     }
-    if (memberExportPassphrase.length < 12) {
-      setMemberError('Passphrase must be at least 12 characters.');
+    const val = validatePasswordConfirmation(memberExportPassphrase, memberExportConfirmPassphrase);
+    if (!val.valid) {
+      setMemberError(val.error);
+      return;
+    }
+    if (hasPasswordWhitespaceWarning(memberExportPassphrase) && !ackWhitespaceMember) {
+      setMemberError('Please acknowledge the leading or trailing whitespace warning before exporting.');
       return;
     }
 
@@ -1372,6 +1603,26 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
         memberExportPassphrase,
       );
 
+      // Pre-download validation: immediately decrypt and validate envelope in memory
+      const restored = await decryptAndValidateEnvelope(
+        envelope,
+        memberExportPassphrase,
+        validateMemberBackupPackage,
+      );
+      const restoredSecretBytes = parseMemberSecretOrSaltHex(restored.memberSecret, 'Member secret');
+      const restoredSaltBytes = parseMemberSecretOrSaltHex(restored.memberSalt, 'Member salt');
+      const currentCred = bytesToHex(CommonVeil.pureCircuits.deriveMemberCredential(
+        plaintextMemberSecretRef.current,
+        plaintextMemberSaltRef.current,
+      ));
+      const restoredCred = bytesToHex(CommonVeil.pureCircuits.deriveMemberCredential(
+        restoredSecretBytes,
+        restoredSaltBytes,
+      ));
+      if (currentCred.toLowerCase() !== restoredCred.toLowerCase()) {
+        throw new Error('Pre-download backup validation failed: derived member credential mismatch.');
+      }
+
       const blob = new Blob([JSON.stringify(envelope, null, 2)], {
         type: 'application/json',
       });
@@ -1383,7 +1634,87 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
       URL.revokeObjectURL(url);
 
       setMemberExportPassphrase('');
-      setMemberNotice('Encrypted Member backup downloaded.');
+      setMemberExportConfirmPassphrase('');
+      setAckWhitespaceMember(false);
+      setMemberUi((prev) => onBackupExported(prev));
+      setMemberNotice(
+        'Encrypted backup created and downloaded. Test the downloaded backup below to complete recovery verification.',
+      );
+    } catch (err: unknown) {
+      setMemberError(mapMemberOperationError(err));
+    }
+  };
+
+  const handleMemberTestBackupFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setMemberError(null);
+    setMemberNotice(null);
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const content = event.target?.result;
+      if (typeof content === 'string') {
+        setMemberTestBackupFileContent(content);
+        setMemberNotice('Downloaded member backup loaded for recovery test. Enter passphrase to test.');
+      }
+    };
+    reader.onerror = () => {
+      setMemberError('Could not read the selected backup file.');
+    };
+    reader.readAsText(file);
+  };
+
+  const handleTestDownloadedMemberBackup = async () => {
+    setMemberError(null);
+    setMemberNotice(null);
+    if (!memberTestBackupFileContent) {
+      setMemberError('The selected file is not a valid CommonVeil encrypted backup.');
+      return;
+    }
+    if (!plaintextMemberSecretRef.current || !plaintextMemberSaltRef.current) {
+      setMemberError('No active Member secret and salt in memory to verify against.');
+      return;
+    }
+    if (memberTestBackupPassphrase.length < 12) {
+      setMemberError('Passphrase must be at least 12 characters.');
+      return;
+    }
+
+    try {
+      let parsedEnvelope: unknown;
+      try {
+        parsedEnvelope = JSON.parse(memberTestBackupFileContent);
+      } catch {
+        throw new Error('The selected file is not a valid CommonVeil encrypted backup.');
+      }
+
+      const restored = await decryptAndValidateEnvelope(
+        parsedEnvelope as EncryptedEnvelope,
+        memberTestBackupPassphrase,
+        validateMemberBackupPackage,
+      );
+
+      const restoredSecretBytes = parseMemberSecretOrSaltHex(restored.memberSecret, 'Member secret');
+      const restoredSaltBytes = parseMemberSecretOrSaltHex(restored.memberSalt, 'Member salt');
+
+      const activeCred = bytesToHex(CommonVeil.pureCircuits.deriveMemberCredential(
+        plaintextMemberSecretRef.current,
+        plaintextMemberSaltRef.current,
+      ));
+      const restoredCred = bytesToHex(CommonVeil.pureCircuits.deriveMemberCredential(
+        restoredSecretBytes,
+        restoredSaltBytes,
+      ));
+
+      if (activeCred.toLowerCase() !== restoredCred.toLowerCase()) {
+        throw new Error('Recovery test failed: backup identity does not match active session identity.');
+      }
+
+      setMemberUi((prev) => onBackupRecoveryTested(prev));
+      setMemberTestBackupPassphrase('');
+      setMemberTestBackupFileContent(null);
+      setMemberNotice('Downloaded Member backup successfully tested and verified! Recovery is confirmed.');
     } catch (err: unknown) {
       setMemberError(mapMemberOperationError(err));
     }
@@ -1467,6 +1798,14 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
     }
     if (!plaintextMemberSecretRef.current || !plaintextMemberSaltRef.current) {
       setMemberError('No active Member identity in session memory.');
+      return;
+    }
+    if (!canExportMemberAdmissionPackage({
+      hasSecret: memberUi.hasSecret,
+      attachedContractAddress: contractState.attachedAddress,
+      backupRecoveryStatus: memberUi.backupRecoveryStatus,
+    })) {
+      setMemberError('Member backup must be tested and verified before exporting the admission package.');
       return;
     }
 
@@ -2108,6 +2447,16 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
                         : 'Unverified'}
                   </strong>
                 </div>
+                <div>
+                  <span className="field-caption">Backup Recovery Status</span>
+                  <strong className={`recovery-badge ${certifierUi.backupRecoveryStatus}`}>
+                    {certifierUi.backupRecoveryStatus === 'recovery-tested'
+                      ? 'Recovery Tested ✔'
+                      : certifierUi.backupRecoveryStatus === 'created-untested'
+                        ? 'Created (Untested)'
+                        : 'No Backup'}
+                  </strong>
+                </div>
               </div>
 
               {certifierNotice && (
@@ -2239,6 +2588,7 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
                     <button
                       type="button"
                       onClick={handleExportCertifierKeyPackage}
+                      disabled={certifierUi.backupRecoveryStatus !== 'recovery-tested'}
                       className="action-button primary"
                       aria-label="Export public certifier key package JSON"
                     >
@@ -2265,6 +2615,12 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
                     </button>
                   </div>
 
+                  {certifierUi.backupRecoveryStatus !== 'recovery-tested' && (
+                    <p className="form-hint-text">
+                      Exporting the public Certifier key package requires testing and verifying your encrypted backup below.
+                    </p>
+                  )}
+
                   {!contractState.attachedAddress && (
                     <p className="form-hint-text">
                       Attach a contract in Step 02 to run on-chain certifier verification.
@@ -2286,23 +2642,112 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
                       <label htmlFor="export-certifier-passphrase-input">
                         Export Passphrase (min 12 chars)
                       </label>
+                      <div className="password-input-row">
+                        <input
+                          id="export-certifier-passphrase-input"
+                          type={certifierShowExportPassphrase ? 'text' : 'password'}
+                          value={certifierExportPassphrase}
+                          onChange={(e) => setCertifierExportPassphrase(e.target.value)}
+                          placeholder="Enter 12+ character passphrase"
+                          autoComplete="off"
+                        />
+                        <button
+                          type="button"
+                          className="toggle-visibility-btn"
+                          onClick={() => setCertifierShowExportPassphrase((prev) => !prev)}
+                          aria-label={certifierShowExportPassphrase ? 'Hide password' : 'Show password'}
+                        >
+                          {certifierShowExportPassphrase ? 'Hide' : 'Show'}
+                        </button>
+                      </div>
+
+                      <label htmlFor="export-certifier-passphrase-confirm-input" style={{ marginTop: '8px', display: 'block' }}>
+                        Confirm Backup Passphrase
+                      </label>
                       <input
-                        id="export-certifier-passphrase-input"
-                        type="password"
-                        value={certifierExportPassphrase}
-                        onChange={(e) => setCertifierExportPassphrase(e.target.value)}
-                        placeholder="Enter 12+ character passphrase"
+                        id="export-certifier-passphrase-confirm-input"
+                        type={certifierShowExportPassphrase ? 'text' : 'password'}
+                        value={certifierExportConfirmPassphrase}
+                        onChange={(e) => setCertifierExportConfirmPassphrase(e.target.value)}
+                        placeholder="Re-enter passphrase exactly"
                         autoComplete="off"
                       />
+
+                      {hasPasswordWhitespaceWarning(certifierExportPassphrase) && (
+                        <div className="whitespace-warning-box">
+                          <p>⚠ Passphrase contains leading or trailing whitespace.</p>
+                          <label className="whitespace-ack-label">
+                            <input
+                              type="checkbox"
+                              checked={ackWhitespaceCertifier}
+                              onChange={(e) => setAckWhitespaceCertifier(e.target.checked)}
+                            />
+                            <span>I confirm leading or trailing spaces are intentional</span>
+                          </label>
+                        </div>
+                      )}
+
                       <button
                         type="submit"
-                        disabled={certifierExportPassphrase.length < 12}
+                        disabled={
+                          !validatePasswordConfirmation(certifierExportPassphrase, certifierExportConfirmPassphrase).valid ||
+                          (hasPasswordWhitespaceWarning(certifierExportPassphrase) && !ackWhitespaceCertifier)
+                        }
                         className="action-button secondary"
+                        style={{ marginTop: '10px' }}
                         aria-label="Export encrypted certifier backup"
                       >
                         Download Encrypted Backup
                       </button>
                     </form>
+
+                    {/* Independent Downloaded Backup Testing */}
+                    <div className="test-backup-box">
+                      <h4>Test Downloaded Backup</h4>
+                      <p>
+                        Verify your downloaded backup file before proceeding. Select the downloaded file and enter the passphrase to confirm recovery.
+                      </p>
+                      <label htmlFor="certifier-test-file-input">Select Downloaded Backup File</label>
+                      <input
+                        id="certifier-test-file-input"
+                        type="file"
+                        accept=".json,application/json"
+                        onChange={handleCertifierTestBackupFileSelect}
+                      />
+
+                      {certifierTestBackupFileContent && (
+                        <div style={{ marginTop: '10px' }}>
+                          <label htmlFor="certifier-test-passphrase-input">Backup Passphrase</label>
+                          <div className="password-input-row">
+                            <input
+                              id="certifier-test-passphrase-input"
+                              type={certifierShowTestPassphrase ? 'text' : 'password'}
+                              value={certifierTestBackupPassphrase}
+                              onChange={(e) => setCertifierTestBackupPassphrase(e.target.value)}
+                              placeholder="Enter passphrase used for export"
+                              autoComplete="off"
+                            />
+                            <button
+                              type="button"
+                              className="toggle-visibility-btn"
+                              onClick={() => setCertifierShowTestPassphrase((prev) => !prev)}
+                            >
+                              {certifierShowTestPassphrase ? 'Hide' : 'Show'}
+                            </button>
+                          </div>
+                          <button
+                            type="button"
+                            className="action-button primary"
+                            style={{ marginTop: '8px' }}
+                            disabled={certifierTestBackupPassphrase.length < 12}
+                            onClick={handleTestDownloadedCertifierBackup}
+                            aria-label="Verify and test downloaded certifier backup"
+                          >
+                            Verify and Test Backup
+                          </button>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </div>
               )}
@@ -2336,6 +2781,16 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
                   ) : (
                     <strong className="verification-badge unverified">Not derived</strong>
                   )}
+                </div>
+                <div>
+                  <span className="field-caption">Backup Recovery Status</span>
+                  <strong className={`recovery-badge ${memberUi.backupRecoveryStatus}`}>
+                    {memberUi.backupRecoveryStatus === 'recovery-tested'
+                      ? 'Recovery Tested ✔'
+                      : memberUi.backupRecoveryStatus === 'created-untested'
+                        ? 'Created (Untested)'
+                        : 'No Backup'}
+                  </strong>
                 </div>
               </div>
 
@@ -2482,7 +2937,7 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
                     <button
                       type="button"
                       onClick={handleExportMemberAdmissionPackage}
-                      disabled={!contractState.attachedAddress}
+                      disabled={!contractState.attachedAddress || memberUi.backupRecoveryStatus !== 'recovery-tested'}
                       className="action-button primary"
                       aria-label="Export restricted member admission package JSON"
                     >
@@ -2498,6 +2953,12 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
                       Lock Session
                     </button>
                   </div>
+
+                  {memberUi.backupRecoveryStatus !== 'recovery-tested' && (
+                    <p className="form-hint-text">
+                      Exporting the Member admission package requires testing and verifying your encrypted backup below.
+                    </p>
+                  )}
 
                   {!contractState.attachedAddress && (
                     <p className="form-hint-text">
@@ -2520,23 +2981,112 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
                       <label htmlFor="export-member-passphrase-input">
                         Export Passphrase (min 12 chars)
                       </label>
+                      <div className="password-input-row">
+                        <input
+                          id="export-member-passphrase-input"
+                          type={memberShowExportPassphrase ? 'text' : 'password'}
+                          value={memberExportPassphrase}
+                          onChange={(e) => setMemberExportPassphrase(e.target.value)}
+                          placeholder="Enter 12+ character passphrase"
+                          autoComplete="off"
+                        />
+                        <button
+                          type="button"
+                          className="toggle-visibility-btn"
+                          onClick={() => setMemberShowExportPassphrase((prev) => !prev)}
+                          aria-label={memberShowExportPassphrase ? 'Hide password' : 'Show password'}
+                        >
+                          {memberShowExportPassphrase ? 'Hide' : 'Show'}
+                        </button>
+                      </div>
+
+                      <label htmlFor="export-member-passphrase-confirm-input" style={{ marginTop: '8px', display: 'block' }}>
+                        Confirm Backup Passphrase
+                      </label>
                       <input
-                        id="export-member-passphrase-input"
-                        type="password"
-                        value={memberExportPassphrase}
-                        onChange={(e) => setMemberExportPassphrase(e.target.value)}
-                        placeholder="Enter 12+ character passphrase"
+                        id="export-member-passphrase-confirm-input"
+                        type={memberShowExportPassphrase ? 'text' : 'password'}
+                        value={memberExportConfirmPassphrase}
+                        onChange={(e) => setMemberExportConfirmPassphrase(e.target.value)}
+                        placeholder="Re-enter passphrase exactly"
                         autoComplete="off"
                       />
+
+                      {hasPasswordWhitespaceWarning(memberExportPassphrase) && (
+                        <div className="whitespace-warning-box">
+                          <p>⚠ Passphrase contains leading or trailing whitespace.</p>
+                          <label className="whitespace-ack-label">
+                            <input
+                              type="checkbox"
+                              checked={ackWhitespaceMember}
+                              onChange={(e) => setAckWhitespaceMember(e.target.checked)}
+                            />
+                            <span>I confirm leading or trailing spaces are intentional</span>
+                          </label>
+                        </div>
+                      )}
+
                       <button
                         type="submit"
-                        disabled={memberExportPassphrase.length < 12}
+                        disabled={
+                          !validatePasswordConfirmation(memberExportPassphrase, memberExportConfirmPassphrase).valid ||
+                          (hasPasswordWhitespaceWarning(memberExportPassphrase) && !ackWhitespaceMember)
+                        }
                         className="action-button secondary"
+                        style={{ marginTop: '10px' }}
                         aria-label="Export encrypted member backup"
                       >
                         Download Encrypted Backup
                       </button>
                     </form>
+
+                    {/* Independent Downloaded Backup Testing */}
+                    <div className="test-backup-box">
+                      <h4>Test Downloaded Backup</h4>
+                      <p>
+                        Verify your downloaded backup file before proceeding. Select the downloaded file and enter the passphrase to confirm recovery.
+                      </p>
+                      <label htmlFor="member-test-file-input">Select Downloaded Backup File</label>
+                      <input
+                        id="member-test-file-input"
+                        type="file"
+                        accept=".json,application/json"
+                        onChange={handleMemberTestBackupFileSelect}
+                      />
+
+                      {memberTestBackupFileContent && (
+                        <div style={{ marginTop: '10px' }}>
+                          <label htmlFor="member-test-passphrase-input">Backup Passphrase</label>
+                          <div className="password-input-row">
+                            <input
+                              id="member-test-passphrase-input"
+                              type={memberShowTestPassphrase ? 'text' : 'password'}
+                              value={memberTestBackupPassphrase}
+                              onChange={(e) => setMemberTestBackupPassphrase(e.target.value)}
+                              placeholder="Enter passphrase used for export"
+                              autoComplete="off"
+                            />
+                            <button
+                              type="button"
+                              className="toggle-visibility-btn"
+                              onClick={() => setMemberShowTestPassphrase((prev) => !prev)}
+                            >
+                              {memberShowTestPassphrase ? 'Hide' : 'Show'}
+                            </button>
+                          </div>
+                          <button
+                            type="button"
+                            className="action-button primary"
+                            style={{ marginTop: '8px' }}
+                            disabled={memberTestBackupPassphrase.length < 12}
+                            onClick={handleTestDownloadedMemberBackup}
+                            aria-label="Verify and test downloaded member backup"
+                          >
+                            Verify and Test Backup
+                          </button>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </div>
               )}
@@ -2569,6 +3119,16 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
                       : registrarUi.verificationStatus === 'failed'
                         ? 'Not verified'
                         : 'Unverified'}
+                  </strong>
+                </div>
+                <div>
+                  <span className="field-caption">Backup Recovery Status</span>
+                  <strong className={`recovery-badge ${registrarUi.backupRecoveryStatus}`}>
+                    {registrarUi.backupRecoveryStatus === 'recovery-tested'
+                      ? 'Recovery Tested ✔'
+                      : registrarUi.backupRecoveryStatus === 'created-untested'
+                        ? 'Created (Untested)'
+                        : 'No Backup'}
                   </strong>
                 </div>
               </div>
@@ -2740,23 +3300,112 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
                       <label htmlFor="export-passphrase-input">
                         Export Passphrase (min 12 chars)
                       </label>
+                      <div className="password-input-row">
+                        <input
+                          id="export-passphrase-input"
+                          type={showExportPassphrase ? 'text' : 'password'}
+                          value={exportPassphrase}
+                          onChange={(e) => setExportPassphrase(e.target.value)}
+                          placeholder="Enter 12+ character passphrase"
+                          autoComplete="off"
+                        />
+                        <button
+                          type="button"
+                          className="toggle-visibility-btn"
+                          onClick={() => setShowExportPassphrase((prev) => !prev)}
+                          aria-label={showExportPassphrase ? 'Hide password' : 'Show password'}
+                        >
+                          {showExportPassphrase ? 'Hide' : 'Show'}
+                        </button>
+                      </div>
+
+                      <label htmlFor="export-passphrase-confirm-input" style={{ marginTop: '8px', display: 'block' }}>
+                        Confirm Backup Passphrase
+                      </label>
                       <input
-                        id="export-passphrase-input"
-                        type="password"
-                        value={exportPassphrase}
-                        onChange={(e) => setExportPassphrase(e.target.value)}
-                        placeholder="Enter 12+ character passphrase"
+                        id="export-passphrase-confirm-input"
+                        type={showExportPassphrase ? 'text' : 'password'}
+                        value={exportConfirmPassphrase}
+                        onChange={(e) => setExportConfirmPassphrase(e.target.value)}
+                        placeholder="Re-enter passphrase exactly"
                         autoComplete="off"
                       />
+
+                      {hasPasswordWhitespaceWarning(exportPassphrase) && (
+                        <div className="whitespace-warning-box">
+                          <p>⚠ Passphrase contains leading or trailing whitespace.</p>
+                          <label className="whitespace-ack-label">
+                            <input
+                              type="checkbox"
+                              checked={ackWhitespaceRegistrar}
+                              onChange={(e) => setAckWhitespaceRegistrar(e.target.checked)}
+                            />
+                            <span>I confirm leading or trailing spaces are intentional</span>
+                          </label>
+                        </div>
+                      )}
+
                       <button
                         type="submit"
-                        disabled={exportPassphrase.length < 12}
+                        disabled={
+                          !validatePasswordConfirmation(exportPassphrase, exportConfirmPassphrase).valid ||
+                          (hasPasswordWhitespaceWarning(exportPassphrase) && !ackWhitespaceRegistrar)
+                        }
                         className="action-button secondary"
+                        style={{ marginTop: '10px' }}
                         aria-label="Export encrypted registrar backup"
                       >
                         Download Encrypted Backup
                       </button>
                     </form>
+
+                    {/* Independent Downloaded Backup Testing */}
+                    <div className="test-backup-box">
+                      <h4>Test Downloaded Backup</h4>
+                      <p>
+                        Verify your downloaded backup file before proceeding with deployment. Select the downloaded file and enter the passphrase to confirm recovery.
+                      </p>
+                      <label htmlFor="test-backup-file-input">Select Downloaded Backup File</label>
+                      <input
+                        id="test-backup-file-input"
+                        type="file"
+                        accept=".json,application/json"
+                        onChange={handleTestBackupFileSelect}
+                      />
+
+                      {testBackupFileContent && (
+                        <div style={{ marginTop: '10px' }}>
+                          <label htmlFor="test-backup-passphrase-input">Backup Passphrase</label>
+                          <div className="password-input-row">
+                            <input
+                              id="test-backup-passphrase-input"
+                              type={showTestPassphrase ? 'text' : 'password'}
+                              value={testBackupPassphrase}
+                              onChange={(e) => setTestBackupPassphrase(e.target.value)}
+                              placeholder="Enter passphrase used for export"
+                              autoComplete="off"
+                            />
+                            <button
+                              type="button"
+                              className="toggle-visibility-btn"
+                              onClick={() => setShowTestPassphrase((prev) => !prev)}
+                            >
+                              {showTestPassphrase ? 'Hide' : 'Show'}
+                            </button>
+                          </div>
+                          <button
+                            type="button"
+                            className="action-button primary"
+                            style={{ marginTop: '8px' }}
+                            disabled={testBackupPassphrase.length < 12}
+                            onClick={handleTestDownloadedRegistrarBackup}
+                            aria-label="Verify and test downloaded registrar backup"
+                          >
+                            Verify and Test Backup
+                          </button>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </div>
               )}
@@ -3006,6 +3655,7 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
                           isConnected: !!wallet,
                           hasSecret: registrarUi.hasSecret,
                           backupConfirmed: deploymentUi.backupConfirmed,
+                          backupRecoveryStatus: registrarUi.backupRecoveryStatus,
                           isDeploying,
                           proofProviderAvailable: !!wallet?.proofMode,
                           certifierPublicKey: deploymentUi.certifierPublicKey,

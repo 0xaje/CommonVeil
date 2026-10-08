@@ -252,6 +252,30 @@ export interface RegistrarBackupPackage {
 
 export type RegistrarVerificationStatus = 'unverified' | 'verified' | 'failed';
 
+export type BackupRecoveryStatus = 'none' | 'created-untested' | 'recovery-tested';
+
+/**
+ * Checks whether a password starts or ends with whitespace.
+ * Returns true if whitespace warning is applicable.
+ */
+export function hasPasswordWhitespaceWarning(password: string): boolean {
+  return /^\s|\s$/.test(password);
+}
+
+/**
+ * Validates password and confirmation match.
+ * Enforces minimum 12 characters and exact match.
+ */
+export function validatePasswordConfirmation(password: string, confirmation: string): { valid: boolean; error: string | null } {
+  if (password.length < 12) {
+    return { valid: false, error: 'Passphrase must be at least 12 characters.' };
+  }
+  if (password !== confirmation) {
+    return { valid: false, error: 'Password confirmation does not match.' };
+  }
+  return { valid: true, error: null };
+}
+
 /**
  * Pure state model for Registrar secret lifecycle.
  * Invariant: Never contains a full plaintext secret string.
@@ -262,6 +286,7 @@ export interface RegistrarSecretUiState {
   readonly verificationStatus: RegistrarVerificationStatus;
   readonly canCopyOnce: boolean;
   readonly copyStatus: 'idle' | 'pending' | 'copied' | 'failed';
+  readonly backupRecoveryStatus: BackupRecoveryStatus;
 }
 
 export const INITIAL_REGISTRAR_SECRET_UI_STATE: RegistrarSecretUiState = {
@@ -270,6 +295,7 @@ export const INITIAL_REGISTRAR_SECRET_UI_STATE: RegistrarSecretUiState = {
   verificationStatus: 'unverified',
   canCopyOnce: false,
   copyStatus: 'idle',
+  backupRecoveryStatus: 'none',
 };
 
 /**
@@ -368,6 +394,7 @@ export interface CertifierSecretUiState {
   readonly verificationStatus: CertifierVerificationStatus;
   readonly canCopyOnce: boolean;
   readonly copyStatus: 'idle' | 'pending' | 'copied' | 'failed';
+  readonly backupRecoveryStatus: BackupRecoveryStatus;
 }
 
 export const INITIAL_CERTIFIER_SECRET_UI_STATE: CertifierSecretUiState = {
@@ -376,6 +403,7 @@ export const INITIAL_CERTIFIER_SECRET_UI_STATE: CertifierSecretUiState = {
   verificationStatus: 'unverified',
   canCopyOnce: false,
   copyStatus: 'idle',
+  backupRecoveryStatus: 'none',
 };
 
 /**
@@ -476,6 +504,7 @@ export interface MemberSecretUiState {
   readonly memberCredentialHex: string | null; // shortened derived credential or 64-char hex
   readonly canCopyOnce: boolean;
   readonly copyStatus: 'idle' | 'pending' | 'copied' | 'failed';
+  readonly backupRecoveryStatus: BackupRecoveryStatus;
 }
 
 export const INITIAL_MEMBER_SECRET_UI_STATE: MemberSecretUiState = {
@@ -485,6 +514,7 @@ export const INITIAL_MEMBER_SECRET_UI_STATE: MemberSecretUiState = {
   memberCredentialHex: null,
   canCopyOnce: false,
   copyStatus: 'idle',
+  backupRecoveryStatus: 'none',
 };
 
 /**
@@ -614,6 +644,7 @@ export function onMemberSecretGeneratedOrImported(
     memberCredentialHex,
     canCopyOnce: true,
     copyStatus: 'idle',
+    backupRecoveryStatus: 'none',
   };
 }
 
@@ -633,6 +664,7 @@ export function onMemberSecretRestoredFromBackup(
     memberCredentialHex,
     canCopyOnce: false,
     copyStatus: 'idle',
+    backupRecoveryStatus: 'recovery-tested',
   };
 }
 
@@ -650,6 +682,7 @@ export function onMemberSecretClearedOrLocked(
     memberCredentialHex: null,
     canCopyOnce: false,
     copyStatus: 'idle',
+    backupRecoveryStatus: 'none',
   };
 }
 
@@ -667,9 +700,9 @@ export function zeroizeBytes(bytes?: Uint8Array | null): void {
  * Pure state reducer when a fresh secret is created or imported directly.
  * Grants a one-time copy opportunity.
  */
-export function onSecretGeneratedOrImported(
-  prevState: RegistrarSecretUiState,
-): RegistrarSecretUiState {
+export function onSecretGeneratedOrImported<T extends RegistrarSecretUiState | CertifierSecretUiState>(
+  prevState: T,
+): T {
   return {
     ...prevState,
     hasSecret: true,
@@ -677,6 +710,7 @@ export function onSecretGeneratedOrImported(
     verificationStatus: 'unverified',
     canCopyOnce: true,
     copyStatus: 'idle',
+    backupRecoveryStatus: 'none',
   };
 }
 
@@ -684,9 +718,9 @@ export function onSecretGeneratedOrImported(
  * Pure state reducer when a secret is restored from an encrypted backup.
  * Restored backups NEVER enable plaintext copying or revealing.
  */
-export function onSecretRestoredFromBackup(
-  prevState: RegistrarSecretUiState,
-): RegistrarSecretUiState {
+export function onSecretRestoredFromBackup<T extends RegistrarSecretUiState | CertifierSecretUiState>(
+  prevState: T,
+): T {
   return {
     ...prevState,
     hasSecret: true,
@@ -694,6 +728,33 @@ export function onSecretRestoredFromBackup(
     verificationStatus: 'unverified',
     canCopyOnce: false, // Invariant: Restored backups cannot be copied in plaintext
     copyStatus: 'idle',
+    backupRecoveryStatus: 'recovery-tested',
+  };
+}
+
+/**
+ * Pure state reducer when a backup is exported and downloaded.
+ * Marks the backup as created but not yet recovery-tested.
+ */
+export function onBackupExported<T extends { readonly backupRecoveryStatus: BackupRecoveryStatus }>(
+  prevState: T,
+): T {
+  return {
+    ...prevState,
+    backupRecoveryStatus: 'created-untested',
+  };
+}
+
+/**
+ * Pure state reducer when a downloaded backup file passes the independent recovery test.
+ * Marks the backup as fully recovery-tested.
+ */
+export function onBackupRecoveryTested<T extends { readonly backupRecoveryStatus: BackupRecoveryStatus }>(
+  prevState: T,
+): T {
+  return {
+    ...prevState,
+    backupRecoveryStatus: 'recovery-tested',
   };
 }
 
@@ -702,9 +763,9 @@ export function onSecretRestoredFromBackup(
  * Immediately reserves the attempt, transitions copyStatus to 'pending',
  * and prevents any concurrent copy execution.
  */
-export function onCopyAttemptInitiated(
-  prevState: RegistrarSecretUiState,
-): RegistrarSecretUiState {
+export function onCopyAttemptInitiated<T extends RegistrarSecretUiState | CertifierSecretUiState>(
+  prevState: T,
+): T {
   if (!prevState.hasSecret || !prevState.canCopyOnce || prevState.copyStatus === 'pending') {
     return prevState;
   }
@@ -717,10 +778,10 @@ export function onCopyAttemptInitiated(
 /**
  * Pure state reducer when a copy attempt succeeds or fails.
  */
-export function onCopyAttemptResult(
-  prevState: RegistrarSecretUiState,
+export function onCopyAttemptResult<T extends RegistrarSecretUiState | CertifierSecretUiState>(
+  prevState: T,
   success: boolean,
-): RegistrarSecretUiState {
+): T {
   // If the state was reset (no secret, locked) or the matching operation is not pending, do not mutate
   if (!prevState.hasSecret || prevState.isLocked || prevState.copyStatus !== 'pending') {
     return prevState;
@@ -743,16 +804,18 @@ export function onCopyAttemptResult(
  * Pure state reducer when session is locked, disconnected, or address changes.
  * Immediately purges any copy or reveal capability and resets verification.
  */
-export function onSecretClearedOrLocked(
-  prevState: RegistrarSecretUiState,
+export function onSecretClearedOrLocked<T extends RegistrarSecretUiState | CertifierSecretUiState>(
+  prevState: T,
   isLocked: boolean = false,
-): RegistrarSecretUiState {
+): T {
   return {
+    ...prevState,
     hasSecret: false,
     isLocked,
     verificationStatus: 'unverified',
     canCopyOnce: false,
     copyStatus: 'idle',
+    backupRecoveryStatus: 'none',
   };
 }
 
@@ -1087,6 +1150,7 @@ export function canInitiateDeployment(params: {
   readonly isConnected: boolean;
   readonly hasSecret: boolean;
   readonly backupConfirmed: boolean;
+  readonly backupRecoveryStatus?: BackupRecoveryStatus;
   readonly isDeploying: boolean;
   readonly proofProviderAvailable: boolean;
   readonly certifierPublicKey: string | null;
@@ -1096,14 +1160,46 @@ export function canInitiateDeployment(params: {
     isHex(params.certifierPublicKey, 32) &&
     params.certifierPublicKey.toLowerCase() !== '00'.repeat(32);
 
+  const isRecoveryTested = params.backupRecoveryStatus ? params.backupRecoveryStatus === 'recovery-tested' : params.backupConfirmed;
+
   return (
     params.isConnected &&
     params.hasSecret &&
     params.backupConfirmed &&
+    isRecoveryTested &&
     !params.isDeploying &&
     params.proofProviderAvailable &&
     isNonZeroCertifierKey
   );
+}
+
+/**
+ * Pure helper checking if Member admission package export can be initiated.
+ * Requires active identity in session memory, attached contract address,
+ * and recovery-tested backup.
+ */
+export function canExportMemberAdmissionPackage(params: {
+  readonly hasSecret: boolean;
+  readonly attachedContractAddress: string | null;
+  readonly backupRecoveryStatus: BackupRecoveryStatus;
+}): boolean {
+  return (
+    params.hasSecret &&
+    typeof params.attachedContractAddress === 'string' &&
+    params.attachedContractAddress.trim().length > 0 &&
+    params.backupRecoveryStatus === 'recovery-tested'
+  );
+}
+
+/**
+ * Pure helper checking if Certifier public key package export can be initiated.
+ * Requires active certifier secret and recovery-tested backup.
+ */
+export function canExportCertifierKeyPackage(params: {
+  readonly hasSecret: boolean;
+  readonly backupRecoveryStatus: BackupRecoveryStatus;
+}): boolean {
+  return params.hasSecret && params.backupRecoveryStatus === 'recovery-tested';
 }
 
 /**
