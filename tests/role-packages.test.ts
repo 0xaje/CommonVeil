@@ -8,6 +8,9 @@ import {
   ENCRYPTED_ENVELOPE_SCHEMA,
   PBKDF2_RECOMMENDED_ITERATIONS,
   MIN_PASSPHRASE_LENGTH,
+  MAX_CIPHERTEXT_BYTES,
+  MAX_PLAINTEXT_BYTES,
+  AES_GCM_TAG_BYTES,
   validateCertifierKeyPackage,
   validateMemberAdmissionPackage,
   validateCertificationRequestPackage,
@@ -514,4 +517,76 @@ test('19. No decrypted secret appears in serialized encrypted output', async () 
   const serialized = JSON.stringify(envelope);
   assert.equal(serialized.includes(sensitiveString), false);
   assert.equal(serialized.includes(VALID_PASSPHRASE), false);
+});
+
+// 20. AES-GCM payload boundary: fits at max permitted boundary, ciphertext fits MAX_CIPHERTEXT_BYTES, envelope validates
+test('20. Payload at exactly MAX_PLAINTEXT_BYTES encrypts, does not exceed MAX_CIPHERTEXT_BYTES, and envelope validates', async () => {
+  // Construct a JSON string whose UTF-8 encoded length is exactly MAX_PLAINTEXT_BYTES
+  // JSON format: "{\"p\":\"...\"}"
+  const prefix = '{"p":"';
+  const suffix = '"}';
+  const neededFill = MAX_PLAINTEXT_BYTES - prefix.length - suffix.length;
+  const fill = 'a'.repeat(neededFill);
+  const exactPayload = { p: fill };
+
+  const serialized = JSON.stringify(exactPayload);
+  const encoded = new TextEncoder().encode(serialized);
+  assert.equal(encoded.length, MAX_PLAINTEXT_BYTES, 'Encoded plaintext must match MAX_PLAINTEXT_BYTES exactly');
+
+  const envelope = await encryptToEnvelope(exactPayload, VALID_PASSPHRASE);
+  const ciphertextBytes = hexToBytes(envelope.ciphertext);
+
+  // Ciphertext byte length must be MAX_PLAINTEXT_BYTES + AES_GCM_TAG_BYTES = MAX_CIPHERTEXT_BYTES
+  assert.equal(ciphertextBytes.length, MAX_CIPHERTEXT_BYTES);
+  assert.equal(ciphertextBytes.length <= MAX_CIPHERTEXT_BYTES, true);
+
+  // Produced envelope must validate
+  const validated = validateEncryptedEnvelope(envelope);
+  assert.equal(validated.schema, ENCRYPTED_ENVELOPE_SCHEMA);
+
+  // Decrypt and verify payload
+  const decrypted = await unsafeDecryptFromEnvelope<typeof exactPayload>(envelope, VALID_PASSPHRASE);
+  assert.equal(decrypted.p.length, neededFill);
+});
+
+// 21. AES-GCM payload boundary: payload one byte over MAX_PLAINTEXT_BYTES is rejected before encryption
+test('21. Payload one encoded byte over MAX_PLAINTEXT_BYTES is rejected before encryption', async () => {
+  const prefix = '{"p":"';
+  const suffix = '"}';
+  const neededFill = MAX_PLAINTEXT_BYTES - prefix.length - suffix.length + 1; // 1 byte over limit
+  const fill = 'a'.repeat(neededFill);
+  const oversizedPayload = { p: fill };
+
+  const serialized = JSON.stringify(oversizedPayload);
+  const encoded = new TextEncoder().encode(serialized);
+  assert.equal(encoded.length, MAX_PLAINTEXT_BYTES + 1);
+
+  await assert.rejects(
+    () => encryptToEnvelope(oversizedPayload, VALID_PASSPHRASE),
+    /exceeds maximum permitted plaintext limit/,
+  );
+});
+
+// 22. Multibyte Unicode case: byte length—not character count—is enforced
+test('22. Multibyte Unicode: enforces UTF-8 byte length rather than JavaScript string length', async () => {
+  // The Euro symbol '€' is 1 JS character (length 1), but 3 UTF-8 bytes: [0xE2, 0x82, 0xAC]
+  const prefix = '{"p":"';
+  const suffix = '"}';
+  const baseLen = prefix.length + suffix.length;
+
+  // Let's create a string where char count < MAX_PLAINTEXT_BYTES, but UTF-8 byte count exceeds MAX_PLAINTEXT_BYTES
+  // Using 400,000 '€' characters:
+  // char length = 400,000 (< 1,048,560)
+  // UTF-8 byte length = 400,000 * 3 = 1,200,000 (> 1,048,560)
+  const euroCount = 400_000;
+  const unicodePayload = { p: '€'.repeat(euroCount) };
+  assert.equal(JSON.stringify(unicodePayload).length < MAX_PLAINTEXT_BYTES, true, 'String character length is within bounds');
+
+  const encodedBytes = new TextEncoder().encode(JSON.stringify(unicodePayload)).length;
+  assert.equal(encodedBytes > MAX_PLAINTEXT_BYTES, true, 'Encoded UTF-8 byte length exceeds plaintext limit');
+
+  await assert.rejects(
+    () => encryptToEnvelope(unicodePayload, VALID_PASSPHRASE),
+    /exceeds maximum permitted plaintext limit/,
+  );
 });

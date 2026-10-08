@@ -104,7 +104,9 @@ export interface InventoryReportLike {
 export const PBKDF2_RECOMMENDED_ITERATIONS = 600_000;
 
 export const MIN_PASSPHRASE_LENGTH = 12;
+export const AES_GCM_TAG_BYTES = 16;
 export const MAX_CIPHERTEXT_BYTES = 1024 * 1024; // 1 MiB
+export const MAX_PLAINTEXT_BYTES = MAX_CIPHERTEXT_BYTES - AES_GCM_TAG_BYTES;
 
 const UINT32_MAX = 4_294_967_295;
 
@@ -539,8 +541,10 @@ export async function encryptToEnvelope(
   }
 
   const encodedPayload = new TextEncoder().encode(serialized);
-  if (encodedPayload.length > MAX_CIPHERTEXT_BYTES) {
-    throw new Error(`Serialized payload exceeds ${MAX_CIPHERTEXT_BYTES} bytes limit`);
+  if (encodedPayload.length > MAX_PLAINTEXT_BYTES) {
+    throw new Error(
+      `Serialized payload (${encodedPayload.length} bytes) exceeds maximum permitted plaintext limit of ${MAX_PLAINTEXT_BYTES} bytes`
+    );
   }
 
   const salt = crypto.getRandomValues(new Uint8Array(16));
