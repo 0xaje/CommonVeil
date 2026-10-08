@@ -11,8 +11,27 @@ import {
   formatDust,
   INITIAL_WORKSPACE_CONTRACT_STATE,
   type WorkspaceContractState,
+  validateRegistrarSecretHex,
+  parseRegistrarSecretHex,
+  generateRegistrarSecret,
+  buildRegistrarBackupPackage,
+  validateRegistrarBackupPackage,
+  zeroizeBytes,
+  REGISTRAR_BACKUP_SCHEMA,
 } from '../src/role-workspace-state.ts';
-import { ContractSessionError, type ContractSessionErrorCode } from '../src/contract-session.ts';
+import {
+  bytesToHex,
+  encryptToEnvelope,
+  decryptAndValidateEnvelope,
+  type EncryptedEnvelope,
+} from '../src/role-packages.ts';
+import {
+  verifyRegistrarSecret,
+  ContractSessionError,
+  type ContractSessionErrorCode,
+  type CommonVeilPublicState,
+} from '../src/contract-session.ts';
+import { pureCircuits } from '../contracts/managed/commonveil/contract/index.js';
 
 // 1. registrar URL parsing
 test('1. Registrar URL parsing', () => {
@@ -280,4 +299,126 @@ test('18. Async request race protection rejects stale responses and address mism
 
   // Address changed in the meantime
   assert.equal(isResponseCurrent(state, 5, '1'.repeat(64)), false);
+});
+
+// 19. Valid 32-byte registrar secret generation and hex import
+test('19. Valid 32-byte registrar secret generation and hex import', () => {
+  const generated = generateRegistrarSecret();
+  assert.ok(generated instanceof Uint8Array);
+  assert.equal(generated.length, 32);
+
+  const hex = bytesToHex(generated);
+  assert.equal(hex.length, 64);
+
+  const validatedHex = validateRegistrarSecretHex(hex);
+  assert.equal(validatedHex, hex.toLowerCase());
+
+  const parsed = parseRegistrarSecretHex(hex);
+  assert.deepEqual(parsed, generated);
+});
+
+// 20. Invalid hex and incorrect byte lengths for registrar secret
+test('20. Invalid hex and incorrect byte lengths for registrar secret are rejected', () => {
+  // Odd length
+  assert.throws(() => validateRegistrarSecretHex('abc'), /64 hex characters/);
+  // 31 bytes (62 chars)
+  assert.throws(() => validateRegistrarSecretHex('00'.repeat(31)), /64 hex characters/);
+  // 33 bytes (66 chars)
+  assert.throws(() => validateRegistrarSecretHex('00'.repeat(33)), /64 hex characters/);
+  // Non-hex chars
+  assert.throws(() => validateRegistrarSecretHex('zz'.repeat(32)), /invalid non-hexadecimal/);
+  // Non-string
+  assert.throws(() => validateRegistrarSecretHex(12345), /hexadecimal string/);
+});
+
+// 21. Encrypted registrar backup export and import round trip
+test('21. Encrypted registrar backup export and import round trip', async () => {
+  const secret = generateRegistrarSecret();
+  const backupPkg = buildRegistrarBackupPackage(secret);
+
+  assert.equal(backupPkg.schema, REGISTRAR_BACKUP_SCHEMA);
+  assert.equal(backupPkg.role, 'registrar');
+  assert.equal(backupPkg.registrarSecret, bytesToHex(secret));
+
+  const validatedBackup = validateRegistrarBackupPackage(backupPkg);
+  assert.equal(validatedBackup.registrarSecret, bytesToHex(secret));
+
+  const passphrase = 'correct horse battery staple';
+  const envelope: EncryptedEnvelope = await encryptToEnvelope(validatedBackup, passphrase);
+
+  const restored = await decryptAndValidateEnvelope(
+    envelope,
+    passphrase,
+    validateRegistrarBackupPackage,
+  );
+
+  assert.equal(restored.schema, REGISTRAR_BACKUP_SCHEMA);
+  assert.equal(restored.role, 'registrar');
+  assert.equal(restored.registrarSecret, bytesToHex(secret));
+  assert.deepEqual(parseRegistrarSecretHex(restored.registrarSecret), secret);
+});
+
+// 22. Wrong passphrase and tampered envelope rejection
+test('22. Wrong passphrase and tampered envelope rejection for registrar backup', async () => {
+  const secret = generateRegistrarSecret();
+  const backupPkg = buildRegistrarBackupPackage(secret);
+  const envelope = await encryptToEnvelope(backupPkg, 'secure-passphrase-1234');
+
+  // Wrong passphrase
+  await assert.rejects(
+    async () => {
+      await decryptAndValidateEnvelope(
+        envelope,
+        'wrong-passphrase-5678',
+        validateRegistrarBackupPackage,
+      );
+    },
+    /incorrect passphrase or tampered ciphertext/,
+  );
+
+  // Tampered ciphertext
+  const tamperedCiphertext =
+    envelope.ciphertext.slice(0, -2) + (envelope.ciphertext.endsWith('00') ? 'ff' : '00');
+  const tamperedEnvelope = { ...envelope, ciphertext: tamperedCiphertext };
+
+  await assert.rejects(
+    async () => {
+      await decryptAndValidateEnvelope(
+        tamperedEnvelope,
+        'secure-passphrase-1234',
+        validateRegistrarBackupPackage,
+      );
+    },
+    /incorrect passphrase or tampered ciphertext/,
+  );
+});
+
+// 23. Local registrar verification success and failure against public state
+test('23. Local registrar verification success and failure against public state', () => {
+  const secret = new Uint8Array(32).fill(7);
+  const derivedAdminKey = pureCircuits.deriveAdminKey(secret);
+  const registrarKeyHex = bytesToHex(derivedAdminKey);
+
+  const matchingPublicState: Pick<CommonVeilPublicState, 'registrarKey'> = {
+    registrarKey: registrarKeyHex,
+  };
+
+  // Correct secret verifies true
+  const ok = verifyRegistrarSecret(matchingPublicState, secret);
+  assert.equal(ok, true);
+
+  // Wrong secret verifies false
+  const wrongSecret = new Uint8Array(32).fill(8);
+  const fail = verifyRegistrarSecret(matchingPublicState, wrongSecret);
+  assert.equal(fail, false);
+});
+
+// 24. Zeroization wipes secret bytes in memory
+test('24. Zeroization wipes secret bytes in memory', () => {
+  const secret = new Uint8Array(32).fill(42);
+  assert.equal(secret[0], 42);
+
+  zeroizeBytes(secret);
+  assert.equal(secret[0], 0);
+  assert.equal(secret.every((b) => b === 0), true);
 });

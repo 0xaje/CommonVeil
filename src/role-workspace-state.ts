@@ -2,10 +2,12 @@
  * CV-007 Role Workspace pure routing, state, and sanitization logic.
  *
  * Provides pure helpers for URL parsing, role validation, safe error mapping,
- * safe wallet error mapping, address invalidation, and async request race protection.
+ * safe wallet error mapping, address invalidation, registrar secret validation,
+ * registrar backup payload schemas, and async request race protection.
  */
 
 import { ContractSessionError, type ContractSessionErrorCode } from './contract-session';
+import { isHex, hexToBytes, bytesToHex, isValidIsoTimestamp } from './role-packages';
 
 export type RoleType = 'registrar' | 'certifier' | 'member';
 
@@ -222,4 +224,119 @@ export function formatDust(raw: bigint): string {
   const whole = raw / 1_000_000_000_000_000n;
   const fraction = (raw % 1_000_000_000_000_000n).toString().padStart(15, '0').slice(0, 4);
   return `${whole}.${fraction}`;
+}
+
+// ============================================================================
+// Registrar Secret & Backup Pure Helpers
+// ============================================================================
+
+export const REGISTRAR_BACKUP_SCHEMA = 'commonveil.registrar-backup/v1' as const;
+
+export interface RegistrarBackupPackage {
+  readonly schema: typeof REGISTRAR_BACKUP_SCHEMA;
+  readonly role: 'registrar';
+  readonly registrarSecret: string; // 32-byte hex (64 chars)
+  readonly createdAt: string;        // ISO timestamp
+}
+
+export type RegistrarVerificationStatus = 'unverified' | 'verified' | 'failed';
+
+export interface RegistrarSecretState {
+  readonly secretBytes: Uint8Array | null;
+  readonly isLocked: boolean;
+  readonly verificationStatus: RegistrarVerificationStatus;
+}
+
+export const INITIAL_REGISTRAR_SECRET_STATE: RegistrarSecretState = {
+  secretBytes: null,
+  isLocked: false,
+  verificationStatus: 'unverified',
+};
+
+/**
+ * Validates a candidate 32-byte hexadecimal registrar secret string.
+ * Returns normalized 64-char lowercase hex string.
+ * Throws clean error if invalid without returning secret contents.
+ */
+export function validateRegistrarSecretHex(hex: unknown): string {
+  if (typeof hex !== 'string') {
+    throw new Error('Secret must be a hexadecimal string.');
+  }
+  const trimmed = hex.trim();
+  if (trimmed.length !== 64) {
+    throw new Error(`Secret must be exactly 32 bytes (64 hex characters), received ${trimmed.length} characters.`);
+  }
+  if (!isHex(trimmed, 32)) {
+    throw new Error('Secret contains invalid non-hexadecimal characters.');
+  }
+  return trimmed.toLowerCase();
+}
+
+/**
+ * Converts a validated 32-byte hex secret string to a Uint8Array.
+ */
+export function parseRegistrarSecretHex(hex: unknown): Uint8Array {
+  const validated = validateRegistrarSecretHex(hex);
+  return hexToBytes(validated);
+}
+
+/**
+ * Generates a fresh 32-byte cryptographically secure random registrar secret.
+ */
+export function generateRegistrarSecret(): Uint8Array {
+  return crypto.getRandomValues(new Uint8Array(32));
+}
+
+/**
+ * Validates an unencrypted RegistrarBackupPackage payload before envelope encryption or after decryption.
+ */
+export function validateRegistrarBackupPackage(pkg: unknown): RegistrarBackupPackage {
+  if (!pkg || typeof pkg !== 'object') {
+    throw new Error('Registrar backup package must be an object.');
+  }
+  const p = pkg as Record<string, unknown>;
+  if (p.schema !== REGISTRAR_BACKUP_SCHEMA) {
+    throw new Error(`Invalid backup schema: expected '${REGISTRAR_BACKUP_SCHEMA}'.`);
+  }
+  if (p.role !== 'registrar') {
+    throw new Error("Invalid backup role: expected 'registrar'.");
+  }
+  const validatedSecret = validateRegistrarSecretHex(p.registrarSecret);
+  if (!isValidIsoTimestamp(p.createdAt)) {
+    throw new Error('Backup createdAt must be a valid ISO timestamp.');
+  }
+  return {
+    schema: REGISTRAR_BACKUP_SCHEMA,
+    role: 'registrar',
+    registrarSecret: validatedSecret,
+    createdAt: p.createdAt as string,
+  };
+}
+
+/**
+ * Creates an unencrypted RegistrarBackupPackage from an active 32-byte secret.
+ */
+export function buildRegistrarBackupPackage(
+  secretBytes: Uint8Array,
+  options?: { now?: Date },
+): RegistrarBackupPackage {
+  if (!(secretBytes instanceof Uint8Array) || secretBytes.length !== 32) {
+    throw new Error('Secret bytes must be a 32-byte Uint8Array.');
+  }
+  const now = options?.now ?? new Date();
+  return {
+    schema: REGISTRAR_BACKUP_SCHEMA,
+    role: 'registrar',
+    registrarSecret: bytesToHex(secretBytes),
+    createdAt: now.toISOString(),
+  };
+}
+
+/**
+ * Zeroizes a Uint8Array in memory.
+ */
+export function zeroizeBytes(bytes?: Uint8Array | null): void {
+  if (bytes && bytes instanceof Uint8Array) {
+    bytes.fill(0);
+  }
 }
