@@ -14,6 +14,38 @@
   margin-bottom: 32px;
 }
 
+.brand-button {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  background: transparent;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  padding: 6px 8px;
+  border-radius: 8px;
+  width: auto;
+}
+
+.brand-button span {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border: 1px solid #70d995;
+  border-radius: 9px;
+  color: #8ef0ae;
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+}
+
+.brand-button:focus-visible {
+  outline: 2px solid #8ef0ae;
+  outline-offset: 4px;
+}
+
 .secondary-nav-btn {
   background: transparent;
   border: 1px solid #315340;
@@ -29,6 +61,11 @@
 .secondary-nav-btn:hover {
   color: #e9f4ec;
   border-color: #4a755d;
+}
+
+.secondary-nav-btn:focus-visible {
+  outline: 2px solid #8ef0ae;
+  outline-offset: 2px;
 }
 
 .role-nav-switch {
@@ -50,6 +87,11 @@
 .role-tab-link:hover {
   color: #8ef0ae;
   border-color: #315340;
+}
+
+.role-tab-link:focus-visible {
+  outline: 2px solid #8ef0ae;
+  outline-offset: 2px;
 }
 
 .role-header-section {
@@ -212,11 +254,21 @@
   cursor: not-allowed;
 }
 
+.action-button:focus-visible {
+  outline: 2px solid #8ef0ae;
+  outline-offset: 3px;
+}
+
 .button-row {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 10px;
   margin-top: 14px;
+}
+
+input:focus-visible {
+  outline: 2px solid #8ef0ae;
+  outline-offset: 2px;
 }
 
 .property-list {
@@ -291,6 +343,12 @@
   background: #3c1e1a;
   border: 1px solid #68342f;
   color: #ffd2cc;
+  cursor: pointer;
+}
+
+.retry-btn:focus-visible {
+  outline: 2px solid #ffaaa3;
+  outline-offset: 2px;
 }
 
 .status-callout {
@@ -344,6 +402,18 @@
   background: #1d3c2a;
   color: #cbe6d4;
   border: 1px solid #2e593e;
+  cursor: pointer;
+}
+
+.copy-button:focus-visible {
+  outline: 2px solid #8ef0ae;
+  outline-offset: 2px;
+}
+
+.copy-fallback-notice {
+  color: #ffaaa3;
+  font-size: 0.8rem;
+  margin: 6px 0 0;
 }
 
 .public-state-card {

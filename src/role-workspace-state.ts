@@ -1,8 +1,8 @@
 /**
- * CV-007 Role Workspace pure routing and state logic.
+ * CV-007 Role Workspace pure routing, state, and sanitization logic.
  *
  * Provides pure helpers for URL parsing, role validation, safe error mapping,
- * and workspace state management without browser or React dependencies.
+ * safe wallet error mapping, address invalidation, and async request race protection.
  */
 
 import { ContractSessionError, type ContractSessionErrorCode } from './contract-session';
@@ -26,7 +26,7 @@ export const ROLE_DESCRIPTORS: Record<RoleType, RoleDescriptor> = {
   certifier: {
     role: 'certifier',
     label: 'Certifier',
-    description: 'Commits verified pre-policy software inventory measurements.',
+    description: 'Reviews submitted inventory evidence and commits an authorized pre-policy snapshot.',
   },
   member: {
     role: 'member',
@@ -90,7 +90,56 @@ export function mapWorkspaceError(error: unknown): string {
   return GENERIC_SAFE_ERROR_MESSAGE;
 }
 
+/**
+ * Pure sanitization helper for wallet connection errors.
+ * Never displays raw error messages, URLs, connector internals, tokens, or stack traces.
+ */
+export function mapWalletError(error: unknown): string {
+  if (!error) {
+    return 'Wallet connection was not completed. Unlock 1AM on Preprod and try again.';
+  }
+
+  const rawMessage = (
+    error instanceof Error
+      ? error.message
+      : typeof error === 'string'
+        ? error
+        : typeof (error as any)?.message === 'string'
+          ? (error as any).message
+          : ''
+  ).toLowerCase();
+
+  // Distinguish known safe application conditions without leaking internals
+  if (
+    rawMessage.includes('no compatible midnight wallet') ||
+    rawMessage.includes('wallet not found') ||
+    rawMessage.includes('unlock')
+  ) {
+    return 'No compatible Midnight wallet found. Open 1AM, unlock it on Preprod, and try again.';
+  }
+
+  if (
+    rawMessage.includes('preprod') ||
+    rawMessage.includes('network') ||
+    rawMessage.includes('wrong network')
+  ) {
+    return 'Wallet is not connected to Preprod. Switch 1AM network to Preprod and try again.';
+  }
+
+  if (
+    rawMessage.includes('cancel') ||
+    rawMessage.includes('reject') ||
+    rawMessage.includes('denied') ||
+    rawMessage.includes('declined')
+  ) {
+    return 'Wallet connection request was cancelled or declined in 1AM.';
+  }
+
+  return 'Wallet connection was not completed. Unlock 1AM on Preprod and try again.';
+}
+
 export type InspectionState = 'none' | 'inspecting' | 'inspected' | 'attaching' | 'attached';
+export type CopyStatus = 'idle' | 'copied' | 'failed';
 
 export interface WorkspaceContractState {
   readonly addressInput: string;
@@ -98,6 +147,8 @@ export interface WorkspaceContractState {
   readonly inspectedState: import('./contract-session').CommonVeilPublicState | null;
   readonly attachedAddress: string | null;
   readonly errorMessage: string | null;
+  readonly copyStatus: CopyStatus;
+  readonly activeRequestId: number;
 }
 
 export const INITIAL_WORKSPACE_CONTRACT_STATE: WorkspaceContractState = {
@@ -106,16 +157,23 @@ export const INITIAL_WORKSPACE_CONTRACT_STATE: WorkspaceContractState = {
   inspectedState: null,
   attachedAddress: null,
   errorMessage: null,
+  copyStatus: 'idle',
+  activeRequestId: 0,
 };
 
 /**
  * Pure state reducer/updater for contract address changes.
- * Invalidates any prior inspected or attached state.
+ * Invalidates any prior inspected or attached state, copy status, and error message.
+ * If currently busy inspecting or attaching, address mutation is rejected to prevent race conditions.
  */
 export function handleAddressInputChange(
   prevState: WorkspaceContractState,
   newAddress: string,
 ): WorkspaceContractState {
+  // Prevent address mutation while an async operation is in flight
+  if (prevState.inspectionState === 'inspecting' || prevState.inspectionState === 'attaching') {
+    return prevState;
+  }
   if (prevState.addressInput === newAddress) {
     return prevState;
   }
@@ -126,7 +184,26 @@ export function handleAddressInputChange(
     inspectedState: null,
     attachedAddress: null,
     errorMessage: null,
+    copyStatus: 'idle',
   };
+}
+
+/**
+ * Checks whether an async response matches the currently active request ID and address.
+ * Prevents stale responses from overwriting newer state or attaching against a changed address.
+ */
+export function isResponseCurrent(
+  currentState: WorkspaceContractState,
+  requestId: number,
+  originalAddress: string,
+): boolean {
+  if (currentState.activeRequestId !== requestId) {
+    return false;
+  }
+  if (currentState.addressInput.trim() !== originalAddress.trim()) {
+    return false;
+  }
+  return true;
 }
 
 /**
