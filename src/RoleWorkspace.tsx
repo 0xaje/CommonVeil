@@ -16,8 +16,11 @@ import {
   hexToBytes,
   validateCertifierKeyPackage,
   type CertifierKeyPackage,
+  MEMBER_ADMISSION_SCHEMA,
+  type MemberAdmissionPackage,
+  validateMemberAdmissionPackage,
 } from './role-packages';
-import { deployContract } from '@midnight-ntwrk/midnight-js-contracts';
+import { deployContract, submitCallTx } from '@midnight-ntwrk/midnight-js-contracts';
 import { CompiledCommonVeilContract, CommonVeil } from './contract';
 import { PRIVATE_STATE_ID } from './providers';
 import {
@@ -70,6 +73,31 @@ import {
   mapDeploymentError,
   mapDeploymentInspectionError,
   DEPLOYMENT_VERIFICATION_ERROR_MESSAGES,
+  INITIAL_MEMBER_SECRET_UI_STATE,
+  type MemberSecretUiState,
+  parseMemberSecretOrSaltHex,
+  generateMemberSecretOrSalt,
+  buildMemberBackupPackage,
+  validateMemberBackupPackage,
+  buildMemberAdmissionPackage,
+  onMemberSecretGeneratedOrImported,
+  onMemberSecretRestoredFromBackup,
+  onMemberSecretClearedOrLocked,
+  INITIAL_REGISTRAR_ADMISSION_UI_STATE,
+  type RegistrarAdmissionUiState,
+  validateMemberAdmissionReceipt,
+  buildMemberAdmissionReceipt,
+  type MemberAdmissionReceipt,
+  onAdmissionPackageImported,
+  onAdmissionConfirmDismissed,
+  onAdmissionWalletRequest,
+  onAdmissionSubmitting,
+  onAdmissionFinalizedIndexing,
+  onAdmissionCompleted,
+  onAdmissionFailed,
+  onAdmissionReset,
+  mapMemberOperationError,
+  mapAdmissionError,
 } from './role-workspace-state';
 import './role-workspace.css';
 
@@ -118,17 +146,45 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
   const [certifierNotice, setCertifierNotice] = useState<string | null>(null);
   const [certifierBackupFileContent, setCertifierBackupFileContent] = useState<string | null>(null);
 
+  // Member local UI state (never contains full secret or salt string)
+  const [memberUi, setMemberUi] = useState<MemberSecretUiState>(
+    INITIAL_MEMBER_SECRET_UI_STATE,
+  );
+
+  // Member input states (cleared immediately upon processing)
+  const [memberImportSecretHexInput, setMemberImportSecretHexInput] = useState('');
+  const [memberImportSaltHexInput, setMemberImportSaltHexInput] = useState('');
+  const [memberExportPassphrase, setMemberExportPassphrase] = useState('');
+  const [memberImportPassphrase, setMemberImportPassphrase] = useState('');
+  const [memberError, setMemberError] = useState<string | null>(null);
+  const [memberNotice, setMemberNotice] = useState<string | null>(null);
+  const [memberBackupFileContent, setMemberBackupFileContent] = useState<string | null>(null);
+
+  // Registrar Member Admission state
+  const [admissionUi, setAdmissionUi] = useState<RegistrarAdmissionUiState>(
+    INITIAL_REGISTRAR_ADMISSION_UI_STATE,
+  );
+  const [admissionNotice, setAdmissionNotice] = useState<string | null>(null);
+
   // Plaintext secrets in volatile component memory only (Uint8Array, never React string state)
   const plaintextSecretRef = useRef<Uint8Array | null>(null);
   const plaintextCertifierSecretRef = useRef<Uint8Array | null>(null);
+  const plaintextMemberSecretRef = useRef<Uint8Array | null>(null);
+  const plaintextMemberSaltRef = useRef<Uint8Array | null>(null);
 
   // Guards against stale async operations when requests race or unmount occurs
   const requestCounter = useRef(0);
   const isMounted = useRef(true);
 
-  // Monotonically increasing deployment generation token to prevent stale async callbacks
+  // Monotonically increasing generation tokens to prevent stale async callbacks
   const deployGenerationRef = useRef(0);
   const activeDeployTokenRef = useRef<number | null>(null);
+
+  const memberCopyGenerationRef = useRef(0);
+  const activeMemberCopyTokenRef = useRef<number | null>(null);
+
+  const admissionGenerationRef = useRef(0);
+  const activeAdmissionTokenRef = useRef<number | null>(null);
 
   // Zeroize bytes and clear references on unmount or role change
   useEffect(() => {
@@ -139,12 +195,20 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
       activeCopyTokenRef.current = null;
       certifierCopyGenerationRef.current++;
       activeCertifierCopyTokenRef.current = null;
+      memberCopyGenerationRef.current++;
+      activeMemberCopyTokenRef.current = null;
       deployGenerationRef.current++;
       activeDeployTokenRef.current = null;
+      admissionGenerationRef.current++;
+      activeAdmissionTokenRef.current = null;
       zeroizeBytes(plaintextSecretRef.current);
       plaintextSecretRef.current = null;
       zeroizeBytes(plaintextCertifierSecretRef.current);
       plaintextCertifierSecretRef.current = null;
+      zeroizeBytes(plaintextMemberSecretRef.current);
+      plaintextMemberSecretRef.current = null;
+      zeroizeBytes(plaintextMemberSaltRef.current);
+      plaintextMemberSaltRef.current = null;
     };
   }, []);
 
@@ -158,10 +222,16 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
     deploymentUi.stage === 'deploying' ||
     deploymentUi.stage === 'finalized-indexing';
 
+  const isAdmitting =
+    admissionUi.stage === 'requesting-wallet' ||
+    admissionUi.stage === 'submitting' ||
+    admissionUi.stage === 'finalized-indexing';
+
   const isBusy =
     contractState.inspectionState === 'inspecting' ||
     contractState.inspectionState === 'attaching' ||
-    isDeploying;
+    isDeploying ||
+    isAdmitting;
 
   // Monotonically increasing copy generation tokens to prevent stale callbacks across secret lifecycles
   const copyGenerationRef = useRef(0);
@@ -177,15 +247,19 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
     activeCopyTokenRef.current = null;
     deployGenerationRef.current++;
     activeDeployTokenRef.current = null;
+    admissionGenerationRef.current++;
+    activeAdmissionTokenRef.current = null;
     zeroizeBytes(plaintextSecretRef.current);
     plaintextSecretRef.current = null;
     setRegistrarUi((prev) => onSecretClearedOrLocked(prev, isLocked));
     setDeploymentUi((prev) => onDeploymentReset(prev));
+    setAdmissionUi((prev) => onAdmissionReset(prev));
     setImportHexInput('');
     setExportPassphrase('');
     setImportPassphrase('');
     setBackupFileContent(null);
     setRegistrarError(null);
+    setAdmissionNotice(null);
   };
 
   // Helper to securely clear certifier secret in memory
@@ -202,10 +276,28 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
     setCertifierError(null);
   };
 
+  // Helper to securely clear member secret and salt in memory
+  const clearMemberSecret = (isLocked: boolean = false) => {
+    memberCopyGenerationRef.current++;
+    activeMemberCopyTokenRef.current = null;
+    zeroizeBytes(plaintextMemberSecretRef.current);
+    plaintextMemberSecretRef.current = null;
+    zeroizeBytes(plaintextMemberSaltRef.current);
+    plaintextMemberSaltRef.current = null;
+    setMemberUi((prev) => onMemberSecretClearedOrLocked(prev, isLocked));
+    setMemberImportSecretHexInput('');
+    setMemberImportSaltHexInput('');
+    setMemberExportPassphrase('');
+    setMemberImportPassphrase('');
+    setMemberBackupFileContent(null);
+    setMemberError(null);
+  };
+
   // Clear secrets when role changes
   useEffect(() => {
     clearRegistrarSecret(false);
     clearCertifierSecret(false);
+    clearMemberSecret(false);
   }, [role]);
 
   const handleConnectWallet = async () => {
@@ -232,15 +324,24 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
     setWalletError(null);
     clearRegistrarSecret(false);
     clearCertifierSecret(false);
+    clearMemberSecret(false);
     setContractState(INITIAL_WORKSPACE_CONTRACT_STATE);
     setDeploymentUi((prev) => onDeploymentReset(prev));
+    setAdmissionUi((prev) => onAdmissionReset(prev));
   };
 
   const handleAddressChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     copyGenerationRef.current++;
     activeCopyTokenRef.current = null;
+    certifierCopyGenerationRef.current++;
+    activeCertifierCopyTokenRef.current = null;
+    memberCopyGenerationRef.current++;
+    activeMemberCopyTokenRef.current = null;
     deployGenerationRef.current++;
     activeDeployTokenRef.current = null;
+    admissionGenerationRef.current++;
+    activeAdmissionTokenRef.current = null;
+    clearMemberSecret(false);
     const next = handleAddressInputChange(contractState, e.target.value);
     setContractState(next);
     // Address changed: reset verification and remove any copy capability
@@ -250,6 +351,7 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
       canCopyOnce: false,
     }));
     setDeploymentUi((prev) => onDeploymentReset(prev));
+    setAdmissionUi((prev) => onAdmissionReset(prev));
   };
 
   const handleInspect = async () => {
@@ -1150,6 +1252,487 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
     }
   };
 
+  // ============================================================================
+  // Member Identity & Encrypted Backup Handlers
+  // ============================================================================
+
+  const handleGenerateMemberIdentity = () => {
+    setMemberError(null);
+    setMemberNotice(null);
+    try {
+      const secretBytes = generateMemberSecretOrSalt();
+      const saltBytes = generateMemberSecretOrSalt();
+      const credentialBytes = CommonVeil.pureCircuits.deriveMemberCredential(secretBytes, saltBytes);
+      const credentialHex = bytesToHex(credentialBytes);
+
+      clearMemberSecret(false);
+      plaintextMemberSecretRef.current = secretBytes;
+      plaintextMemberSaltRef.current = saltBytes;
+
+      setMemberUi((prev) => onMemberSecretGeneratedOrImported(prev, credentialHex));
+      setMemberNotice(
+        'Fresh Member secret and salt generated. Credential derived locally in volatile session memory.',
+      );
+    } catch (err: unknown) {
+      setMemberError(mapMemberOperationError(err));
+    }
+  };
+
+  const handleImportMemberIdentityHex = () => {
+    setMemberError(null);
+    setMemberNotice(null);
+    try {
+      const secretBytes = parseMemberSecretOrSaltHex(memberImportSecretHexInput, 'Member secret');
+      const saltBytes = parseMemberSecretOrSaltHex(memberImportSaltHexInput, 'Member salt');
+
+      // Enforce independence: secret and salt must not be identical
+      if (bytesToHex(secretBytes).toLowerCase() === bytesToHex(saltBytes).toLowerCase()) {
+        throw new Error('Member secret and member salt must be distinct and independent values.');
+      }
+
+      const credentialBytes = CommonVeil.pureCircuits.deriveMemberCredential(secretBytes, saltBytes);
+      const credentialHex = bytesToHex(credentialBytes);
+
+      clearMemberSecret(false);
+      plaintextMemberSecretRef.current = secretBytes;
+      plaintextMemberSaltRef.current = saltBytes;
+
+      setMemberUi((prev) => onMemberSecretGeneratedOrImported(prev, credentialHex));
+      setMemberImportSecretHexInput('');
+      setMemberImportSaltHexInput('');
+      setMemberNotice('Member secret and salt imported. Credential derived locally in session memory.');
+    } catch (err: unknown) {
+      setMemberImportSecretHexInput('');
+      setMemberImportSaltHexInput('');
+      setMemberError(mapMemberOperationError(err));
+    }
+  };
+
+  const handleLockMemberSession = () => {
+    clearMemberSecret(true);
+    setMemberNotice('Member session locked. Secret and salt zeroized in session memory.');
+  };
+
+  const handleOneTimeCopyMemberSecret = () => {
+    if (
+      !plaintextMemberSecretRef.current ||
+      !memberUi.canCopyOnce ||
+      memberUi.copyStatus === 'pending' ||
+      activeMemberCopyTokenRef.current !== null
+    ) {
+      return;
+    }
+
+    const operationToken = ++memberCopyGenerationRef.current;
+    activeMemberCopyTokenRef.current = operationToken;
+    setMemberUi((prev) => onCopyAttemptInitiated(prev as any) as any);
+
+    const secretHex = bytesToHex(plaintextMemberSecretRef.current);
+    navigator.clipboard
+      .writeText(secretHex)
+      .then(() => {
+        if (!isMounted.current || activeMemberCopyTokenRef.current !== operationToken) {
+          return;
+        }
+        activeMemberCopyTokenRef.current = null;
+        setMemberUi((prev) => onCopyAttemptResult(prev as any, true) as any);
+      })
+      .catch((err: unknown) => {
+        if (!isMounted.current || activeMemberCopyTokenRef.current !== operationToken) {
+          return;
+        }
+        activeMemberCopyTokenRef.current = null;
+        setMemberUi((prev) => onCopyAttemptResult(prev as any, false) as any);
+        setMemberError(mapMemberOperationError(err ?? new Error('clipboard')));
+      });
+  };
+
+  const handleExportMemberBackup = async () => {
+    setMemberError(null);
+    setMemberNotice(null);
+    if (!plaintextMemberSecretRef.current || !plaintextMemberSaltRef.current) {
+      setMemberError('No Member secret and salt available to backup.');
+      return;
+    }
+    if (memberExportPassphrase.length < 12) {
+      setMemberError('Passphrase must be at least 12 characters.');
+      return;
+    }
+
+    try {
+      const backupPackage = buildMemberBackupPackage(
+        plaintextMemberSecretRef.current,
+        plaintextMemberSaltRef.current,
+      );
+      const envelope: EncryptedEnvelope = await encryptToEnvelope(
+        backupPackage,
+        memberExportPassphrase,
+      );
+
+      const blob = new Blob([JSON.stringify(envelope, null, 2)], {
+        type: 'application/json',
+      });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = `commonveil-member-backup-${Date.now()}.json`;
+      anchor.click();
+      URL.revokeObjectURL(url);
+
+      setMemberExportPassphrase('');
+      setMemberNotice('Encrypted Member backup downloaded.');
+    } catch (err: unknown) {
+      setMemberError(mapMemberOperationError(err));
+    }
+  };
+
+  const handleMemberBackupFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setMemberError(null);
+    setMemberNotice(null);
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const content = event.target?.result;
+      if (typeof content !== 'string') return;
+      setMemberBackupFileContent(content);
+    };
+    reader.onerror = () => {
+      setMemberError('Could not read the selected backup file.');
+    };
+    reader.readAsText(file);
+  };
+
+  const handleImportMemberBackup = async () => {
+    setMemberError(null);
+    setMemberNotice(null);
+    if (!memberBackupFileContent) {
+      setMemberError('The selected file is not a valid CommonVeil encrypted backup.');
+      return;
+    }
+    if (memberImportPassphrase.length < 12) {
+      setMemberError('Passphrase must be at least 12 characters.');
+      return;
+    }
+
+    try {
+      let parsedEnvelope: unknown;
+      try {
+        parsedEnvelope = JSON.parse(memberBackupFileContent);
+      } catch {
+        throw new Error('The selected file is not a valid CommonVeil encrypted backup.');
+      }
+
+      const restored = await decryptAndValidateEnvelope(
+        parsedEnvelope as EncryptedEnvelope,
+        memberImportPassphrase,
+        validateMemberBackupPackage,
+      );
+
+      const secretBytes = parseMemberSecretOrSaltHex(restored.memberSecret, 'Member secret');
+      const saltBytes = parseMemberSecretOrSaltHex(restored.memberSalt, 'Member salt');
+
+      if (bytesToHex(secretBytes).toLowerCase() === bytesToHex(saltBytes).toLowerCase()) {
+        throw new Error('Restored member secret and member salt must be distinct values.');
+      }
+
+      const credentialBytes = CommonVeil.pureCircuits.deriveMemberCredential(secretBytes, saltBytes);
+      const credentialHex = bytesToHex(credentialBytes);
+
+      clearMemberSecret(false);
+      plaintextMemberSecretRef.current = secretBytes;
+      plaintextMemberSaltRef.current = saltBytes;
+
+      setMemberUi((prev) => onMemberSecretRestoredFromBackup(prev, credentialHex));
+      setMemberImportPassphrase('');
+      setMemberBackupFileContent(null);
+      setMemberNotice(
+        'Member secret and salt restored from encrypted backup into session memory. Note: Plaintext copy is disabled for restored backups.',
+      );
+    } catch (err: unknown) {
+      setMemberError(mapMemberOperationError(err));
+    }
+  };
+
+  const handleExportMemberAdmissionPackage = () => {
+    setMemberError(null);
+    setMemberNotice(null);
+    if (!contractState.attachedAddress) {
+      setMemberError('Attach to a verified CommonVeil contract before exporting an admission package.');
+      return;
+    }
+    if (!plaintextMemberSecretRef.current || !plaintextMemberSaltRef.current) {
+      setMemberError('No active Member identity in session memory.');
+      return;
+    }
+
+    try {
+      const credentialBytes = CommonVeil.pureCircuits.deriveMemberCredential(
+        plaintextMemberSecretRef.current,
+        plaintextMemberSaltRef.current,
+      );
+
+      const admissionPkg = buildMemberAdmissionPackage(
+        contractState.attachedAddress,
+        credentialBytes,
+      );
+
+      const blob = new Blob([JSON.stringify(admissionPkg, null, 2)], {
+        type: 'application/json',
+      });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = `commonveil-member-admission-${admissionPkg.memberCredential.slice(0, 10)}.json`;
+      anchor.click();
+      URL.revokeObjectURL(url);
+
+      setMemberNotice(
+        'Restricted Member Admission Package downloaded. Send this file to the Registrar to request admission.',
+      );
+    } catch (err: unknown) {
+      setMemberError(mapMemberOperationError(err));
+    }
+  };
+
+  // ============================================================================
+  // Registrar Admission Workflow Handlers
+  // ============================================================================
+
+  const handleAdmissionPackageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setRegistrarError(null);
+    setAdmissionNotice(null);
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const content = event.target?.result;
+      if (typeof content !== 'string') return;
+      try {
+        const parsed = JSON.parse(content);
+        const validated = validateMemberAdmissionPackage(parsed);
+
+        // State transition with pure contractAddress check
+        setAdmissionUi((prev) =>
+          onAdmissionPackageImported(prev, validated, contractState.attachedAddress),
+        );
+      } catch (err: unknown) {
+        setAdmissionUi((prev) =>
+          onAdmissionFailed(prev, 'The selected file is not a valid Member Admission Package.'),
+        );
+      }
+    };
+    reader.onerror = () => {
+      setAdmissionUi((prev) =>
+        onAdmissionFailed(prev, 'Could not read the selected admission package file.'),
+      );
+    };
+    reader.readAsText(file);
+  };
+
+  const handleDismissAdmissionConfirmation = () => {
+    setAdmissionUi((prev) => onAdmissionConfirmDismissed(prev));
+  };
+
+  const handleResetAdmission = () => {
+    setAdmissionUi((prev) => onAdmissionReset(prev));
+    setAdmissionNotice(null);
+  };
+
+  const handleConfirmAndAdmitMember = async () => {
+    setRegistrarError(null);
+    setAdmissionNotice(null);
+
+    if (
+      !wallet ||
+      !contractState.attachedAddress ||
+      !plaintextSecretRef.current ||
+      !admissionUi.importedPackage ||
+      admissionUi.stage !== 'confirming'
+    ) {
+      return;
+    }
+
+    const attachedAddress = contractState.attachedAddress;
+    const importedPkg = admissionUi.importedPackage;
+    const credentialHex = importedPkg.memberCredential;
+
+    // Reject if address does not match attached contract
+    if (importedPkg.contractAddress.trim() !== attachedAddress.trim()) {
+      setAdmissionUi((prev) =>
+        onAdmissionFailed(prev, 'Admission package contract address does not match the attached contract.'),
+      );
+      return;
+    }
+
+    // Capture unique admission generation token
+    const operationToken = ++admissionGenerationRef.current;
+    activeAdmissionTokenRef.current = operationToken;
+
+    setAdmissionUi((prev) => onAdmissionWalletRequest(prev));
+
+    try {
+      setAdmissionUi((prev) => onAdmissionSubmitting(prev));
+
+      const adminSecretBytes = plaintextSecretRef.current;
+      const credentialBytes = hexToBytes(credentialHex);
+
+      // Call genuine registerMember circuit via installed Midnight SDK
+      const finalized = await submitCallTx(
+        wallet.providers,
+        {
+          compiledContract: CompiledCommonVeilContract,
+          contractAddress: attachedAddress,
+          privateStateId: PRIVATE_STATE_ID,
+          circuitId: 'registerMember',
+          args: [adminSecretBytes, credentialBytes],
+        },
+      );
+
+      if (!isMounted.current || activeAdmissionTokenRef.current !== operationToken) {
+        return;
+      }
+
+      // Check captured genuine transaction ID from SDK FinalizedTxData
+      const txId: string | null =
+        finalized && finalized.public && typeof finalized.public.txId === 'string'
+          ? finalized.public.txId
+          : null;
+
+      // Automatically inspect public ledger to verify memberCredentials contains credential
+      try {
+        const session = await queryCommonVeilContract(wallet.providers, attachedAddress);
+        if (!isMounted.current || activeAdmissionTokenRef.current !== operationToken) {
+          return;
+        }
+
+        const isMember = session.hasMemberCredential(credentialBytes);
+        if (!isMember) {
+          // Finalized on-chain, but indexer ledger not yet reflecting it
+          setAdmissionUi((prev) => onAdmissionFinalizedIndexing(prev));
+          return;
+        }
+
+        const receipt: MemberAdmissionReceipt = buildMemberAdmissionReceipt({
+          contractAddress: attachedAddress,
+          memberCredential: credentialHex,
+          admissionTxId: txId,
+        });
+
+        activeAdmissionTokenRef.current = null;
+        setAdmissionUi((prev) => onAdmissionCompleted(prev, receipt));
+        setAdmissionNotice(
+          `Member credential ${credentialHex.slice(0, 10)}… admitted successfully on Midnight Preprod.`,
+        );
+
+        // Update public contract state display
+        setContractState((prev) => ({
+          ...prev,
+          inspectedState: session.publicState,
+        }));
+      } catch (inspectError: unknown) {
+        if (!isMounted.current || activeAdmissionTokenRef.current !== operationToken) {
+          return;
+        }
+        // Indexer query lag after finalization: transition to finalized-indexing without resubmission
+        setAdmissionUi((prev) => onAdmissionFinalizedIndexing(prev));
+      }
+    } catch (admitError: unknown) {
+      if (!isMounted.current || activeAdmissionTokenRef.current !== operationToken) {
+        return;
+      }
+      activeAdmissionTokenRef.current = null;
+
+      const raw = (
+        admitError instanceof Error
+          ? admitError.message
+          : typeof admitError === 'string'
+            ? admitError
+            : ''
+      ).toLowerCase();
+
+      if (
+        raw.includes('cancel') ||
+        raw.includes('reject') ||
+        raw.includes('denied') ||
+        raw.includes('declined') ||
+        raw.includes('user aborted')
+      ) {
+        setAdmissionUi((prev) => onAdmissionFailed(prev, 'Member admission transaction was cancelled in 1AM.', true));
+      } else {
+        setAdmissionUi((prev) =>
+          onAdmissionFailed(prev, mapAdmissionError(admitError)),
+        );
+      }
+    }
+  };
+
+  const handleRetryAdmissionVerification = async () => {
+    if (
+      !wallet ||
+      !contractState.attachedAddress ||
+      !admissionUi.importedPackage ||
+      admissionUi.stage !== 'finalized-indexing'
+    ) {
+      return;
+    }
+
+    const attachedAddress = contractState.attachedAddress;
+    const credentialHex = admissionUi.importedPackage.memberCredential;
+    const credentialBytes = hexToBytes(credentialHex);
+
+    try {
+      const session = await queryCommonVeilContract(wallet.providers, attachedAddress);
+      if (!isMounted.current) return;
+
+      const isMember = session.hasMemberCredential(credentialBytes);
+      if (!isMember) {
+        // Still not indexed; keep finalized-indexing without resubmitting transaction
+        return;
+      }
+
+      const receipt: MemberAdmissionReceipt = buildMemberAdmissionReceipt({
+        contractAddress: attachedAddress,
+        memberCredential: credentialHex,
+        admissionTxId: null, // Indexer retry does not re-fetch txId
+      });
+
+      setAdmissionUi((prev) => onAdmissionCompleted(prev, receipt));
+      setAdmissionNotice(
+        `Member credential ${credentialHex.slice(0, 10)}… confirmed on-chain in memberCredentials set.`,
+      );
+
+      setContractState((prev) => ({
+        ...prev,
+        inspectedState: session.publicState,
+      }));
+    } catch (inspectError: unknown) {
+      // Retry query failed; remain in finalized-indexing
+    }
+  };
+
+  const handleDownloadAdmissionReceipt = () => {
+    if (!admissionUi.receipt) return;
+    try {
+      const validated = validateMemberAdmissionReceipt(admissionUi.receipt);
+      const blob = new Blob([JSON.stringify(validated, null, 2)], {
+        type: 'application/json',
+      });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = `commonveil-member-admission-receipt-${validated.admittedMemberCredential.slice(0, 10)}.json`;
+      anchor.click();
+      URL.revokeObjectURL(url);
+    } catch (err: unknown) {
+      setAdmissionUi((prev) =>
+        onAdmissionFailed(prev, 'Could not create valid admission receipt.'),
+      );
+    }
+  };
+
   const publicState: CommonVeilPublicState | null = contractState.inspectedState;
 
   return (
@@ -1616,6 +2199,240 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
                         disabled={certifierExportPassphrase.length < 12}
                         className="action-button secondary"
                         aria-label="Export encrypted certifier backup"
+                      >
+                        Download Encrypted Backup
+                      </button>
+                    </form>
+                  </div>
+                </div>
+              )}
+            </article>
+          )}
+
+          {role === 'member' && (
+            <article className="workspace-card member-identity-card">
+              <div className="card-header">
+                <span className="card-step">03</span>
+                <h2>Member Role Identity & Credential</h2>
+              </div>
+              <p className="card-caption">
+                The member secret and salt are kept only in volatile session memory. JavaScript runtime cannot guarantee absolute memory scrubbing. Secrets are never exposed to Registrar or on-chain.
+              </p>
+
+              {/* Status Header */}
+              <div className="registrar-status-row" aria-live="polite">
+                <div>
+                  <span className="field-caption">Secret & Salt in Memory</span>
+                  <strong>
+                    {memberUi.hasSecret ? 'Loaded in session memory' : 'None (Locked)'}
+                  </strong>
+                </div>
+                <div>
+                  <span className="field-caption">Derived Credential</span>
+                  {memberUi.memberCredentialHex ? (
+                    <strong className="verification-badge verified" title={memberUi.memberCredentialHex}>
+                      {shortenAddress(memberUi.memberCredentialHex)}
+                    </strong>
+                  ) : (
+                    <strong className="verification-badge unverified">Not derived</strong>
+                  )}
+                </div>
+              </div>
+
+              {memberNotice && (
+                <div className="safe-notice-banner" role="status">
+                  <p>{memberNotice}</p>
+                </div>
+              )}
+
+              {memberError && (
+                <div className="safe-error-banner" role="alert">
+                  <strong>Member Error</strong>
+                  <p>{memberError}</p>
+                </div>
+              )}
+
+              {/* One-time copy confirmation banner */}
+              {memberUi.hasSecret && memberUi.canCopyOnce && (
+                <div className="secret-reveal-box" role="alert">
+                  <div className="secret-reveal-header">
+                    <strong>One-Time Secret Copy Available</strong>
+                  </div>
+                  <p className="secret-warning-text">
+                    The secret is kept only for this browser session and is not written to persistent storage. Export an encrypted backup immediately.
+                  </p>
+                  <div className="one-time-copy-row">
+                    <button
+                      type="button"
+                      className="action-button primary"
+                      onClick={handleOneTimeCopyMemberSecret}
+                      disabled={memberUi.copyStatus === 'pending'}
+                      aria-label="Copy member secret to clipboard (one time only)"
+                    >
+                      {memberUi.copyStatus === 'pending'
+                        ? 'Copying...'
+                        : memberUi.copyStatus === 'failed'
+                          ? 'Retry Secret Copy'
+                          : 'Copy Secret to Clipboard (One-Time)'}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Action Tabs / Buttons */}
+              {!memberUi.hasSecret ? (
+                <div className="secret-setup-section">
+                  <button
+                    type="button"
+                    onClick={handleGenerateMemberIdentity}
+                    className="action-button primary"
+                    aria-label="Generate fresh random 32-byte member secret and independent salt"
+                  >
+                    Generate New Member Identity
+                  </button>
+
+                  <div className="divider-row"><span>or import existing 32-byte hex pair</span></div>
+
+                  <form
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      handleImportMemberIdentityHex();
+                    }}
+                  >
+                    <label htmlFor="import-member-secret-hex-input">
+                      32-Byte Member Secret Hex (64 hex characters)
+                    </label>
+                    <input
+                      id="import-member-secret-hex-input"
+                      type="password"
+                      value={memberImportSecretHexInput}
+                      onChange={(e) => setMemberImportSecretHexInput(e.target.value)}
+                      placeholder="Paste 64-character hex secret"
+                      autoComplete="off"
+                      spellCheck="false"
+                    />
+
+                    <label htmlFor="import-member-salt-hex-input" style={{ marginTop: '0.75rem' }}>
+                      32-Byte Independent Member Salt Hex (64 hex characters)
+                    </label>
+                    <input
+                      id="import-member-salt-hex-input"
+                      type="password"
+                      value={memberImportSaltHexInput}
+                      onChange={(e) => setMemberImportSaltHexInput(e.target.value)}
+                      placeholder="Paste 64-character independent hex salt"
+                      autoComplete="off"
+                      spellCheck="false"
+                    />
+
+                    <button
+                      type="submit"
+                      disabled={!memberImportSecretHexInput.trim() || !memberImportSaltHexInput.trim()}
+                      className="action-button secondary"
+                      aria-label="Import plaintext member secret and salt hex"
+                    >
+                      Import Hex Identity
+                    </button>
+                  </form>
+
+                  <div className="divider-row"><span>or restore encrypted backup</span></div>
+
+                  <div className="backup-import-box">
+                    <label htmlFor="member-backup-file-input">Encrypted Backup JSON File</label>
+                    <input
+                      id="member-backup-file-input"
+                      type="file"
+                      accept=".json,application/json"
+                      onChange={handleMemberBackupFileSelect}
+                    />
+
+                    {memberBackupFileContent && (
+                      <form
+                        onSubmit={(e) => {
+                          e.preventDefault();
+                          handleImportMemberBackup();
+                        }}
+                      >
+                        <label htmlFor="import-member-passphrase-input">
+                          Backup Passphrase (min 12 chars)
+                        </label>
+                        <input
+                          id="import-member-passphrase-input"
+                          type="password"
+                          value={memberImportPassphrase}
+                          onChange={(e) => setMemberImportPassphrase(e.target.value)}
+                          placeholder="Enter passphrase"
+                          autoComplete="off"
+                        />
+                        <button
+                          type="submit"
+                          disabled={memberImportPassphrase.length < 12}
+                          className="action-button primary"
+                          aria-label="Decrypt and restore member backup"
+                        >
+                          Decrypt and Restore Identity
+                        </button>
+                      </form>
+                    )}
+                  </div>
+                </div>
+              ) : (
+                <div className="secret-active-controls">
+                  <div className="button-row">
+                    <button
+                      type="button"
+                      onClick={handleExportMemberAdmissionPackage}
+                      disabled={!contractState.attachedAddress}
+                      className="action-button primary"
+                      aria-label="Export restricted member admission package JSON"
+                    >
+                      Export Admission Package (.json)
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={handleLockMemberSession}
+                      className="action-button secondary"
+                      aria-label="Lock member session and zeroize secret and salt"
+                    >
+                      Lock Session
+                    </button>
+                  </div>
+
+                  {!contractState.attachedAddress && (
+                    <p className="form-hint-text">
+                      Attach a contract in Step 02 before generating an admission request package.
+                    </p>
+                  )}
+
+                  {/* Export Backup Form */}
+                  <div className="export-backup-section">
+                    <h3>Encrypted Backup Export</h3>
+                    <p className="card-caption">
+                      Encrypts the secret and salt with AES-256-GCM (600,000 PBKDF2 iterations) and downloads a JSON envelope.
+                    </p>
+                    <form
+                      onSubmit={(e) => {
+                        e.preventDefault();
+                        handleExportMemberBackup();
+                      }}
+                    >
+                      <label htmlFor="export-member-passphrase-input">
+                        Export Passphrase (min 12 chars)
+                      </label>
+                      <input
+                        id="export-member-passphrase-input"
+                        type="password"
+                        value={memberExportPassphrase}
+                        onChange={(e) => setMemberExportPassphrase(e.target.value)}
+                        placeholder="Enter 12+ character passphrase"
+                        autoComplete="off"
+                      />
+                      <button
+                        type="submit"
+                        disabled={memberExportPassphrase.length < 12}
+                        className="action-button secondary"
+                        aria-label="Export encrypted member backup"
                       >
                         Download Encrypted Backup
                       </button>
@@ -2104,10 +2921,219 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
             </article>
           )}
 
+          {/* Registrar Member Admission Workflow Section (Step 05) */}
+          {role === 'registrar' && (
+            <article className="workspace-card registrar-admission-card">
+              <div className="card-header">
+                <span className="card-step">05</span>
+                <h2>Member Admission Review & Registration</h2>
+              </div>
+              <p className="card-caption">
+                Import and review restricted Member Admission packages, verify they target this exact contract, and register member credentials on-chain via genuine 1AM approval.
+              </p>
+
+              {/* Status Header */}
+              <div className="registrar-status-row" aria-live="polite">
+                <div>
+                  <span className="field-caption">Attached Contract</span>
+                  <strong>
+                    {contractState.attachedAddress
+                      ? shortenAddress(contractState.attachedAddress)
+                      : 'None (Required)'}
+                  </strong>
+                </div>
+                <div>
+                  <span className="field-caption">Admission Stage</span>
+                  <strong className={`verification-badge ${admissionUi.stage === 'admitted' ? 'verified' : 'unverified'}`}>
+                    {admissionUi.stage === 'admitted'
+                      ? 'Admitted'
+                      : admissionUi.stage === 'confirming'
+                        ? 'Reviewing package'
+                        : admissionUi.stage === 'requesting-wallet'
+                          ? '1AM Approval'
+                          : admissionUi.stage === 'submitting'
+                            ? 'Proving & Submitting'
+                            : admissionUi.stage === 'finalized-indexing'
+                              ? 'Finalized (Indexing)'
+                              : admissionUi.stage === 'failed'
+                                ? 'Failed'
+                                : admissionUi.stage === 'cancelled'
+                                  ? 'Cancelled'
+                                  : 'Idle'}
+                  </strong>
+                </div>
+              </div>
+
+              {admissionNotice && (
+                <div className="safe-notice-banner" role="status">
+                  <p>{admissionNotice}</p>
+                </div>
+              )}
+
+              {admissionUi.errorMessage && (
+                <div className="safe-error-banner" role="alert">
+                  <strong>Admission Error</strong>
+                  <p>{admissionUi.errorMessage}</p>
+                </div>
+              )}
+
+              {/* Import Package Box (when idle or failed or cancelled) */}
+              {(admissionUi.stage === 'idle' ||
+                admissionUi.stage === 'failed' ||
+                admissionUi.stage === 'cancelled') && (
+                <div className="admission-import-box">
+                  <label htmlFor="member-admission-file-input">
+                    Import Member Admission Package (.json)
+                  </label>
+                  <p className="form-hint-text">
+                    Package must contain a valid <code>commonveil.member-admission/v1</code> schema matching the attached contract address.
+                  </p>
+                  <input
+                    id="member-admission-file-input"
+                    type="file"
+                    accept=".json,application/json"
+                    disabled={!contractState.attachedAddress || !registrarUi.hasSecret}
+                    onChange={handleAdmissionPackageSelect}
+                  />
+
+                  {(!contractState.attachedAddress || !registrarUi.hasSecret) && (
+                    <p className="form-hint-text warning-text">
+                      Requires an attached verified contract and active Registrar secret before importing admission packages.
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {/* Confirming Modal / Box */}
+              {admissionUi.stage === 'confirming' && admissionUi.importedPackage && (
+                <div className="admission-confirmation-box" role="dialog" aria-labelledby="admit-confirm-heading">
+                  <h3 id="admit-confirm-heading">Confirm Member Admission</h3>
+                  <div className="admission-review-details">
+                    <p>
+                      <strong>Target Contract:</strong>{' '}
+                      <code>{shortenAddress(admissionUi.importedPackage.contractAddress)}</code>
+                    </p>
+                    <p>
+                      <strong>Member Credential:</strong>{' '}
+                      <code title={admissionUi.importedPackage.memberCredential}>
+                        {shortenAddress(admissionUi.importedPackage.memberCredential)}
+                      </code>
+                    </p>
+                    <p>
+                      <strong>Package Created At:</strong> {admissionUi.importedPackage.createdAt}
+                    </p>
+                    <p className="card-caption">
+                      This action will invoke the genuine <code>registerMember</code> circuit. DUST transaction fees will be paid by your connected 1AM wallet. Member secret is not requested or known.
+                    </p>
+                  </div>
+
+                  <div className="button-row">
+                    <button
+                      type="button"
+                      className="action-button primary"
+                      disabled={isAdmitting}
+                      onClick={handleConfirmAndAdmitMember}
+                      aria-label="Confirm member registration and submit transaction via 1AM"
+                    >
+                      Confirm and Admit via 1AM
+                    </button>
+                    <button
+                      type="button"
+                      className="action-button secondary"
+                      disabled={isAdmitting}
+                      onClick={handleDismissAdmissionConfirmation}
+                      aria-label="Cancel admission review"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* In-Flight States */}
+              {admissionUi.stage === 'requesting-wallet' && (
+                <div className="status-callout warning">
+                  <span className="status-indicator warning">1AM Approval Required</span>
+                  <p>Please review and approve the member admission transaction in the 1AM popup.</p>
+                </div>
+              )}
+
+              {admissionUi.stage === 'submitting' && (
+                <div className="status-callout notice">
+                  <span className="status-indicator notice">Submitting Admission</span>
+                  <p>Generating zero-knowledge proof and broadcasting transaction to Midnight Preprod...</p>
+                </div>
+              )}
+
+              {/* Indexer Lag / Waiting with manual retry that never resubmits */}
+              {admissionUi.stage === 'finalized-indexing' && (
+                <div className="status-callout notice indexer-lag-box">
+                  <span className="status-indicator notice">Finalized On-Chain</span>
+                  <p>
+                    The admission transaction was finalized on Midnight Preprod, but the public indexer has not yet indexed the updated <code>memberCredentials</code> set.
+                  </p>
+                  <p className="card-caption">
+                    Click below to retry on-chain confirmation without resubmitting any transaction.
+                  </p>
+                  <button
+                    type="button"
+                    className="action-button primary"
+                    onClick={handleRetryAdmissionVerification}
+                    aria-label="Retry indexer confirmation without resubmitting transaction"
+                  >
+                    Retry Indexer Confirmation
+                  </button>
+                </div>
+              )}
+
+              {/* Admitted Success State & Receipt */}
+              {admissionUi.stage === 'admitted' && admissionUi.receipt && (
+                <div className="admission-success-box">
+                  <span className="status-indicator success">Member Admitted</span>
+                  <p>
+                    Member credential{' '}
+                    <code>{shortenAddress(admissionUi.receipt.admittedMemberCredential)}</code> has been confirmed in the contract member credentials set.
+                  </p>
+                  <dl className="receipt-details-list">
+                    <dt>Contract Address</dt>
+                    <dd><code>{shortenAddress(admissionUi.receipt.contractAddress)}</code></dd>
+                    {admissionUi.receipt.admissionTxId && (
+                      <>
+                        <dt>Transaction ID</dt>
+                        <dd><code>{shortenAddress(admissionUi.receipt.admissionTxId)}</code></dd>
+                      </>
+                    )}
+                    <dt>Admitted At</dt>
+                    <dd>{admissionUi.receipt.admittedAt}</dd>
+                  </dl>
+
+                  <div className="button-row">
+                    <button
+                      type="button"
+                      className="action-button primary"
+                      onClick={handleDownloadAdmissionReceipt}
+                      aria-label="Download public member admission receipt JSON"
+                    >
+                      Download Admission Receipt (.json)
+                    </button>
+                    <button
+                      type="button"
+                      className="action-button secondary"
+                      onClick={handleResetAdmission}
+                      aria-label="Admit another member"
+                    >
+                      Admit Another Member
+                    </button>
+                  </div>
+                </div>
+              )}
+            </article>
+          )}
+
           {/* Public State Panel */}
           <article className="workspace-card public-state-card">
             <div className="card-header">
-              <span className="card-step">{role === 'registrar' ? '05' : '03'}</span>
+              <span className="card-step">{role === 'registrar' ? '06' : '03'}</span>
               <h2>Public Contract State</h2>
             </div>
             <p className="privacy-guarantee-notice">

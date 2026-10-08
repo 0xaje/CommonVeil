@@ -15,6 +15,9 @@ import {
   CERTIFIER_KEY_SCHEMA,
   type CertifierKeyPackage,
   validateCertifierKeyPackage,
+  MEMBER_ADMISSION_SCHEMA,
+  type MemberAdmissionPackage,
+  validateMemberAdmissionPackage,
 } from './role-packages';
 
 export type RoleType = 'registrar' | 'certifier' | 'member';
@@ -454,28 +457,202 @@ export function buildCertifierBackupPackage(
   };
 }
 
+export const MEMBER_BACKUP_SCHEMA = 'commonveil.member-backup/v1' as const;
+
+export interface MemberBackupPackage {
+  readonly schema: typeof MEMBER_BACKUP_SCHEMA;
+  readonly role: 'member';
+  readonly memberSecret: string; // 32-byte hex (64 chars)
+  readonly memberSalt: string;   // 32-byte hex (64 chars)
+  readonly createdAt: string;    // ISO timestamp
+}
+
+export type MemberVerificationStatus = 'unverified' | 'verified' | 'failed';
+
+export interface MemberSecretUiState {
+  readonly hasSecret: boolean;
+  readonly isLocked: boolean;
+  readonly verificationStatus: MemberVerificationStatus;
+  readonly memberCredentialHex: string | null; // shortened derived credential or 64-char hex
+  readonly canCopyOnce: boolean;
+  readonly copyStatus: 'idle' | 'pending' | 'copied' | 'failed';
+}
+
+export const INITIAL_MEMBER_SECRET_UI_STATE: MemberSecretUiState = {
+  hasSecret: false,
+  isLocked: false,
+  verificationStatus: 'unverified',
+  memberCredentialHex: null,
+  canCopyOnce: false,
+  copyStatus: 'idle',
+};
+
 /**
- * Builds a public CertifierKeyPackage from a derived 32-byte certifier public key.
- * Never includes the private secret. Rejects all-zero public keys.
+ * Validates a candidate 32-byte hexadecimal member secret or salt string.
+ * Returns normalized 64-char lowercase hex string.
+ * Throws clean error if invalid without returning secret contents.
  */
-export function buildCertifierKeyPackage(
-  certifierPublicKeyBytes: Uint8Array,
-  options?: { now?: Date },
-): CertifierKeyPackage {
-  if (!(certifierPublicKeyBytes instanceof Uint8Array) || certifierPublicKeyBytes.length !== 32) {
-    throw new Error('Certifier public key must be a 32-byte Uint8Array.');
+export function validateMemberSecretOrSaltHex(hex: unknown, label: string = 'Value'): string {
+  if (typeof hex !== 'string') {
+    throw new Error(`${label} must be a hexadecimal string.`);
   }
-  const hex = bytesToHex(certifierPublicKeyBytes);
-  if (hex === '00'.repeat(32)) {
-    throw new Error('Certifier public key cannot be a zero key.');
+  const trimmed = hex.trim();
+  if (trimmed.length !== 64) {
+    throw new Error(`${label} must be exactly 32 bytes (64 hex characters), received ${trimmed.length} characters.`);
+  }
+  if (!isHex(trimmed, 32)) {
+    throw new Error(`${label} contains invalid non-hexadecimal characters.`);
+  }
+  return trimmed.toLowerCase();
+}
+
+/**
+ * Converts a validated 32-byte hex string to Uint8Array.
+ */
+export function parseMemberSecretOrSaltHex(hex: unknown, label: string = 'Value'): Uint8Array {
+  const validated = validateMemberSecretOrSaltHex(hex, label);
+  return hexToBytes(validated);
+}
+
+/**
+ * Generates a fresh 32-byte cryptographically secure random member secret or salt.
+ */
+export function generateMemberSecretOrSalt(): Uint8Array {
+  return crypto.getRandomValues(new Uint8Array(32));
+}
+
+/**
+ * Validates an unencrypted MemberBackupPackage payload before envelope encryption or after decryption.
+ */
+export function validateMemberBackupPackage(pkg: unknown): MemberBackupPackage {
+  if (!pkg || typeof pkg !== 'object') {
+    throw new Error('Member backup package must be an object.');
+  }
+  const p = pkg as Record<string, unknown>;
+  if (p.schema !== MEMBER_BACKUP_SCHEMA) {
+    throw new Error(`Invalid backup schema: expected '${MEMBER_BACKUP_SCHEMA}'.`);
+  }
+  if (p.role !== 'member') {
+    throw new Error("Invalid backup role: expected 'member'.");
+  }
+  const validatedSecret = validateMemberSecretOrSaltHex(p.memberSecret, 'Member secret');
+  const validatedSalt = validateMemberSecretOrSaltHex(p.memberSalt, 'Member salt');
+  if (!isValidIsoTimestamp(p.createdAt)) {
+    throw new Error('Backup createdAt must be a valid ISO timestamp.');
+  }
+  return {
+    schema: MEMBER_BACKUP_SCHEMA,
+    role: 'member',
+    memberSecret: validatedSecret,
+    memberSalt: validatedSalt,
+    createdAt: p.createdAt as string,
+  };
+}
+
+/**
+ * Creates an unencrypted MemberBackupPackage from active 32-byte secret and salt.
+ */
+export function buildMemberBackupPackage(
+  secretBytes: Uint8Array,
+  saltBytes: Uint8Array,
+  options?: { now?: Date },
+): MemberBackupPackage {
+  if (!(secretBytes instanceof Uint8Array) || secretBytes.length !== 32) {
+    throw new Error('Member secret bytes must be a 32-byte Uint8Array.');
+  }
+  if (!(saltBytes instanceof Uint8Array) || saltBytes.length !== 32) {
+    throw new Error('Member salt bytes must be a 32-byte Uint8Array.');
   }
   const now = options?.now ?? new Date();
   return {
-    schema: CERTIFIER_KEY_SCHEMA,
-    certifierKey: hex,
+    schema: MEMBER_BACKUP_SCHEMA,
+    role: 'member',
+    memberSecret: bytesToHex(secretBytes),
+    memberSalt: bytesToHex(saltBytes),
     createdAt: now.toISOString(),
   };
 }
+
+/**
+ * Builds a MemberAdmissionPackage from attached contract address and derived credential bytes.
+ * Validates strictly that no secret or salt is included.
+ */
+export function buildMemberAdmissionPackage(
+  contractAddress: string,
+  memberCredentialBytes: Uint8Array,
+  options?: { now?: Date },
+): MemberAdmissionPackage {
+  if (typeof contractAddress !== 'string' || !contractAddress.trim()) {
+    throw new Error('Contract address must be a non-empty string.');
+  }
+  if (!(memberCredentialBytes instanceof Uint8Array) || memberCredentialBytes.length !== 32) {
+    throw new Error('Member credential must be a 32-byte Uint8Array.');
+  }
+  const hex = bytesToHex(memberCredentialBytes);
+  const now = options?.now ?? new Date();
+  const pkg: MemberAdmissionPackage = {
+    schema: 'commonveil.member-admission/v1',
+    contractAddress: contractAddress.trim(),
+    memberCredential: hex,
+    createdAt: now.toISOString(),
+  };
+  return validateMemberAdmissionPackage(pkg);
+}
+
+/**
+ * Pure state reducer when member secret and salt are generated or imported directly.
+ */
+export function onMemberSecretGeneratedOrImported(
+  prevState: MemberSecretUiState,
+  memberCredentialHex: string,
+): MemberSecretUiState {
+  return {
+    ...prevState,
+    hasSecret: true,
+    isLocked: false,
+    verificationStatus: 'unverified',
+    memberCredentialHex,
+    canCopyOnce: true,
+    copyStatus: 'idle',
+  };
+}
+
+/**
+ * Pure state reducer when member secret and salt are restored from an encrypted backup.
+ * Restored backups NEVER enable plaintext copying.
+ */
+export function onMemberSecretRestoredFromBackup(
+  prevState: MemberSecretUiState,
+  memberCredentialHex: string,
+): MemberSecretUiState {
+  return {
+    ...prevState,
+    hasSecret: true,
+    isLocked: false,
+    verificationStatus: 'unverified',
+    memberCredentialHex,
+    canCopyOnce: false,
+    copyStatus: 'idle',
+  };
+}
+
+/**
+ * Pure state reducer when member session is locked, disconnected, or role changes.
+ */
+export function onMemberSecretClearedOrLocked(
+  prevState: MemberSecretUiState,
+  isLocked: boolean = false,
+): MemberSecretUiState {
+  return {
+    hasSecret: false,
+    isLocked,
+    verificationStatus: 'unverified',
+    memberCredentialHex: null,
+    canCopyOnce: false,
+    copyStatus: 'idle',
+  };
+}
+
 
 /**
  * Zeroizes a Uint8Array in memory.
@@ -690,6 +867,87 @@ export function mapCertifierOperationError(error: unknown): string {
   }
 
   return 'The certifier operation could not be completed. Check the input and try again.';
+}
+
+/**
+ * Builds a CertifierKeyPackage from a 32-byte public key.
+ */
+export function buildCertifierKeyPackage(
+  certifierKeyBytes: Uint8Array,
+  options?: { now?: Date },
+): CertifierKeyPackage {
+  if (!(certifierKeyBytes instanceof Uint8Array) || certifierKeyBytes.length !== 32) {
+    throw new Error('Certifier key bytes must be a 32-byte Uint8Array.');
+  }
+  const hex = bytesToHex(certifierKeyBytes);
+  if (hex === '0'.repeat(64)) {
+    throw new Error('Certifier key cannot be an all-zero key.');
+  }
+  const now = options?.now ?? new Date();
+  const raw = {
+    schema: CERTIFIER_KEY_SCHEMA,
+    certifierKey: hex,
+    createdAt: now.toISOString(),
+  };
+  return validateCertifierKeyPackage(raw);
+}
+
+/**
+ * Pure sanitizer for member operation errors.
+ * Never leaks raw Web Crypto, FileReader, JSON parse, stack traces, URLs, or exception messages.
+ */
+export function mapMemberOperationError(error: unknown): string {
+  if (!error) {
+    return 'The member operation could not be completed. Check the input and try again.';
+  }
+
+  const raw = (
+    error instanceof Error
+      ? error.message
+      : typeof error === 'string'
+        ? error
+        : typeof (error as any)?.message === 'string'
+          ? (error as any).message
+          : ''
+  ).toLowerCase();
+
+  if (raw.includes('64 hex characters') || raw.includes('exactly 32 bytes')) {
+    return 'Secret and salt values must be exactly 32 bytes (64 hexadecimal characters).';
+  }
+  if (raw.includes('non-hex') || raw.includes('hexadecimal')) {
+    return 'Values contain invalid non-hexadecimal characters.';
+  }
+  if (raw.includes('distinct') || raw.includes('independent') || raw.includes('not identical')) {
+    return 'Member secret and member salt must be distinct and independent values.';
+  }
+  if (raw.includes('passphrase') && (raw.includes('12') || raw.includes('length'))) {
+    return 'Passphrase must be at least 12 characters.';
+  }
+  if (
+    raw.includes('incorrect passphrase') ||
+    raw.includes('tampered') ||
+    raw.includes('decrypt') ||
+    raw.includes('crypto') ||
+    raw.includes('operationerror') ||
+    raw.includes('tag mismatch') ||
+    raw.includes('aes')
+  ) {
+    return 'Decryption failed. Check the passphrase or verify the backup file.';
+  }
+  if (raw.includes('json') || raw.includes('backup file') || raw.includes('schema') || raw.includes('package')) {
+    return 'The selected file is not a valid CommonVeil encrypted backup.';
+  }
+  if (raw.includes('read') || raw.includes('file')) {
+    return 'Could not read the selected backup file.';
+  }
+  if (raw.includes('copy') || raw.includes('clipboard')) {
+    return 'Clipboard write failed. Please check browser permissions and try again.';
+  }
+  if (raw.includes('attach')) {
+    return 'Attach to a verified CommonVeil contract before exporting an admission package.';
+  }
+
+  return 'The member operation could not be completed. Check the input and try again.';
 }
 
 export const DEPLOYMENT_RECEIPT_SCHEMA = 'commonveil.deployment-receipt/v1' as const;
@@ -1116,4 +1374,269 @@ export function mapDeploymentInspectionError(error: unknown): string {
   }
 
   return DEPLOYMENT_VERIFICATION_ERROR_MESSAGES.GENERIC_VERIFICATION_FAILURE;
+}
+
+// ============================================================================
+// Member Admission Receipt & Registrar Admission Workflow Pure Helpers
+// ============================================================================
+
+export const MEMBER_ADMISSION_RECEIPT_SCHEMA = 'commonveil.member-admission-receipt/v1' as const;
+
+export interface MemberAdmissionReceipt {
+  readonly schema: typeof MEMBER_ADMISSION_RECEIPT_SCHEMA;
+  readonly network: 'preprod';
+  readonly contractAddress: string;
+  readonly admittedMemberCredential: string; // 32-byte hex (64 chars)
+  readonly admissionTxId: string | null;     // genuine transaction id if captured, otherwise null
+  readonly admittedAt: string;                // ISO timestamp
+  readonly status: 'finalized';
+}
+
+export function validateMemberAdmissionReceipt(receipt: unknown): MemberAdmissionReceipt {
+  if (!receipt || typeof receipt !== 'object') {
+    throw new Error('Admission receipt must be an object.');
+  }
+  const r = receipt as Record<string, unknown>;
+  if (r.schema !== MEMBER_ADMISSION_RECEIPT_SCHEMA) {
+    throw new Error(`Invalid receipt schema: expected '${MEMBER_ADMISSION_RECEIPT_SCHEMA}'.`);
+  }
+  if (r.network !== 'preprod') {
+    throw new Error("Invalid receipt network: expected 'preprod'.");
+  }
+  if (typeof r.contractAddress !== 'string' || !r.contractAddress.trim()) {
+    throw new Error('Receipt contractAddress must be a non-empty string.');
+  }
+  if (!isHex(r.admittedMemberCredential, 32)) {
+    throw new Error('admittedMemberCredential must be a 32-byte hex string (64 characters).');
+  }
+  if (r.admissionTxId !== null) {
+    if (typeof r.admissionTxId !== 'string' || !r.admissionTxId.trim() || !isHex(r.admissionTxId.trim())) {
+      throw new Error('admissionTxId must be a valid hex string or null.');
+    }
+  }
+  if (!isValidIsoTimestamp(r.admittedAt)) {
+    throw new Error('Receipt admittedAt must be a valid ISO timestamp.');
+  }
+  if (r.status !== 'finalized') {
+    throw new Error("Receipt status must be 'finalized'.");
+  }
+
+  return {
+    schema: MEMBER_ADMISSION_RECEIPT_SCHEMA,
+    network: 'preprod',
+    contractAddress: r.contractAddress.trim(),
+    admittedMemberCredential: (r.admittedMemberCredential as string).toLowerCase(),
+    admissionTxId: r.admissionTxId ? (r.admissionTxId as string).trim().toLowerCase() : null,
+    admittedAt: r.admittedAt as string,
+    status: 'finalized',
+  };
+}
+
+export function buildMemberAdmissionReceipt(params: {
+  contractAddress: string;
+  memberCredential: string;
+  admissionTxId?: string | null;
+  now?: Date;
+}): MemberAdmissionReceipt {
+  const now = params.now ?? new Date();
+  const rawReceipt = {
+    schema: MEMBER_ADMISSION_RECEIPT_SCHEMA,
+    network: 'preprod',
+    contractAddress: params.contractAddress.trim(),
+    admittedMemberCredential: params.memberCredential.trim().toLowerCase(),
+    admissionTxId: params.admissionTxId ? params.admissionTxId.trim().toLowerCase() : null,
+    admittedAt: now.toISOString(),
+    status: 'finalized',
+  };
+  return validateMemberAdmissionReceipt(rawReceipt);
+}
+
+export type RegistrarAdmissionStage =
+  | 'idle'
+  | 'confirming'
+  | 'requesting-wallet'
+  | 'submitting'
+  | 'finalized-indexing'
+  | 'admitted'
+  | 'failed'
+  | 'cancelled';
+
+export interface RegistrarAdmissionUiState {
+  readonly stage: RegistrarAdmissionStage;
+  readonly importedPackage: MemberAdmissionPackage | null;
+  readonly receipt: MemberAdmissionReceipt | null;
+  readonly errorMessage: string | null;
+}
+
+export const INITIAL_REGISTRAR_ADMISSION_UI_STATE: RegistrarAdmissionUiState = {
+  stage: 'idle',
+  importedPackage: null,
+  receipt: null,
+  errorMessage: null,
+};
+
+/**
+ * Pure state reducer when a candidate admission package is imported and validated.
+ * Requires the package contract address to match the active attached contract address.
+ */
+export function onAdmissionPackageImported(
+  prevState: RegistrarAdmissionUiState,
+  pkg: MemberAdmissionPackage,
+  attachedContractAddress: string | null,
+): RegistrarAdmissionUiState {
+  if (!attachedContractAddress) {
+    return {
+      ...prevState,
+      importedPackage: null,
+      errorMessage: 'Attach to a verified CommonVeil contract before importing member admission packages.',
+      stage: 'failed',
+    };
+  }
+  if (pkg.contractAddress.trim() !== attachedContractAddress.trim()) {
+    return {
+      ...prevState,
+      importedPackage: null,
+      errorMessage: 'Admission package contract address does not match the attached contract.',
+      stage: 'failed',
+    };
+  }
+  return {
+    stage: 'confirming',
+    importedPackage: pkg,
+    receipt: null,
+    errorMessage: null,
+  };
+}
+
+export function onAdmissionConfirmDismissed(
+  prevState: RegistrarAdmissionUiState,
+): RegistrarAdmissionUiState {
+  return {
+    ...prevState,
+    stage: 'idle',
+    errorMessage: null,
+  };
+}
+
+export function onAdmissionWalletRequest(
+  prevState: RegistrarAdmissionUiState,
+): RegistrarAdmissionUiState {
+  if (prevState.stage === 'requesting-wallet' || prevState.stage === 'submitting') {
+    return prevState;
+  }
+  return {
+    ...prevState,
+    stage: 'requesting-wallet',
+    errorMessage: null,
+  };
+}
+
+export function onAdmissionSubmitting(
+  prevState: RegistrarAdmissionUiState,
+): RegistrarAdmissionUiState {
+  return {
+    ...prevState,
+    stage: 'submitting',
+    errorMessage: null,
+  };
+}
+
+export function onAdmissionFinalizedIndexing(
+  prevState: RegistrarAdmissionUiState,
+): RegistrarAdmissionUiState {
+  return {
+    ...prevState,
+    stage: 'finalized-indexing',
+    errorMessage: null,
+  };
+}
+
+export function onAdmissionCompleted(
+  prevState: RegistrarAdmissionUiState,
+  receipt: MemberAdmissionReceipt,
+): RegistrarAdmissionUiState {
+  return {
+    stage: 'admitted',
+    importedPackage: prevState.importedPackage,
+    receipt,
+    errorMessage: null,
+  };
+}
+
+export function onAdmissionFailed(
+  prevState: RegistrarAdmissionUiState,
+  errorMessage: string,
+  isCancelled: boolean = false,
+): RegistrarAdmissionUiState {
+  return {
+    ...prevState,
+    stage: isCancelled ? 'cancelled' : 'failed',
+    errorMessage,
+  };
+}
+
+export function onAdmissionReset(
+  _prevState?: RegistrarAdmissionUiState,
+): RegistrarAdmissionUiState {
+  return INITIAL_REGISTRAR_ADMISSION_UI_STATE;
+}
+
+/**
+ * Pure sanitizer for registrar admission errors.
+ * Never leaks raw endpoints, GraphQL errors, stack traces, tokens, or connector internals.
+ */
+export function mapAdmissionError(error: unknown): string {
+  if (!error) {
+    return 'Member admission transaction could not be completed. Check wallet and try again.';
+  }
+
+  const raw = (
+    error instanceof Error
+      ? error.message
+      : typeof error === 'string'
+        ? error
+        : typeof (error as any)?.message === 'string'
+          ? (error as any).message
+          : ''
+  ).toLowerCase();
+
+  if (
+    raw.includes('cancel') ||
+    raw.includes('reject') ||
+    raw.includes('denied') ||
+    raw.includes('declined') ||
+    raw.includes('user aborted')
+  ) {
+    return 'Member admission transaction was cancelled in 1AM.';
+  }
+
+  if (raw.includes('duplicate') || raw.includes('already admitted') || raw.includes('already a member')) {
+    return 'This member credential has already been admitted to this contract.';
+  }
+
+  if (raw.includes('dust') || raw.includes('balance') || raw.includes('insufficient funds')) {
+    return 'Insufficient DUST or balance in connected 1AM wallet to cover transaction fees.';
+  }
+
+  if (raw.includes('proof') || raw.includes('prover') || raw.includes('proving')) {
+    return 'ZK proof generation failed. Ensure your local proof server is reachable and responsive.';
+  }
+
+  if (raw.includes('mismatch') && raw.includes('contract')) {
+    return 'Admission package contract address does not match the attached contract.';
+  }
+
+  if (raw.includes('indexer') || raw.includes('lookup')) {
+    return 'Admission transaction finalized on-chain, but indexer synchronization is delayed. Use retry confirmation.';
+  }
+
+  if (raw.includes('timeout') || raw.includes('deadline')) {
+    return 'Transaction submission timed out. Check network status and wallet activity.';
+  }
+
+  if (raw.includes('network') || raw.includes('preprod') || raw.includes('connection')) {
+    return 'Network communication failure during member admission. Check Midnight Preprod connectivity.';
+  }
+
+  return 'The member admission transaction could not be completed. Check the network connection and try again.';
 }

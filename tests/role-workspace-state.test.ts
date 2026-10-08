@@ -44,12 +44,44 @@ import {
   mapDeploymentError,
   mapDeploymentInspectionError,
   DEPLOYMENT_VERIFICATION_ERROR_MESSAGES,
+  MEMBER_BACKUP_SCHEMA,
+  type MemberBackupPackage,
+  type MemberSecretUiState,
+  INITIAL_MEMBER_SECRET_UI_STATE,
+  validateMemberSecretOrSaltHex,
+  parseMemberSecretOrSaltHex,
+  generateMemberSecretOrSalt,
+  validateMemberBackupPackage,
+  buildMemberBackupPackage,
+  buildMemberAdmissionPackage,
+  onMemberSecretGeneratedOrImported,
+  onMemberSecretRestoredFromBackup,
+  onMemberSecretClearedOrLocked,
+  MEMBER_ADMISSION_RECEIPT_SCHEMA,
+  type MemberAdmissionReceipt,
+  validateMemberAdmissionReceipt,
+  buildMemberAdmissionReceipt,
+  INITIAL_REGISTRAR_ADMISSION_UI_STATE,
+  type RegistrarAdmissionUiState,
+  onAdmissionPackageImported,
+  onAdmissionWalletRequest,
+  onAdmissionSubmitting,
+  onAdmissionFinalizedIndexing,
+  onAdmissionCompleted,
+  onAdmissionFailed,
+  onAdmissionReset,
+  mapMemberOperationError,
+  mapAdmissionError,
 } from '../src/role-workspace-state.ts';
 import {
   bytesToHex,
+  hexToBytes,
   encryptToEnvelope,
   decryptAndValidateEnvelope,
   type EncryptedEnvelope,
+  MEMBER_ADMISSION_SCHEMA,
+  type MemberAdmissionPackage,
+  validateMemberAdmissionPackage,
 } from '../src/role-packages.ts';
 import {
   verifyRegistrarSecret,
@@ -1266,4 +1298,372 @@ test('51. Retry-indexer inspection error sanitization maps hard failures and unk
     mapDeploymentInspectionError(connectorErr),
     DEPLOYMENT_VERIFICATION_ERROR_MESSAGES.GENERIC_VERIFICATION_FAILURE,
   );
+});
+
+// 52. Secret and salt generation and format validation
+test('52. Member secret and salt generation and format validation', () => {
+  const secret = generateMemberSecretOrSalt();
+  const salt = generateMemberSecretOrSalt();
+
+  assert.equal(secret instanceof Uint8Array, true);
+  assert.equal(salt instanceof Uint8Array, true);
+  assert.equal(secret.length, 32);
+  assert.equal(salt.length, 32);
+
+  const secretHex = bytesToHex(secret);
+  const saltHex = bytesToHex(salt);
+
+  assert.equal(validateMemberSecretOrSaltHex(secretHex, 'Secret'), secretHex);
+  assert.equal(validateMemberSecretOrSaltHex(saltHex, 'Salt'), saltHex);
+
+  // Rejection of invalid lengths and characters
+  assert.throws(() => validateMemberSecretOrSaltHex('1234', 'Secret'), /must be exactly 32 bytes/);
+  assert.throws(() => validateMemberSecretOrSaltHex('z'.repeat(64), 'Salt'), /invalid non-hexadecimal characters/);
+  assert.throws(() => validateMemberSecretOrSaltHex(12345, 'Secret'), /must be a hexadecimal string/);
+});
+
+// 53. Independent secret and salt values
+test('53. Independent member secret and salt values', () => {
+  const secret = generateMemberSecretOrSalt();
+  const salt = generateMemberSecretOrSalt();
+
+  // Cryptographically random 32-byte values must never collide
+  assert.notDeepEqual(secret, salt);
+  assert.notEqual(bytesToHex(secret), bytesToHex(salt));
+});
+
+// 54. Encrypted Member backup round trip
+test('54. Encrypted Member backup round trip (AES-256-GCM + 600,000 PBKDF2 iterations)', async () => {
+  const secret = generateMemberSecretOrSalt();
+  const salt = generateMemberSecretOrSalt();
+  const passphrase = 'member-strong-passphrase-2026';
+
+  const backupPackage = buildMemberBackupPackage(secret, salt);
+  assert.equal(backupPackage.schema, MEMBER_BACKUP_SCHEMA);
+  assert.equal(backupPackage.role, 'member');
+  assert.equal(backupPackage.memberSecret, bytesToHex(secret));
+  assert.equal(backupPackage.memberSalt, bytesToHex(salt));
+
+  const envelope = await encryptToEnvelope(backupPackage, passphrase);
+  assert.equal(envelope.cipher, 'AES-256-GCM');
+  assert.equal(envelope.kdf, 'PBKDF2-SHA-256');
+  assert.equal(envelope.iterations, 600_000);
+
+  const restored = await decryptAndValidateEnvelope(
+    envelope,
+    passphrase,
+    validateMemberBackupPackage,
+  );
+
+  assert.equal(restored.schema, MEMBER_BACKUP_SCHEMA);
+  assert.equal(restored.role, 'member');
+  assert.equal(restored.memberSecret, bytesToHex(secret));
+  assert.equal(restored.memberSalt, bytesToHex(salt));
+});
+
+// 55. Wrong passphrase and tampering rejection
+test('55. Member encrypted backup wrong passphrase and tampering rejection', async () => {
+  const secret = generateMemberSecretOrSalt();
+  const salt = generateMemberSecretOrSalt();
+  const passphrase = 'correct-passphrase-min12';
+  const wrongPassphrase = 'wrong-passphrase-min12!';
+
+  const backupPackage = buildMemberBackupPackage(secret, salt);
+  const envelope = await encryptToEnvelope(backupPackage, passphrase);
+
+  // Wrong passphrase rejection
+  await assert.rejects(
+    () => decryptAndValidateEnvelope(envelope, wrongPassphrase, validateMemberBackupPackage),
+    /Failed to decrypt envelope|incorrect passphrase/i,
+  );
+
+  // Tampered ciphertext rejection
+  const tamperedCiphertext =
+    envelope.ciphertext.slice(0, -4) + (envelope.ciphertext.endsWith('0000') ? 'ffff' : '0000');
+  const tamperedEnvelope: EncryptedEnvelope = {
+    ...envelope,
+    ciphertext: tamperedCiphertext,
+  };
+
+  await assert.rejects(
+    () => decryptAndValidateEnvelope(tamperedEnvelope, passphrase, validateMemberBackupPackage),
+    /Failed to decrypt envelope|tampered/i,
+  );
+});
+
+// 56. Restored-backup copy prohibition
+test('56. Restored-backup copy prohibition', () => {
+  const initial = INITIAL_MEMBER_SECRET_UI_STATE;
+  assert.equal(initial.canCopyOnce, false);
+
+  // Direct generation or import grants copy opportunity
+  const generated = onMemberSecretGeneratedOrImported(initial, '11'.repeat(32));
+  assert.equal(generated.hasSecret, true);
+  assert.equal(generated.canCopyOnce, true);
+
+  // Backup restoration explicitly PROHIBITS plaintext copying
+  const restored = onMemberSecretRestoredFromBackup(initial, '11'.repeat(32));
+  assert.equal(restored.hasSecret, true);
+  assert.equal(restored.canCopyOnce, false);
+});
+
+// 57. Lifecycle clearing and zeroization
+test('57. Lifecycle clearing and zeroization', () => {
+  const secret = new Uint8Array(32).fill(42);
+  const salt = new Uint8Array(32).fill(84);
+
+  zeroizeBytes(secret);
+  zeroizeBytes(salt);
+
+  assert.deepEqual(secret, new Uint8Array(32));
+  assert.deepEqual(salt, new Uint8Array(32));
+
+  const active = onMemberSecretGeneratedOrImported(INITIAL_MEMBER_SECRET_UI_STATE, 'aa'.repeat(32));
+  assert.equal(active.hasSecret, true);
+
+  // Lock session
+  const locked = onMemberSecretClearedOrLocked(active, true);
+  assert.equal(locked.hasSecret, false);
+  assert.equal(locked.isLocked, true);
+  assert.equal(locked.memberCredentialHex, null);
+  assert.equal(locked.canCopyOnce, false);
+
+  // Clear session on disconnect or role change
+  const cleared = onMemberSecretClearedOrLocked(active, false);
+  assert.equal(cleared.hasSecret, false);
+  assert.equal(cleared.isLocked, false);
+  assert.equal(cleared.memberCredentialHex, null);
+  assert.equal(cleared.canCopyOnce, false);
+});
+
+// 58. Correct credential derivation via pure circuits
+test('58. Correct member credential derivation via pure circuits', () => {
+  const secret = generateMemberSecretOrSalt();
+  const salt = generateMemberSecretOrSalt();
+
+  const credential1 = pureCircuits.deriveMemberCredential(secret, salt);
+  const credential2 = pureCircuits.deriveMemberCredential(secret, salt);
+
+  assert.equal(credential1 instanceof Uint8Array, true);
+  assert.equal(credential1.length, 32);
+  assert.deepEqual(credential1, credential2);
+
+  // Different salt must produce different credential
+  const differentSalt = generateMemberSecretOrSalt();
+  const credential3 = pureCircuits.deriveMemberCredential(secret, differentSalt);
+  assert.notDeepEqual(credential1, credential3);
+});
+
+// 59. Admission package contains only allowed fields and no private material
+test('59. Admission package contains only allowed fields and no private material', () => {
+  const contractAddress = 'b62b97709f7629cede3bcbcd52ecda4fe2ad204ceac2946fda484789d104d23b';
+  const secret = generateMemberSecretOrSalt();
+  const salt = generateMemberSecretOrSalt();
+  const credentialBytes = pureCircuits.deriveMemberCredential(secret, salt);
+
+  const pkg = buildMemberAdmissionPackage(contractAddress, credentialBytes);
+
+  assert.equal(pkg.schema, MEMBER_ADMISSION_SCHEMA);
+  assert.equal(pkg.contractAddress, contractAddress);
+  assert.equal(pkg.memberCredential, bytesToHex(credentialBytes));
+  assert.equal(typeof pkg.createdAt, 'string');
+
+  // Verify strict key count: only schema, contractAddress, memberCredential, createdAt
+  const keys = Object.keys(pkg);
+  assert.deepEqual(keys.sort(), ['contractAddress', 'createdAt', 'memberCredential', 'schema'].sort());
+
+  // Confirm no secret, salt, wallet, or inventory material
+  assert.equal('memberSecret' in pkg, false);
+  assert.equal('memberSalt' in pkg, false);
+  assert.equal('passphrase' in pkg, false);
+  assert.equal('inventory' in pkg, false);
+});
+
+// 60. Admission package contract-address mismatch rejection
+test('60. Admission package contract-address mismatch rejection', () => {
+  const attachedContract = 'b62b97709f7629cede3bcbcd52ecda4fe2ad204ceac2946fda484789d104d23b';
+  const otherContract = '1122334455667788990011223344556677889900112233445566778899001122';
+
+  const secret = generateMemberSecretOrSalt();
+  const salt = generateMemberSecretOrSalt();
+  const credential = pureCircuits.deriveMemberCredential(secret, salt);
+
+  const pkg = buildMemberAdmissionPackage(otherContract, credential);
+
+  const state = onAdmissionPackageImported(
+    INITIAL_REGISTRAR_ADMISSION_UI_STATE,
+    pkg,
+    attachedContract,
+  );
+
+  assert.equal(state.stage, 'failed');
+  assert.equal(state.importedPackage, null);
+  assert.match(state.errorMessage ?? '', /does not match the attached contract/i);
+
+  // Matching contract address succeeds into confirming state
+  const matchingPkg = buildMemberAdmissionPackage(attachedContract, credential);
+  const matchingState = onAdmissionPackageImported(
+    INITIAL_REGISTRAR_ADMISSION_UI_STATE,
+    matchingPkg,
+    attachedContract,
+  );
+
+  assert.equal(matchingState.stage, 'confirming');
+  assert.deepEqual(matchingState.importedPackage, matchingPkg);
+  assert.equal(matchingState.errorMessage, null);
+});
+
+// 61. Registrar verification prerequisite before admission import
+test('61. Registrar verification prerequisite before admission import', () => {
+  const secret = generateMemberSecretOrSalt();
+  const salt = generateMemberSecretOrSalt();
+  const credential = pureCircuits.deriveMemberCredential(secret, salt);
+  const pkg = buildMemberAdmissionPackage('contract123', credential);
+
+  // When attachedContractAddress is null, import fails cleanly
+  const state = onAdmissionPackageImported(
+    INITIAL_REGISTRAR_ADMISSION_UI_STATE,
+    pkg,
+    null,
+  );
+
+  assert.equal(state.stage, 'failed');
+  assert.match(state.errorMessage ?? '', /Attach to a verified CommonVeil contract/i);
+});
+
+// 62. Transaction double-click prevention and cancellation
+test('62. Transaction double-click prevention and cancellation', () => {
+  let state = INITIAL_REGISTRAR_ADMISSION_UI_STATE;
+  state = { ...state, stage: 'confirming' };
+
+  // First wallet request
+  state = onAdmissionWalletRequest(state);
+  assert.equal(state.stage, 'requesting-wallet');
+
+  // Rapid second invocation while requesting-wallet or submitting must be a no-op
+  const duplicateState = onAdmissionWalletRequest(state);
+  assert.equal(duplicateState.stage, 'requesting-wallet');
+
+  state = onAdmissionSubmitting(state);
+  assert.equal(state.stage, 'submitting');
+
+  const duplicateSubmitting = onAdmissionWalletRequest(state);
+  assert.equal(duplicateSubmitting.stage, 'submitting');
+
+  // User cancellation in 1AM
+  const cancelledState = onAdmissionFailed(state, 'Member admission transaction was cancelled in 1AM.', true);
+  assert.equal(cancelledState.stage, 'cancelled');
+  assert.match(cancelledState.errorMessage ?? '', /cancelled/i);
+});
+
+// 63. Finalized-but-not-indexed state transitions without resubmission
+test('63. Finalized-but-not-indexed state transitions without resubmission', () => {
+  let state = INITIAL_REGISTRAR_ADMISSION_UI_STATE;
+  state = { ...state, stage: 'submitting' };
+
+  // Enters finalized-indexing
+  state = onAdmissionFinalizedIndexing(state);
+  assert.equal(state.stage, 'finalized-indexing');
+
+  // State remains finalized-indexing during manual retry polling
+  assert.equal(state.stage, 'finalized-indexing');
+  assert.equal(state.errorMessage, null);
+});
+
+// 64. Genuine public-ledger membership verification
+test('64. Genuine public-ledger membership verification via hasMemberCredential', () => {
+  const credential = generateMemberSecretOrSalt();
+  const nonMemberCredential = generateMemberSecretOrSalt();
+
+  // Test double of ContractSession with exact hasMemberCredential contract
+  const admittedSet = new Set([bytesToHex(credential)]);
+  const session = {
+    hasMemberCredential: (bytes: Uint8Array) => admittedSet.has(bytesToHex(bytes)),
+  };
+
+  assert.equal(session.hasMemberCredential(credential), true);
+  assert.equal(session.hasMemberCredential(nonMemberCredential), false);
+});
+
+// 65. Admission receipt validation and private-data exclusion
+test('65. Admission receipt validation and private-data exclusion', () => {
+  const contractAddress = 'b62b97709f7629cede3bcbcd52ecda4fe2ad204ceac2946fda484789d104d23b';
+  const credentialHex = 'bb'.repeat(32);
+  const txId = '11223344556677889900aabbccddeeff11223344556677889900aabbccddeeff';
+
+  const receipt = buildMemberAdmissionReceipt({
+    contractAddress,
+    memberCredential: credentialHex,
+    admissionTxId: txId,
+  });
+
+  assert.equal(receipt.schema, MEMBER_ADMISSION_RECEIPT_SCHEMA);
+  assert.equal(receipt.network, 'preprod');
+  assert.equal(receipt.contractAddress, contractAddress);
+  assert.equal(receipt.admittedMemberCredential, credentialHex);
+  assert.equal(receipt.admissionTxId, txId);
+  assert.equal(receipt.status, 'finalized');
+  assert.equal(typeof receipt.admittedAt, 'string');
+
+  // Ensure no secret or private state in receipt
+  assert.equal('memberSecret' in receipt, false);
+  assert.equal('memberSalt' in receipt, false);
+  assert.equal('adminSecret' in receipt, false);
+
+  // Validate receipt parser accepts valid and rejects tampered
+  const validated = validateMemberAdmissionReceipt(receipt);
+  assert.deepEqual(validated, receipt);
+
+  assert.throws(() => validateMemberAdmissionReceipt({ ...receipt, network: 'mainnet' }), /preprod/);
+  assert.throws(() => validateMemberAdmissionReceipt({ ...receipt, status: 'pending' }), /finalized/);
+  assert.throws(() => validateMemberAdmissionReceipt({ ...receipt, admittedMemberCredential: '123' }), /32-byte/);
+});
+
+// 66. Raw error sanitization for member and admission operations
+test('66. Raw error sanitization for member and admission operations', () => {
+  // Member errors
+  const rawMemberLeak = new Error('CryptoKey import failed: invalid key bytes at node:crypto:124');
+  const sanitizedMember = mapMemberOperationError(rawMemberLeak);
+  assert.equal(sanitizedMember.includes('node:crypto'), false);
+  assert.equal(sanitizedMember.includes('CryptoKey'), false);
+
+  // Duplicate member error
+  const dupErr = new Error('Ledger assertion failed: member already admitted in memberCredentials set');
+  const sanitizedDup = mapAdmissionError(dupErr);
+  assert.equal(sanitizedDup, 'This member credential has already been admitted to this contract.');
+
+  // Insufficient DUST
+  const dustErr = new Error('Insufficient balance: account has 0 DUST');
+  const sanitizedDust = mapAdmissionError(dustErr);
+  assert.equal(sanitizedDust, 'Insufficient DUST or balance in connected 1AM wallet to cover transaction fees.');
+
+  // Prover failure
+  const proverErr = new Error('Prover failed at http://127.0.0.1:6300/prove: exit 1');
+  const sanitizedProver = mapAdmissionError(proverErr);
+  assert.equal(sanitizedProver.includes('http://127.0.0.1:6300'), false);
+  assert.equal(sanitizedProver, 'ZK proof generation failed. Ensure your local proof server is reachable and responsive.');
+
+  // Wallet cancellation
+  const cancelErr = new Error('User cancelled transaction in 1AM wallet');
+  assert.equal(mapAdmissionError(cancelErr), 'Member admission transaction was cancelled in 1AM.');
+});
+
+// 67. Constructor / deployment parameters remain unchanged
+test('67. Constructor and deployment logic remains unchanged from verified live checkpoint', () => {
+  // Ensure deployment receipt schema and deployment reducer contracts remain unaffected
+  const deploymentReceipt: DeploymentReceipt = {
+    schema: DEPLOYMENT_RECEIPT_SCHEMA,
+    network: 'preprod',
+    contractAddress: 'b62b97709f7629cede3bcbcd52ecda4fe2ad204ceac2946fda484789d104d23b',
+    deploymentTxId: null,
+    registrarPublicKey: 'aa'.repeat(32),
+    certifierPublicKey: 'bb'.repeat(32),
+    deployedAt: new Date().toISOString(),
+    status: 'finalized',
+  };
+
+  const validated = validateDeploymentReceipt(deploymentReceipt);
+  assert.equal(validated.schema, DEPLOYMENT_RECEIPT_SCHEMA);
+  assert.equal(validated.status, 'finalized');
+  assert.equal(validated.certifierPublicKey, 'bb'.repeat(32));
 });

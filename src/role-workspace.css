@@ -814,6 +814,88 @@ input:focus-visible {
   background: #0a1f14;
 }
 
+.admission-import-box {
+  background: #0d1e15;
+  border: 1px dashed #2f5a40;
+  border-radius: 10px;
+  padding: 16px;
+  margin-top: 14px;
+}
+
+.admission-confirmation-box {
+  background: #0d1e15;
+  border: 1px solid #2f5a40;
+  border-radius: 10px;
+  padding: 18px;
+  margin-top: 14px;
+}
+
+.admission-confirmation-box h3 {
+  font-size: 1.05rem;
+  margin: 0 0 12px;
+  color: #8ef0ae;
+}
+
+.admission-review-details {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 0.85rem;
+  color: #a4beae;
+  margin-bottom: 16px;
+  background: #07130b;
+  padding: 12px 14px;
+  border-radius: 8px;
+  border-left: 3px solid #63b3ed;
+}
+
+.admission-review-details p {
+  margin: 0;
+}
+
+.admission-success-box {
+  background: #081a10;
+  border: 1px solid #38a169;
+  border-radius: 10px;
+  padding: 18px;
+  margin-top: 14px;
+}
+
+.admission-success-box p {
+  margin: 8px 0 12px;
+  font-size: 0.9rem;
+  color: #c6f6d5;
+}
+
+.receipt-details-list {
+  display: grid;
+  grid-template-columns: 140px 1fr;
+  gap: 8px 12px;
+  font-size: 0.82rem;
+  background: #050d08;
+  padding: 12px;
+  border-radius: 6px;
+  margin-bottom: 16px;
+}
+
+.receipt-details-list dt {
+  color: #8ca092;
+}
+
+.receipt-details-list dd {
+  margin: 0;
+  color: #8ef0ae;
+  word-break: break-all;
+}
+
+.indexer-lag-box {
+  border-left: 3px solid #ecc94b;
+  background: #1e1b0a;
+  padding: 14px;
+  border-radius: 8px;
+  margin-top: 14px;
+}
+
 .role-workspace-footer {
   color: #617467;
   font-size: 0.78rem;
