@@ -3,6 +3,8 @@ import { deployContract, submitCallTx } from '@midnight-ntwrk/midnight-js-contra
 import type { ContractAddress } from '@midnight-ntwrk/midnight-js-protocol/compact-runtime';
 import { CompiledCommonVeilContract, CommonVeil } from './contract';
 import { connectProviders, PRIVATE_STATE_ID, type CommonVeilProviders, type ConnectedWallet } from './providers';
+import { parseRoleQuery, type RoleType } from './role-workspace-state';
+import { RoleWorkspace } from './RoleWorkspace';
 
 type Stage =
   | 'idle' | 'connecting' | 'connected' | 'deploying' | 'deployed'
@@ -52,6 +54,45 @@ const VERIFIED_REFERENCE_EVIDENCE: Evidence[] = [
 ];
 
 export default function App() {
+  const [currentRole, setCurrentRole] = useState<RoleType | null>(() => {
+    if (typeof window !== 'undefined') {
+      return parseRoleQuery(window.location.search);
+    }
+    return null;
+  });
+
+  useEffect(() => {
+    const handlePopState = () => {
+      setCurrentRole(parseRoleQuery(window.location.search));
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
+  const navigateToOverview = () => {
+    if (typeof window !== 'undefined' && window.location.search) {
+      window.history.pushState({}, '', window.location.pathname);
+    }
+    setCurrentRole(null);
+  };
+
+  const navigateToRole = (newRole: RoleType) => {
+    if (typeof window !== 'undefined') {
+      window.history.pushState({}, '', `?role=${newRole}`);
+    }
+    setCurrentRole(newRole);
+  };
+
+  if (currentRole) {
+    return (
+      <RoleWorkspace
+        role={currentRole}
+        onNavigateOverview={navigateToOverview}
+        onSelectRole={navigateToRole}
+      />
+    );
+  }
+
   const [stage, setStage] = useState<Stage>('idle');
   const [wallet, setWallet] = useState<ConnectedWallet>();
   const [contractAddress, setContractAddress] = useState<ContractAddress>();
@@ -239,6 +280,9 @@ export default function App() {
         <a className="brand" href="#top" aria-label="CommonVeil home"><span>CV</span> CommonVeil</a>
         <div className="nav-links">
           <a href="#protocol">Protocol</a><a href="#demo">Live demo</a><a href="#evidence">Evidence</a>
+          <a href="/?role=registrar" title="Open Registrar Workspace">Registrar</a>
+          <a href="/?role=certifier" title="Open Certifier Workspace">Certifier</a>
+          <a href="/?role=member" title="Open Member Workspace">Member</a>
           <a className="repo-link" href="https://github.com/0xaje/CommonVeil" target="_blank" rel="noreferrer">GitHub ↗</a>
         </div>
       </nav>
