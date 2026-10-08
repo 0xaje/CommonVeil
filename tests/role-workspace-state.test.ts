@@ -462,13 +462,17 @@ test('26. One successful copy permanently disables further copying', () => {
   const state = onSecretGeneratedOrImported(INITIAL_REGISTRAR_SECRET_UI_STATE);
   assert.equal(state.canCopyOnce, true);
 
+  // Initiate copy
+  const pendingState = onCopyAttemptInitiated(state);
+  assert.equal(pendingState.copyStatus, 'pending');
+
   // Simulate successful copy
-  const copiedState = onCopyAttemptResult(state, true);
+  const copiedState = onCopyAttemptResult(pendingState, true);
   assert.equal(copiedState.canCopyOnce, false);
   assert.equal(copiedState.copyStatus, 'copied');
 
   // Any subsequent attempt cannot be initiated or remains disabled
-  const attemptAgain = onCopyAttemptResult(copiedState, true);
+  const attemptAgain = onCopyAttemptInitiated(copiedState);
   assert.equal(attemptAgain.canCopyOnce, false);
   assert.equal(attemptAgain.copyStatus, 'copied');
 });
@@ -478,13 +482,19 @@ test('27. Failed copy permits retry', () => {
   const state = onSecretGeneratedOrImported(INITIAL_REGISTRAR_SECRET_UI_STATE);
   assert.equal(state.canCopyOnce, true);
 
+  // Initiate copy
+  const pendingState = onCopyAttemptInitiated(state);
+  assert.equal(pendingState.copyStatus, 'pending');
+
   // Simulate failed clipboard write
-  const failedState = onCopyAttemptResult(state, false);
+  const failedState = onCopyAttemptResult(pendingState, false);
   assert.equal(failedState.canCopyOnce, true); // Still allowed to retry
   assert.equal(failedState.copyStatus, 'failed');
 
-  // Second attempt succeeds -> now disabled
-  const retrySuccess = onCopyAttemptResult(failedState, true);
+  // Second attempt initiates and succeeds -> now disabled
+  const retryPending = onCopyAttemptInitiated(failedState);
+  assert.equal(retryPending.copyStatus, 'pending');
+  const retrySuccess = onCopyAttemptResult(retryPending, true);
   assert.equal(retrySuccess.canCopyOnce, false);
   assert.equal(retrySuccess.copyStatus, 'copied');
 });
@@ -655,4 +665,85 @@ test('35. Stale callback after lock or lifecycle reset cannot mutate new state',
   assert.equal(afterStaleFailure.isLocked, true);
   assert.equal(afterStaleFailure.canCopyOnce, false);
   assert.equal(afterStaleFailure.copyStatus, 'idle');
+});
+
+// 36. Overlapping copy generations across lifecycle reset: stale A callback cannot mutate B
+test('36. Overlapping copy generations across lifecycle reset: stale A callback cannot mutate B', async () => {
+  let copyGenerationCounter = 0;
+  let activeToken: number | null = null;
+  let state = onSecretGeneratedOrImported(INITIAL_REGISTRAR_SECRET_UI_STATE);
+
+  // Deferred resolvers for async clipboard simulation
+  let resolveA: () => void = () => {};
+  let rejectA: (err: any) => void = () => {};
+  const promiseA = new Promise<void>((res, rej) => {
+    resolveA = res;
+    rejectA = rej;
+  });
+
+  let resolveB: () => void = () => {};
+  const promiseB = new Promise<void>((res) => {
+    resolveB = res;
+  });
+
+  // Step 1: Copy for secret A starts
+  const tokenA = ++copyGenerationCounter;
+  activeToken = tokenA;
+  state = onCopyAttemptInitiated(state);
+  assert.equal(state.copyStatus, 'pending');
+
+  // Step 2: Lifecycle reset (e.g. lock session or new secret generation)
+  // Increments generation counter and invalidates activeToken
+  copyGenerationCounter++;
+  activeToken = null;
+  state = onSecretClearedOrLocked(state, false);
+  assert.equal(state.hasSecret, false);
+  assert.equal(state.canCopyOnce, false);
+  assert.equal(state.copyStatus, 'idle');
+
+  // Step 3: Secret B is generated and its copy starts
+  state = onSecretGeneratedOrImported(state);
+  assert.equal(state.hasSecret, true);
+  assert.equal(state.canCopyOnce, true);
+
+  const tokenB = ++copyGenerationCounter;
+  activeToken = tokenB;
+  state = onCopyAttemptInitiated(state);
+  assert.equal(state.copyStatus, 'pending');
+  assert.equal(activeToken, tokenB);
+
+  // Step 4: Stale callback for A resolves
+  // Handler checks if tokenA === activeToken
+  const handleCallbackA = () => {
+    if (activeToken !== tokenA) {
+      // Invalidation guard: dropped stale callback
+      return;
+    }
+    state = onCopyAttemptResult(state, true);
+  };
+  resolveA();
+  await promiseA;
+  handleCallbackA();
+
+  // B must remain pending and unchanged!
+  assert.equal(state.copyStatus, 'pending');
+  assert.equal(state.canCopyOnce, true);
+  assert.equal(activeToken, tokenB);
+
+  // Step 5: B then resolves
+  const handleCallbackB = () => {
+    if (activeToken !== tokenB) {
+      return;
+    }
+    activeToken = null;
+    state = onCopyAttemptResult(state, true);
+  };
+  resolveB();
+  await promiseB;
+  handleCallbackB();
+
+  // B's opportunity is now consumed permanently
+  assert.equal(state.copyStatus, 'copied');
+  assert.equal(state.canCopyOnce, false);
+  assert.equal(activeToken, null);
 });

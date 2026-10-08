@@ -407,8 +407,8 @@ export function onCopyAttemptResult(
   prevState: RegistrarSecretUiState,
   success: boolean,
 ): RegistrarSecretUiState {
-  // If the state was reset (no secret, locked, or copy status not pending), do not mutate
-  if (!prevState.hasSecret || prevState.isLocked) {
+  // If the state was reset (no secret, locked) or the matching operation is not pending, do not mutate
+  if (!prevState.hasSecret || prevState.isLocked || prevState.copyStatus !== 'pending') {
     return prevState;
   }
   if (success) {

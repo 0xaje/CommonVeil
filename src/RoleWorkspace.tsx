@@ -79,7 +79,8 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
     isMounted.current = true;
     return () => {
       isMounted.current = false;
-      isCopyPendingRef.current = false;
+      copyGenerationRef.current++;
+      activeCopyTokenRef.current = null;
       zeroizeBytes(plaintextSecretRef.current);
       plaintextSecretRef.current = null;
     };
@@ -94,12 +95,15 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
     contractState.inspectionState === 'inspecting' ||
     contractState.inspectionState === 'attaching';
 
-  // Synchronous guard against rapid double-clicks during pending clipboard writes
-  const isCopyPendingRef = useRef(false);
+  // Monotonically increasing copy generation token to prevent stale callbacks across secret lifecycles
+  const copyGenerationRef = useRef(0);
+  const activeCopyTokenRef = useRef<number | null>(null);
 
   // Helper to securely clear registrar secret in memory
   const clearRegistrarSecret = (isLocked: boolean = false) => {
-    isCopyPendingRef.current = false;
+    // Invalidate any in-flight copy operation token
+    copyGenerationRef.current++;
+    activeCopyTokenRef.current = null;
     zeroizeBytes(plaintextSecretRef.current);
     plaintextSecretRef.current = null;
     setRegistrarUi((prev) => onSecretClearedOrLocked(prev, isLocked));
@@ -137,7 +141,8 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
   };
 
   const handleAddressChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    isCopyPendingRef.current = false;
+    copyGenerationRef.current++;
+    activeCopyTokenRef.current = null;
     const next = handleAddressInputChange(contractState, e.target.value);
     setContractState(next);
     // Address changed: reset verification and remove any copy capability
@@ -350,35 +355,46 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
   };
 
   // Immediate one-time copy from byte array (no persistent React string state)
-  // Protected against rapid double-clicks via synchronous ref guard + UI pending state
+  // Protected against rapid double-clicks and stale overlapping generation callbacks
   const handleOneTimeCopySecret = () => {
     if (
       !plaintextSecretRef.current ||
       !registrarUi.canCopyOnce ||
       registrarUi.copyStatus === 'pending' ||
-      isCopyPendingRef.current
+      activeCopyTokenRef.current !== null
     ) {
       return;
     }
 
-    // Synchronously reserve the copy attempt immediately before awaiting clipboard write
-    isCopyPendingRef.current = true;
+    // Capture unique monotonically increasing token for this exact copy attempt
+    const operationToken = ++copyGenerationRef.current;
+    activeCopyTokenRef.current = operationToken;
     setRegistrarUi((prev) => onCopyAttemptInitiated(prev));
 
     const hex = bytesToHex(plaintextSecretRef.current);
     navigator.clipboard
       .writeText(hex)
       .then(() => {
-        // Stale callback check: only proceed if still mounted and copy wasn't cleared/cancelled
-        if (!isMounted.current || !isCopyPendingRef.current) return;
-        isCopyPendingRef.current = false;
+        // Stale callback check: must be mounted, token must match active token, and still pending
+        if (
+          !isMounted.current ||
+          activeCopyTokenRef.current !== operationToken
+        ) {
+          return;
+        }
+        activeCopyTokenRef.current = null;
         // Permanently disable further copying for this secret
         setRegistrarUi((prev) => onCopyAttemptResult(prev, true));
       })
       .catch((err: unknown) => {
-        // Stale callback check: only proceed if still mounted and copy wasn't cleared/cancelled
-        if (!isMounted.current || !isCopyPendingRef.current) return;
-        isCopyPendingRef.current = false;
+        // Stale callback check: must be mounted, token must match active token, and still pending
+        if (
+          !isMounted.current ||
+          activeCopyTokenRef.current !== operationToken
+        ) {
+          return;
+        }
+        activeCopyTokenRef.current = null;
         // Restore retry eligibility on failure and show sanitized error
         setRegistrarUi((prev) => onCopyAttemptResult(prev, false));
         setRegistrarError(mapRegistrarOperationError(err ?? new Error('clipboard')));
