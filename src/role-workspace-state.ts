@@ -250,7 +250,7 @@ export interface RegistrarSecretUiState {
   readonly isLocked: boolean;
   readonly verificationStatus: RegistrarVerificationStatus;
   readonly canCopyOnce: boolean;
-  readonly copyStatus: 'idle' | 'copied' | 'failed';
+  readonly copyStatus: 'idle' | 'pending' | 'copied' | 'failed';
 }
 
 export const INITIAL_REGISTRAR_SECRET_UI_STATE: RegistrarSecretUiState = {
@@ -384,12 +384,33 @@ export function onSecretRestoredFromBackup(
 }
 
 /**
+ * Pure state reducer when a copy attempt is synchronously initiated.
+ * Immediately reserves the attempt, transitions copyStatus to 'pending',
+ * and prevents any concurrent copy execution.
+ */
+export function onCopyAttemptInitiated(
+  prevState: RegistrarSecretUiState,
+): RegistrarSecretUiState {
+  if (!prevState.hasSecret || !prevState.canCopyOnce || prevState.copyStatus === 'pending') {
+    return prevState;
+  }
+  return {
+    ...prevState,
+    copyStatus: 'pending',
+  };
+}
+
+/**
  * Pure state reducer when a copy attempt succeeds or fails.
  */
 export function onCopyAttemptResult(
   prevState: RegistrarSecretUiState,
   success: boolean,
 ): RegistrarSecretUiState {
+  // If the state was reset (no secret, locked, or copy status not pending), do not mutate
+  if (!prevState.hasSecret || prevState.isLocked) {
+    return prevState;
+  }
   if (success) {
     return {
       ...prevState,

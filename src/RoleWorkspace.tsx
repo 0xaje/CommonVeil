@@ -33,6 +33,7 @@ import {
   type RegistrarSecretUiState,
   onSecretGeneratedOrImported,
   onSecretRestoredFromBackup,
+  onCopyAttemptInitiated,
   onCopyAttemptResult,
   onSecretClearedOrLocked,
   mapRegistrarOperationError,
@@ -78,6 +79,7 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
     isMounted.current = true;
     return () => {
       isMounted.current = false;
+      isCopyPendingRef.current = false;
       zeroizeBytes(plaintextSecretRef.current);
       plaintextSecretRef.current = null;
     };
@@ -92,8 +94,12 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
     contractState.inspectionState === 'inspecting' ||
     contractState.inspectionState === 'attaching';
 
+  // Synchronous guard against rapid double-clicks during pending clipboard writes
+  const isCopyPendingRef = useRef(false);
+
   // Helper to securely clear registrar secret in memory
   const clearRegistrarSecret = (isLocked: boolean = false) => {
+    isCopyPendingRef.current = false;
     zeroizeBytes(plaintextSecretRef.current);
     plaintextSecretRef.current = null;
     setRegistrarUi((prev) => onSecretClearedOrLocked(prev, isLocked));
@@ -131,6 +137,7 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
   };
 
   const handleAddressChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    isCopyPendingRef.current = false;
     const next = handleAddressInputChange(contractState, e.target.value);
     setContractState(next);
     // Address changed: reset verification and remove any copy capability
@@ -343,23 +350,38 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
   };
 
   // Immediate one-time copy from byte array (no persistent React string state)
+  // Protected against rapid double-clicks via synchronous ref guard + UI pending state
   const handleOneTimeCopySecret = () => {
-    if (!plaintextSecretRef.current || !registrarUi.canCopyOnce) return;
+    if (
+      !plaintextSecretRef.current ||
+      !registrarUi.canCopyOnce ||
+      registrarUi.copyStatus === 'pending' ||
+      isCopyPendingRef.current
+    ) {
+      return;
+    }
+
+    // Synchronously reserve the copy attempt immediately before awaiting clipboard write
+    isCopyPendingRef.current = true;
+    setRegistrarUi((prev) => onCopyAttemptInitiated(prev));
+
     const hex = bytesToHex(plaintextSecretRef.current);
     navigator.clipboard
       .writeText(hex)
       .then(() => {
-        if (isMounted.current) {
-          // Permanently disable further copying for this secret
-          setRegistrarUi((prev) => onCopyAttemptResult(prev, true));
-        }
+        // Stale callback check: only proceed if still mounted and copy wasn't cleared/cancelled
+        if (!isMounted.current || !isCopyPendingRef.current) return;
+        isCopyPendingRef.current = false;
+        // Permanently disable further copying for this secret
+        setRegistrarUi((prev) => onCopyAttemptResult(prev, true));
       })
-      .catch(() => {
-        if (isMounted.current) {
-          // Allow retry on failure
-          setRegistrarUi((prev) => onCopyAttemptResult(prev, false));
-          setRegistrarError('Clipboard write failed. Please check browser permissions and try again.');
-        }
+      .catch((err: unknown) => {
+        // Stale callback check: only proceed if still mounted and copy wasn't cleared/cancelled
+        if (!isMounted.current || !isCopyPendingRef.current) return;
+        isCopyPendingRef.current = false;
+        // Restore retry eligibility on failure and show sanitized error
+        setRegistrarUi((prev) => onCopyAttemptResult(prev, false));
+        setRegistrarError(mapRegistrarOperationError(err ?? new Error('clipboard')));
       });
   };
 
@@ -775,11 +797,14 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
                       type="button"
                       className="action-button primary"
                       onClick={handleOneTimeCopySecret}
+                      disabled={registrarUi.copyStatus === 'pending'}
                       aria-label="Copy registrar secret to clipboard (one time only)"
                     >
-                      {registrarUi.copyStatus === 'failed'
-                        ? 'Retry Secret Copy'
-                        : 'Copy Secret to Clipboard (One-Time)'}
+                      {registrarUi.copyStatus === 'pending'
+                        ? 'Copying...'
+                        : registrarUi.copyStatus === 'failed'
+                          ? 'Retry Secret Copy'
+                          : 'Copy Secret to Clipboard (One-Time)'}
                     </button>
                   </div>
                 </div>

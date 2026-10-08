@@ -22,6 +22,7 @@ import {
   INITIAL_REGISTRAR_SECRET_UI_STATE,
   onSecretGeneratedOrImported,
   onSecretRestoredFromBackup,
+  onCopyAttemptInitiated,
   onCopyAttemptResult,
   onSecretClearedOrLocked,
   mapRegistrarOperationError,
@@ -550,4 +551,108 @@ test('30. Raw internal errors never reach displayed messages', () => {
   const mappedGeneric = mapRegistrarOperationError(secretLeakError);
   assert.equal(mappedGeneric, 'The operation could not be completed. Check the input and try again.');
   assert.ok(!mappedGeneric.includes('0123456789abcdef'));
+});
+
+// 31. Immediate pending state transition on copy initiation
+test('31. Immediate pending state transition on copy initiation', () => {
+  const state = onSecretGeneratedOrImported(INITIAL_REGISTRAR_SECRET_UI_STATE);
+  assert.equal(state.canCopyOnce, true);
+  assert.equal(state.copyStatus, 'idle');
+
+  // Immediately transition to pending
+  const pendingState = onCopyAttemptInitiated(state);
+  assert.equal(pendingState.canCopyOnce, true);
+  assert.equal(pendingState.copyStatus, 'pending');
+});
+
+// 32. Two rapid invocations result in exactly one attempt reservation
+test('32. Rapid double invocations: second invocation while pending does nothing', () => {
+  let clipboardCalls = 0;
+  let isPendingRef = false;
+  let uiState = onSecretGeneratedOrImported(INITIAL_REGISTRAR_SECRET_UI_STATE);
+
+  // Simulated copy handler incorporating ref guard + reducer
+  const triggerCopy = () => {
+    if (!uiState.canCopyOnce || uiState.copyStatus === 'pending' || isPendingRef) {
+      return;
+    }
+    isPendingRef = true;
+    uiState = onCopyAttemptInitiated(uiState);
+    clipboardCalls++;
+  };
+
+  // First invocation
+  triggerCopy();
+  assert.equal(clipboardCalls, 1);
+  assert.equal(isPendingRef, true);
+  assert.equal(uiState.copyStatus, 'pending');
+
+  // Second rapid invocation while pending
+  triggerCopy();
+  assert.equal(clipboardCalls, 1, 'Second invocation must be blocked by guard and pending state');
+  assert.equal(isPendingRef, true);
+  assert.equal(uiState.copyStatus, 'pending');
+});
+
+// 33. Success permanently consumes opportunity
+test('33. Success permanently consumes copy opportunity from pending state', () => {
+  const active = onSecretGeneratedOrImported(INITIAL_REGISTRAR_SECRET_UI_STATE);
+  const pending = onCopyAttemptInitiated(active);
+  assert.equal(pending.copyStatus, 'pending');
+
+  const succeeded = onCopyAttemptResult(pending, true);
+  assert.equal(succeeded.canCopyOnce, false);
+  assert.equal(succeeded.copyStatus, 'copied');
+
+  // Attempting to initiate again fails
+  const blocked = onCopyAttemptInitiated(succeeded);
+  assert.equal(blocked.canCopyOnce, false);
+  assert.equal(blocked.copyStatus, 'copied');
+});
+
+// 34. Failure restores exactly one retry opportunity
+test('34. Failure restores exactly one retry opportunity', () => {
+  const active = onSecretGeneratedOrImported(INITIAL_REGISTRAR_SECRET_UI_STATE);
+  const pending = onCopyAttemptInitiated(active);
+
+  const failed = onCopyAttemptResult(pending, false);
+  assert.equal(failed.canCopyOnce, true);
+  assert.equal(failed.copyStatus, 'failed');
+
+  // Can initiate retry
+  const retryPending = onCopyAttemptInitiated(failed);
+  assert.equal(retryPending.copyStatus, 'pending');
+  assert.equal(retryPending.canCopyOnce, true);
+
+  // Success on retry permanently consumes
+  const retrySuccess = onCopyAttemptResult(retryPending, true);
+  assert.equal(retrySuccess.canCopyOnce, false);
+  assert.equal(retrySuccess.copyStatus, 'copied');
+});
+
+// 35. Stale success or failure after lock or lifecycle reset cannot mutate new state
+test('35. Stale callback after lock or lifecycle reset cannot mutate new state', () => {
+  const active = onSecretGeneratedOrImported(INITIAL_REGISTRAR_SECRET_UI_STATE);
+  const pending = onCopyAttemptInitiated(active);
+  assert.equal(pending.copyStatus, 'pending');
+
+  // User locks session or changes contract address while writeText was in flight
+  const locked = onSecretClearedOrLocked(pending, true);
+  assert.equal(locked.hasSecret, false);
+  assert.equal(locked.isLocked, true);
+  assert.equal(locked.canCopyOnce, false);
+  assert.equal(locked.copyStatus, 'idle');
+
+  // Stale async completion arrives
+  const afterStaleSuccess = onCopyAttemptResult(locked, true);
+  assert.equal(afterStaleSuccess.hasSecret, false);
+  assert.equal(afterStaleSuccess.isLocked, true);
+  assert.equal(afterStaleSuccess.canCopyOnce, false);
+  assert.equal(afterStaleSuccess.copyStatus, 'idle');
+
+  const afterStaleFailure = onCopyAttemptResult(locked, false);
+  assert.equal(afterStaleFailure.hasSecret, false);
+  assert.equal(afterStaleFailure.isLocked, true);
+  assert.equal(afterStaleFailure.canCopyOnce, false);
+  assert.equal(afterStaleFailure.copyStatus, 'idle');
 });
