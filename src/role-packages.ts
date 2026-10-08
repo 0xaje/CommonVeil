@@ -1,11 +1,18 @@
 /**
- * CV-007 Role package schemas, validation, and encrypted envelope.
+ * CV-007 Role package schemas, validation, and hardened encrypted envelope.
  *
  * Enforces cryptographic role boundaries:
  * - Public: Certifier public key package.
  * - Restricted: Member admission request (one-way credential commitment, correlation sensitive).
  * - Private: Certification request, Certified snapshot package.
  * - Encrypted envelope: AES-256-GCM + PBKDF2-SHA-256 for private packages & secret backups.
+ *
+ * PROVENANCE INTEGRITY NOTE:
+ * Validation preserves claimed provenance ('live-host-scan' vs 'controlled-test-vector')
+ * and verifies internal measurement consistency (derivation of tuple and digest).
+ * Validation DOES NOT cryptographically authenticate scanner origin.
+ * Authenticated scanner provenance requires a future signature or hardware/device-attestation mechanism.
+ * A controlled test vector must never be presented as a live scan.
  */
 
 export const CERTIFIER_KEY_SCHEMA = 'commonveil.certifier-key/v1' as const;
@@ -66,10 +73,10 @@ export interface EncryptedEnvelope {
   readonly schema: typeof ENCRYPTED_ENVELOPE_SCHEMA;
   readonly cipher: 'AES-256-GCM';
   readonly kdf: 'PBKDF2-SHA-256';
-  readonly iterations: number;
-  readonly salt: string;       // hex (minimum 16 bytes)
-  readonly iv: string;         // hex (12 bytes for AES-GCM)
-  readonly ciphertext: string; // hex
+  readonly iterations: 600_000;
+  readonly salt: string;       // exactly 16 bytes hex (32 chars)
+  readonly iv: string;         // exactly 12 bytes hex (24 chars)
+  readonly ciphertext: string; // hex, max 1 MiB
   readonly createdAt: string;
 }
 
@@ -90,10 +97,16 @@ export interface InventoryReportLike {
 }
 
 /**
- * 600,000 iterations for PBKDF2 with SHA-256 is recommended by OWASP Password Storage
- * Cheat Sheet (2023/2024 guidance) for password-based key derivation.
+ * CommonVeil v1 fixed PBKDF2 iteration count.
+ * Exactly 600,000 iterations for PBKDF2-SHA-256 (per OWASP guidelines).
+ * No other iteration count is accepted.
  */
 export const PBKDF2_RECOMMENDED_ITERATIONS = 600_000;
+
+export const MIN_PASSPHRASE_LENGTH = 12;
+export const MAX_CIPHERTEXT_BYTES = 1024 * 1024; // 1 MiB
+
+const UINT32_MAX = 4_294_967_295;
 
 export function isHex(value: unknown, expectedByteLength?: number): value is string {
   if (typeof value !== 'string') return false;
@@ -111,13 +124,22 @@ export function isValidIsoTimestamp(value: unknown): value is string {
   return !Number.isNaN(d.getTime()) && value === d.toISOString();
 }
 
+/**
+ * Validates version integers:
+ * - Must be safe integer
+ * - 0 <= value <= 4,294,967,295 (uint32 range)
+ */
+export function isValidVersionInteger(n: unknown): n is number {
+  return typeof n === 'number' && Number.isSafeInteger(n) && n >= 0 && n <= UINT32_MAX;
+}
+
 export function isValidVersionTuple(version: unknown): version is VersionTuple {
   if (!version || typeof version !== 'object') return false;
   const v = version as Partial<VersionTuple>;
   return (
-    Number.isInteger(v.major) && (v.major as number) >= 0 &&
-    Number.isInteger(v.minor) && (v.minor as number) >= 0 &&
-    Number.isInteger(v.patch) && (v.patch as number) >= 0
+    isValidVersionInteger(v.major) &&
+    isValidVersionInteger(v.minor) &&
+    isValidVersionInteger(v.patch)
   );
 }
 
@@ -194,15 +216,34 @@ export async function buildCertificationRequestFromInventoryReport(
   if (inventoryReport.schema !== INVENTORY_REPORT_SCHEMA) {
     throw new Error(`Invalid inventory schema: expected '${INVENTORY_REPORT_SCHEMA}'`);
   }
+  if (inventoryReport.status !== 'detected') {
+    throw new Error(`Inventory report status must be 'detected', received '${String(inventoryReport.status)}'`);
+  }
   if (inventoryReport.provenance !== 'live-host-scan' && inventoryReport.provenance !== 'controlled-test-vector') {
     throw new Error(`Unsupported inventory provenance: '${String(inventoryReport.provenance)}'`);
   }
-  if (!inventoryReport.product || typeof inventoryReport.product !== 'string') {
-    throw new Error('Inventory report must define product');
+  if (typeof inventoryReport.product !== 'string' || inventoryReport.product.trim().length === 0) {
+    throw new Error('Inventory report product must be a non-empty trimmed string');
   }
-  if (!inventoryReport.version || !isValidVersionTuple(inventoryReport.version)) {
-    throw new Error('Inventory report has missing or invalid version tuple');
+  const product = inventoryReport.product.trim();
+  if (!inventoryReport.version) {
+    throw new Error('Inventory report missing version object');
   }
+  if (typeof inventoryReport.version.raw !== 'string' || inventoryReport.version.raw.trim().length === 0) {
+    throw new Error('Inventory report rawVersion must be a non-empty string');
+  }
+  if (!isValidVersionTuple(inventoryReport.version)) {
+    throw new Error('Inventory report has missing or invalid version tuple integers');
+  }
+
+  // Derive expected normalized string from the tuple: `${major}.${minor}.${patch}`
+  const derivedTupleString = `${inventoryReport.version.major}.${inventoryReport.version.minor}.${inventoryReport.version.patch}`;
+  if (inventoryReport.version.normalized !== derivedTupleString) {
+    throw new Error(
+      `Inventory report normalized version mismatch: normalized '${inventoryReport.version.normalized}' != derived tuple '${derivedTupleString}'`
+    );
+  }
+
   if (!inventoryReport.measurementDigest || !isHex(inventoryReport.measurementDigest, 32)) {
     throw new Error('Inventory report measurementDigest must be 32-byte hex');
   }
@@ -210,11 +251,8 @@ export async function buildCertificationRequestFromInventoryReport(
     throw new Error('Inventory report observedAt must be a valid ISO timestamp');
   }
 
-  // Verify measurement digest integrity
-  const expectedDigest = await computeMeasurementDigest(
-    inventoryReport.product,
-    inventoryReport.version.normalized,
-  );
+  // Verify measurement digest integrity using the derived tuple string
+  const expectedDigest = await computeMeasurementDigest(product, derivedTupleString);
   if (inventoryReport.measurementDigest.toLowerCase() !== expectedDigest.toLowerCase()) {
     throw new Error(
       `Inventory measurementDigest mismatch: expected '${expectedDigest}', got '${inventoryReport.measurementDigest}'`
@@ -233,7 +271,7 @@ export async function buildCertificationRequestFromInventoryReport(
     contractAddress,
     memberCredential: options.memberCredential.toLowerCase(),
     provenance: inventoryReport.provenance,
-    product: inventoryReport.product,
+    product,
     rawVersion: inventoryReport.version.raw,
     version: {
       major: inventoryReport.version.major,
@@ -260,13 +298,13 @@ export async function validateCertificationRequestPackage(pkg: unknown): Promise
     throw new Error(`Unsupported provenance: '${String(p.provenance)}'`);
   }
   if (typeof p.product !== 'string' || p.product.trim().length === 0) {
-    throw new Error('product must be a non-empty string');
+    throw new Error('product must be a non-empty trimmed string');
   }
   if (typeof p.rawVersion !== 'string' || p.rawVersion.trim().length === 0) {
     throw new Error('rawVersion must be a non-empty string');
   }
   if (!isValidVersionTuple(p.version)) {
-    throw new Error('version must be a valid VersionTuple');
+    throw new Error('version must be a valid VersionTuple with safe uint32 integers');
   }
   if (!isHex(p.measurementDigest, 32)) {
     throw new Error('measurementDigest must be 32-byte hex (64 chars)');
@@ -278,8 +316,8 @@ export async function validateCertificationRequestPackage(pkg: unknown): Promise
     throw new Error('createdAt must be a valid ISO-8601 UTC timestamp');
   }
 
-  const normalized = `${p.version.major}.${p.version.minor}.${p.version.patch}`;
-  const expectedDigest = await computeMeasurementDigest(p.product, normalized);
+  const derivedTupleString = `${p.version.major}.${p.version.minor}.${p.version.patch}`;
+  const expectedDigest = await computeMeasurementDigest(p.product.trim(), derivedTupleString);
   if ((p.measurementDigest as string).toLowerCase() !== expectedDigest.toLowerCase()) {
     throw new Error(`measurementDigest does not match normalized product/version measurement`);
   }
@@ -289,7 +327,7 @@ export async function validateCertificationRequestPackage(pkg: unknown): Promise
     contractAddress,
     memberCredential: (p.memberCredential as string).toLowerCase(),
     provenance: p.provenance,
-    product: p.product,
+    product: p.product.trim(),
     rawVersion: p.rawVersion,
     version: {
       major: p.version.major,
@@ -313,10 +351,10 @@ export function validateCertifiedSnapshotPackage(pkg: unknown): CertifiedSnapsho
     throw new Error('memberCredential must be 32-byte hex (64 chars)');
   }
   if (typeof p.product !== 'string' || p.product.trim().length === 0) {
-    throw new Error('product must be a non-empty string');
+    throw new Error('product must be a non-empty trimmed string');
   }
   if (!isValidVersionTuple(p.version)) {
-    throw new Error('version must be a valid VersionTuple');
+    throw new Error('version must be a valid VersionTuple with safe uint32 integers');
   }
   if (!isHex(p.snapshotSalt, 32)) {
     throw new Error('snapshotSalt must be 32-byte hex (64 chars)');
@@ -335,7 +373,7 @@ export function validateCertifiedSnapshotPackage(pkg: unknown): CertifiedSnapsho
     schema: CERTIFIED_SNAPSHOT_SCHEMA,
     contractAddress,
     memberCredential: (p.memberCredential as string).toLowerCase(),
-    product: p.product,
+    product: p.product.trim(),
     version: {
       major: p.version.major,
       minor: p.version.minor,
@@ -360,17 +398,23 @@ export function validateEncryptedEnvelope(envelope: unknown): EncryptedEnvelope 
   if (e.kdf !== 'PBKDF2-SHA-256') {
     throw new Error(`Unsupported kdf: expected 'PBKDF2-SHA-256', received '${String(e.kdf)}'`);
   }
-  if (typeof e.iterations !== 'number' || !Number.isInteger(e.iterations) || e.iterations < 100_000) {
-    throw new Error('iterations must be an integer >= 100,000');
+  // Require exactly PBKDF2_RECOMMENDED_ITERATIONS (600,000)
+  if (typeof e.iterations !== 'number' || !Number.isInteger(e.iterations) || e.iterations !== PBKDF2_RECOMMENDED_ITERATIONS) {
+    throw new Error(`iterations must be exactly ${PBKDF2_RECOMMENDED_ITERATIONS}`);
   }
-  if (!isHex(e.salt) || (e.salt as string).length < 32) {
-    throw new Error('salt must be a hex string of at least 16 bytes (32 chars)');
+  // Salt must be exactly 16 bytes (32 hex chars)
+  if (!isHex(e.salt, 16)) {
+    throw new Error('salt must be exactly 16 bytes hex (32 characters)');
   }
+  // IV must be exactly 12 bytes (24 hex chars)
   if (!isHex(e.iv, 12)) {
-    throw new Error('iv must be 12-byte hex (24 chars) for AES-256-GCM');
+    throw new Error('iv must be exactly 12 bytes hex (24 characters) for AES-256-GCM');
   }
-  if (!isHex(e.ciphertext) || (e.ciphertext as string).length === 0) {
+  if (typeof e.ciphertext !== 'string' || !isHex(e.ciphertext) || e.ciphertext.length === 0) {
     throw new Error('ciphertext must be a non-empty hex string');
+  }
+  if (e.ciphertext.length / 2 > MAX_CIPHERTEXT_BYTES) {
+    throw new Error(`ciphertext exceeds maximum allowed size of ${MAX_CIPHERTEXT_BYTES} bytes (1 MiB)`);
   }
   if (!isValidIsoTimestamp(e.createdAt)) {
     throw new Error('createdAt must be a valid ISO-8601 UTC timestamp');
@@ -380,7 +424,7 @@ export function validateEncryptedEnvelope(envelope: unknown): EncryptedEnvelope 
     schema: ENCRYPTED_ENVELOPE_SCHEMA,
     cipher: 'AES-256-GCM',
     kdf: 'PBKDF2-SHA-256',
-    iterations: e.iterations,
+    iterations: PBKDF2_RECOMMENDED_ITERATIONS,
     salt: (e.salt as string).toLowerCase(),
     iv: (e.iv as string).toLowerCase(),
     ciphertext: (e.ciphertext as string).toLowerCase(),
@@ -397,7 +441,9 @@ export function bytesToHex(bytes: Uint8Array): string {
 }
 
 export function hexToBytes(hex: string): Uint8Array {
+  if (typeof hex !== 'string') throw new Error('Hex value must be a string');
   if (hex.length % 2 !== 0) throw new Error('Hex string must have an even length');
+  if (!/^[0-9a-fA-F]*$/.test(hex)) throw new Error('Hex string contains invalid non-hex characters');
   const bytes = new Uint8Array(hex.length / 2);
   for (let i = 0; i < bytes.length; i++) {
     const byte = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
@@ -405,6 +451,41 @@ export function hexToBytes(hex: string): Uint8Array {
     bytes[i] = byte;
   }
   return bytes;
+}
+
+function validatePassphrase(passphrase: unknown): string {
+  if (typeof passphrase !== 'string') {
+    throw new Error('Passphrase must be a string');
+  }
+  const chars = Array.from(passphrase);
+  if (chars.length < MIN_PASSPHRASE_LENGTH) {
+    throw new Error(`Passphrase must be at least ${MIN_PASSPHRASE_LENGTH} Unicode characters`);
+  }
+  return passphrase;
+}
+
+/**
+ * Builds canonical authenticated additional data (AAD) for AES-GCM envelope encryption.
+ */
+export function buildEnvelopeAdditionalData(envelopeFields: {
+  schema: string;
+  cipher: string;
+  kdf: string;
+  iterations: number;
+  salt: string;
+  iv: string;
+  createdAt: string;
+}): Uint8Array<ArrayBuffer> {
+  const canonicalString = JSON.stringify({
+    schema: envelopeFields.schema,
+    cipher: envelopeFields.cipher,
+    kdf: envelopeFields.kdf,
+    iterations: envelopeFields.iterations,
+    salt: envelopeFields.salt.toLowerCase(),
+    iv: envelopeFields.iv.toLowerCase(),
+    createdAt: envelopeFields.createdAt,
+  });
+  return new TextEncoder().encode(canonicalString) as Uint8Array<ArrayBuffer>;
 }
 
 async function deriveKeyFromPassphrase(
@@ -438,70 +519,111 @@ export async function encryptToEnvelope(
   payload: unknown,
   passphrase: string,
   options?: {
-    iterations?: number;
     now?: Date;
   },
 ): Promise<EncryptedEnvelope> {
-  if (typeof passphrase !== 'string' || passphrase.length === 0) {
-    throw new Error('Passphrase must be a non-empty string');
+  if (payload === undefined) {
+    throw new Error('Payload cannot be undefined');
   }
-  const iterations = options?.iterations ?? PBKDF2_RECOMMENDED_ITERATIONS;
-  if (iterations < 100_000) {
-    throw new Error('iterations must be at least 100,000');
+  validatePassphrase(passphrase);
+
+  let serialized: string;
+  try {
+    const result = JSON.stringify(payload);
+    if (typeof result !== 'string') {
+      throw new Error('JSON.stringify did not return a valid string');
+    }
+    serialized = result;
+  } catch (error) {
+    throw new Error(`Payload serialization failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+
+  const encodedPayload = new TextEncoder().encode(serialized);
+  if (encodedPayload.length > MAX_CIPHERTEXT_BYTES) {
+    throw new Error(`Serialized payload exceeds ${MAX_CIPHERTEXT_BYTES} bytes limit`);
   }
 
   const salt = crypto.getRandomValues(new Uint8Array(16));
   const iv = crypto.getRandomValues(new Uint8Array(12));
+  const saltHex = bytesToHex(salt);
+  const ivHex = bytesToHex(iv);
+  const now = options?.now ?? new Date();
+  const createdAt = now.toISOString();
 
-  const key = await deriveKeyFromPassphrase(passphrase, salt, iterations);
+  const additionalData = buildEnvelopeAdditionalData({
+    schema: ENCRYPTED_ENVELOPE_SCHEMA,
+    cipher: 'AES-256-GCM',
+    kdf: 'PBKDF2-SHA-256',
+    iterations: PBKDF2_RECOMMENDED_ITERATIONS,
+    salt: saltHex,
+    iv: ivHex,
+    createdAt,
+  });
 
-  const serialized = JSON.stringify(payload);
-  const encodedPayload = new TextEncoder().encode(serialized);
+  const key = await deriveKeyFromPassphrase(passphrase, salt, PBKDF2_RECOMMENDED_ITERATIONS);
 
   const ciphertextBuffer = await crypto.subtle.encrypt(
-    { name: 'AES-GCM', iv },
+    {
+      name: 'AES-GCM',
+      iv,
+      additionalData,
+    },
     key,
     encodedPayload,
   );
-
-  const now = options?.now ?? new Date();
 
   return {
     schema: ENCRYPTED_ENVELOPE_SCHEMA,
     cipher: 'AES-256-GCM',
     kdf: 'PBKDF2-SHA-256',
-    iterations,
-    salt: bytesToHex(salt),
-    iv: bytesToHex(iv),
+    iterations: PBKDF2_RECOMMENDED_ITERATIONS,
+    salt: saltHex,
+    iv: ivHex,
     ciphertext: bytesToHex(new Uint8Array(ciphertextBuffer)),
-    createdAt: now.toISOString(),
+    createdAt,
   };
 }
 
-export async function decryptFromEnvelope<T = unknown>(
+/**
+ * Low-level unsafe decryption helper.
+ * Internal or low-level use only: returns untrusted parsed JSON without schema whitelisting.
+ */
+export async function unsafeDecryptFromEnvelope<T = unknown>(
   envelope: EncryptedEnvelope,
   passphrase: string,
 ): Promise<T> {
   const validEnvelope = validateEncryptedEnvelope(envelope);
-  if (typeof passphrase !== 'string' || passphrase.length === 0) {
-    throw new Error('Passphrase must be a non-empty string');
-  }
+  validatePassphrase(passphrase);
 
   const saltBytes = hexToBytes(validEnvelope.salt);
   const ivBytes = hexToBytes(validEnvelope.iv);
   const ciphertextBytes = hexToBytes(validEnvelope.ciphertext);
+
+  const additionalData = buildEnvelopeAdditionalData({
+    schema: validEnvelope.schema,
+    cipher: validEnvelope.cipher,
+    kdf: validEnvelope.kdf,
+    iterations: validEnvelope.iterations,
+    salt: validEnvelope.salt,
+    iv: validEnvelope.iv,
+    createdAt: validEnvelope.createdAt,
+  });
 
   const key = await deriveKeyFromPassphrase(passphrase, saltBytes, validEnvelope.iterations);
 
   let decryptedBuffer: ArrayBuffer;
   try {
     decryptedBuffer = await crypto.subtle.decrypt(
-      { name: 'AES-GCM', iv: ivBytes as Uint8Array<ArrayBuffer> },
+      {
+        name: 'AES-GCM',
+        iv: ivBytes as Uint8Array<ArrayBuffer>,
+        additionalData,
+      },
       key,
       ciphertextBytes as Uint8Array<ArrayBuffer>,
     );
   } catch (_error) {
-    throw new Error('Failed to decrypt envelope: incorrect passphrase or tampered ciphertext');
+    throw new Error('Failed to decrypt envelope: incorrect passphrase or tampered ciphertext/metadata');
   }
 
   const decryptedText = new TextDecoder().decode(decryptedBuffer);
@@ -510,4 +632,18 @@ export async function decryptFromEnvelope<T = unknown>(
   } catch (_error) {
     throw new Error('Decrypted payload is not valid JSON');
   }
+}
+
+/**
+ * Safe public decryption API.
+ * Validates the envelope, authenticates metadata + payload, parses JSON, passes through
+ * the caller-supplied package validator, and returns only the validator's validated/whitelisted object.
+ */
+export async function decryptAndValidateEnvelope<T>(
+  envelope: EncryptedEnvelope,
+  passphrase: string,
+  validator: (payload: unknown) => T | Promise<T>,
+): Promise<T> {
+  const parsed = await unsafeDecryptFromEnvelope(envelope, passphrase);
+  return await validator(parsed);
 }

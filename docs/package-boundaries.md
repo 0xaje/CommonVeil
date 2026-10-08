@@ -10,7 +10,7 @@ CommonVeil enforces cryptographic role separation across Registrar, Certifier, a
 | **Restricted** | `commonveil.member-admission/v1` | Member → Registrar | Contains `contractAddress` and `memberCredential`. Although `memberCredential` is a one-way persistent commitment that does not reveal `memberSecret`, it is persistent across an organization and creates correlation. Shared **only** with the authorized Registrar. |
 | **Private** | `commonveil.certification-request/v1` | Member → Certifier | Contains `contractAddress`, `memberCredential`, and exact inventory measurement details (`product`, `version`, `provenance`, `measurementDigest`, `observedAt`). Reveals private inventory to the Certifier. Must never be published. |
 | **Private** | `commonveil.certified-snapshot/v1` | Certifier → Member | Contains `contractAddress`, `memberCredential`, `product`, `version`, `snapshotSalt`, `commitment`, and finalized certification `txId`. Contains the private `snapshotSalt` needed for ZK proving. Must never be published. |
-| **Encrypted Envelope** | `commonveil.encrypted-envelope/v1` | Sender ↔ Receiver / Self-backup | Encrypted with **AES-256-GCM** using **PBKDF2-SHA-256** (600,000 iterations). Protects private packages and secret backups at rest and in transit. |
+| **Encrypted Envelope** | `commonveil.encrypted-envelope/v1` | Sender ↔ Receiver / Self-backup | Encrypted with **AES-256-GCM** using **PBKDF2-SHA-256** (strictly fixed at 600,000 iterations). Authenticates envelope metadata using AES-GCM additional authenticated data (AAD). Requires minimum 12 Unicode characters passphrase. Protects private packages and secret backups at rest and in transit. |
 
 ---
 
@@ -53,10 +53,15 @@ CommonVeil enforces cryptographic role separation across Registrar, Certifier, a
 
 ---
 
-## Provenance Integrity
+## Provenance Honesty and Boundary
 
-Inventory reports strictly distinguish between:
-- `live-host-scan`: Directly measured from the host's actual package manager (`dpkg-query`, `rpm`) or executable.
+Inventory reports label their origin as either:
+- `live-host-scan`: Measured from the host's actual package manager (`dpkg-query`, `rpm`) or executable.
 - `controlled-test-vector`: Predefined protocol demonstration vector (e.g. controlled XZ 5.6.1 input).
 
-The validation suite enforces that the `measurementDigest` (`SHA-256("${product}@${version}")`) matches the normalized version tuple, and strictly prohibits relabeling a controlled test vector as a live scan.
+**Honest boundary notice**:
+- Package validation preserves the claimed provenance label throughout the workflow.
+- Package validation verifies internal measurement consistency (that `normalized` exactly derives as `${major}.${minor}.${patch}` and matches `measurementDigest`).
+- Package validation **does not cryptographically authenticate scanner origin**.
+- Authenticated scanner provenance requires a future signature or hardware/device-attestation mechanism.
+- A controlled test vector must never be presented as a live scan.
