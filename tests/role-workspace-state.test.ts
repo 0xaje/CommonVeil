@@ -42,6 +42,8 @@ import {
   onDeploymentFailed,
   onDeploymentReset,
   mapDeploymentError,
+  mapDeploymentInspectionError,
+  DEPLOYMENT_VERIFICATION_ERROR_MESSAGES,
 } from '../src/role-workspace-state.ts';
 import {
   bytesToHex,
@@ -1204,4 +1206,64 @@ test('49. Incompatible ledger and registrar-key mismatch are hard failures, not 
   // INCOMPATIBLE_CONTRACT and key mismatch must NOT be classified as indexer lag
   assert.equal(isIndexerLagError(incompatibleErr), false);
   assert.equal(isIndexerLagError(keyMismatchErr), false);
+});
+
+// 50. Post-deployment verification error sanitization prevents internal leaks
+test('50. Post-deployment verification error sanitization prevents internal leaks', () => {
+  // Incompatible contract
+  const incompatibleErr = new ContractSessionError(
+    'INCOMPATIBLE_CONTRACT',
+    'Raw Compact state decoding failed at offset 0x48: schema mismatch',
+  );
+  assert.equal(
+    mapDeploymentInspectionError(incompatibleErr),
+    DEPLOYMENT_VERIFICATION_ERROR_MESSAGES.INCOMPATIBLE_CONTRACT,
+  );
+
+  // Registrar key mismatch
+  const keyMismatchErr = new ContractSessionError(
+    'INCOMPATIBLE_CONTRACT',
+    'Deployed contract registrar key does not match active secret.',
+  );
+  assert.equal(
+    mapDeploymentInspectionError(keyMismatchErr),
+    DEPLOYMENT_VERIFICATION_ERROR_MESSAGES.REGISTRAR_KEY_MISMATCH,
+  );
+
+  // Raw unexpected exception with internals/URLs/stack
+  const rawLeakErr = new Error(
+    'GraphQL client request to https://preprod-indexer.midnight.network/v1/graphql failed with status 502 Bad Gateway at QueryExecutor.ts:89',
+  );
+  const sanitized = mapDeploymentInspectionError(rawLeakErr);
+  assert.equal(
+    sanitized,
+    DEPLOYMENT_VERIFICATION_ERROR_MESSAGES.GENERIC_VERIFICATION_FAILURE,
+  );
+  assert.equal(sanitized.includes('https://'), false);
+  assert.equal(sanitized.includes('502'), false);
+  assert.equal(sanitized.includes('QueryExecutor'), false);
+});
+
+// 51. Retry-indexer inspection error sanitization maps hard failures and unknown errors safely
+test('51. Retry-indexer inspection error sanitization maps hard failures and unknown errors safely', () => {
+  // Key mismatch string error
+  const keyMismatch = 'Contract registrar secret does not match';
+  assert.equal(
+    mapDeploymentInspectionError(keyMismatch),
+    DEPLOYMENT_VERIFICATION_ERROR_MESSAGES.REGISTRAR_KEY_MISMATCH,
+  );
+
+  // Incompatible ledger string error
+  const ledgerMismatch = 'Ledger state incompatible with protocol version';
+  assert.equal(
+    mapDeploymentInspectionError(ledgerMismatch),
+    DEPLOYMENT_VERIFICATION_ERROR_MESSAGES.INCOMPATIBLE_CONTRACT,
+  );
+
+  // Unknown connector error
+  const connectorErr = new Error('RPC endpoint unreachable');
+  assert.equal(
+    mapDeploymentInspectionError(connectorErr),
+    DEPLOYMENT_VERIFICATION_ERROR_MESSAGES.GENERIC_VERIFICATION_FAILURE,
+  );
 });

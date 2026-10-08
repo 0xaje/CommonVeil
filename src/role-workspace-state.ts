@@ -1061,3 +1061,59 @@ export function mapDeploymentError(error: unknown): string {
 
   return 'The deployment transaction could not be completed. Check the network connection and try again.';
 }
+
+/**
+ * Fixed safe messages for post-deployment verification and retry inspection.
+ * Never leaks stack traces, endpoints, raw decoder errors, tokens, or connector internals.
+ */
+export const DEPLOYMENT_VERIFICATION_ERROR_MESSAGES = {
+  INCOMPATIBLE_CONTRACT: 'The contract at this address does not expose a compatible CommonVeil ledger.',
+  REGISTRAR_KEY_MISMATCH: 'Deployed contract registrar public key does not match the active registrar secret.',
+  GENERIC_VERIFICATION_FAILURE: 'Contract deployment verification failed. Check the network status and try again.',
+} as const;
+
+/**
+ * Sanitizes errors encountered during the post-deployment verification inspection.
+ * Maps ContractSessionError codes to fixed safe messages.
+ * Never passes raw error messages, URLs, or internal exceptions to UI state.
+ */
+export function mapDeploymentInspectionError(error: unknown): string {
+  if (error instanceof ContractSessionError) {
+    if (error.code === 'INCOMPATIBLE_CONTRACT') {
+      const msg = error.message.toLowerCase();
+      if (msg.includes('registrar') || msg.includes('secret') || msg.includes('key')) {
+        return DEPLOYMENT_VERIFICATION_ERROR_MESSAGES.REGISTRAR_KEY_MISMATCH;
+      }
+      return DEPLOYMENT_VERIFICATION_ERROR_MESSAGES.INCOMPATIBLE_CONTRACT;
+    }
+    return CONTRACT_SESSION_ERROR_MESSAGES[error.code] ?? DEPLOYMENT_VERIFICATION_ERROR_MESSAGES.GENERIC_VERIFICATION_FAILURE;
+  }
+
+  if (error && typeof error === 'object' && 'code' in error && typeof (error as any).code === 'string') {
+    const code = (error as any).code as ContractSessionErrorCode;
+    if (code === 'INCOMPATIBLE_CONTRACT') {
+      return DEPLOYMENT_VERIFICATION_ERROR_MESSAGES.INCOMPATIBLE_CONTRACT;
+    }
+    if (code in CONTRACT_SESSION_ERROR_MESSAGES) {
+      return CONTRACT_SESSION_ERROR_MESSAGES[code];
+    }
+  }
+
+  const raw = (
+    error instanceof Error
+      ? error.message
+      : typeof error === 'string'
+        ? error
+        : ''
+  ).toLowerCase();
+
+  if (raw.includes('registrar') && (raw.includes('mismatch') || raw.includes('key') || raw.includes('secret'))) {
+    return DEPLOYMENT_VERIFICATION_ERROR_MESSAGES.REGISTRAR_KEY_MISMATCH;
+  }
+
+  if (raw.includes('incompatible') || raw.includes('ledger') || raw.includes('decode')) {
+    return DEPLOYMENT_VERIFICATION_ERROR_MESSAGES.INCOMPATIBLE_CONTRACT;
+  }
+
+  return DEPLOYMENT_VERIFICATION_ERROR_MESSAGES.GENERIC_VERIFICATION_FAILURE;
+}

@@ -68,6 +68,8 @@ import {
   onDeploymentFailed,
   onDeploymentReset,
   mapDeploymentError,
+  mapDeploymentInspectionError,
+  DEPLOYMENT_VERIFICATION_ERROR_MESSAGES,
 } from './role-workspace-state';
 import './role-workspace.css';
 
@@ -1021,12 +1023,9 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
             }),
           );
         } else {
-          // Hard failure: incompatible contract or key mismatch
-          const errMessage =
-            inspectError instanceof Error
-              ? inspectError.message
-              : 'Deployed contract ledger is incompatible with active configuration.';
-          setDeploymentUi((prev) => onDeploymentFailed(prev, errMessage));
+          // Hard failure: sanitized fixed message, never leaking stack/endpoints/decoder/internals
+          const safeErrorMsg = mapDeploymentInspectionError(inspectError);
+          setDeploymentUi((prev) => onDeploymentFailed(prev, safeErrorMsg));
         }
       }
     } catch (deployError: unknown) {
@@ -1080,7 +1079,7 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
       const matches = verifyRegistrarSecret(session.publicState, plaintextSecretRef.current);
       if (!matches) {
         setDeploymentUi((prev) =>
-          onDeploymentFailed(prev, 'Deployed contract registrar key does not match active secret.'),
+          onDeploymentFailed(prev, DEPLOYMENT_VERIFICATION_ERROR_MESSAGES.REGISTRAR_KEY_MISMATCH),
         );
         return;
       }
@@ -1120,12 +1119,14 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
           ? inspectError.code
           : (inspectError as any)?.code;
 
-      if (errorCode === 'INCOMPATIBLE_CONTRACT') {
-        setDeploymentUi((prev) =>
-          onDeploymentFailed(prev, 'The contract at this address does not expose a compatible CommonVeil ledger.'),
-        );
+      if (errorCode === 'CONTRACT_NOT_FOUND' || errorCode === 'INDEXER_QUERY_FAILED') {
+        // CONTRACT_NOT_FOUND and INDEXER_QUERY_FAILED remain retryable (stay in finalized-indexing)
+        return;
       }
-      // CONTRACT_NOT_FOUND or INDEXER_QUERY_FAILED: stay in finalized-indexing state
+
+      // Hard failure (INCOMPATIBLE_CONTRACT, key mismatch, or unknown error): map to fixed safe error
+      const safeErrorMsg = mapDeploymentInspectionError(inspectError);
+      setDeploymentUi((prev) => onDeploymentFailed(prev, safeErrorMsg));
     }
   };
 
