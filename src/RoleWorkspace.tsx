@@ -1615,6 +1615,14 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
     const operationToken = ++admissionGenerationRef.current;
     activeAdmissionTokenRef.current = operationToken;
 
+    // Development diagnostic hook (no secrets, credentials, tokens, or private state)
+    const logAdmissionDiagnostic = (stage: string, detail?: { errorClass?: string; errorMessage?: string }) => {
+      if (typeof window !== 'undefined' && (window as unknown as { __COMMONVEIL_DEV__?: boolean }).__COMMONVEIL_DEV__) {
+        console.debug(`[admission:${stage}]`, detail ?? '');
+      }
+    };
+
+    logAdmissionDiagnostic('prereqs-validated');
     setAdmissionUi((prev) => onAdmissionWalletRequest(prev));
 
     try {
@@ -1623,17 +1631,23 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
       const adminSecretBytes = plaintextSecretRef.current;
       const credentialBytes = hexToBytes(credentialHex);
 
-      // Call genuine registerMember circuit via installed Midnight SDK
+      logAdmissionDiagnostic('circuit-invoke-start');
+
+      // Call genuine registerMember circuit via installed Midnight SDK.
+      // CommonVeil has vacant witness private state (Contract<undefined>).
+      // We omit privateStateId to invoke getContractPublicStates and avoid
+      // querying uninitialized private state store before proving.
       const finalized = await submitCallTx(
         wallet.providers,
         {
           compiledContract: CompiledCommonVeilContract,
           contractAddress: attachedAddress,
-          privateStateId: PRIVATE_STATE_ID,
           circuitId: 'registerMember',
           args: [adminSecretBytes, credentialBytes],
         },
       );
+
+      logAdmissionDiagnostic('circuit-finalized');
 
       if (!isMounted.current || activeAdmissionTokenRef.current !== operationToken) {
         return;
@@ -1647,6 +1661,7 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
 
       // Automatically inspect public ledger to verify memberCredentials contains credential
       try {
+        logAdmissionDiagnostic('inspect-ledger-start');
         const session = await queryCommonVeilContract(wallet.providers, attachedAddress);
         if (!isMounted.current || activeAdmissionTokenRef.current !== operationToken) {
           return;
@@ -1654,6 +1669,7 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
 
         const isMember = session.hasMemberCredential(credentialBytes);
         if (!isMember) {
+          logAdmissionDiagnostic('ledger-indexing-lag');
           // Finalized on-chain, but indexer ledger not yet reflecting it - preserve txId
           setAdmissionUi((prev) => onAdmissionFinalizedIndexing(prev, txId));
           return;
@@ -1666,6 +1682,7 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
         });
 
         activeAdmissionTokenRef.current = null;
+        logAdmissionDiagnostic('admission-confirmed');
         setAdmissionUi((prev) => onAdmissionCompleted(prev, receipt));
         setAdmissionNotice(
           `Member credential ${credentialHex.slice(0, 10)}… admitted successfully on Midnight Preprod.`,
@@ -1686,6 +1703,11 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
             ? inspectError.code
             : (inspectError as { code?: string } | null)?.code;
 
+        logAdmissionDiagnostic('inspect-ledger-error', {
+          errorClass: inspectError instanceof Error ? inspectError.name : typeof inspectError,
+          errorMessage: inspectError instanceof Error ? inspectError.message : String(inspectError),
+        });
+
         if (errorCode === 'CONTRACT_NOT_FOUND' || errorCode === 'INDEXER_QUERY_FAILED') {
           // Indexer query lag after finalization: transition to finalized-indexing preserving genuine txId
           setAdmissionUi((prev) => onAdmissionFinalizedIndexing(prev, txId));
@@ -1702,6 +1724,11 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
         return;
       }
       activeAdmissionTokenRef.current = null;
+
+      logAdmissionDiagnostic('circuit-invoke-error', {
+        errorClass: admitError instanceof Error ? admitError.name : typeof admitError,
+        errorMessage: admitError instanceof Error ? admitError.message : String(admitError),
+      });
 
       const raw = (
         admitError instanceof Error

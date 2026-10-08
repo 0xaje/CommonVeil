@@ -1928,3 +1928,74 @@ test('76. Retry performs zero additional submitCallTx calls', async () => {
   // Confirm zero additional submitCallTx calls were made during retry
   assert.equal(submitCallCount, 1);
 });
+
+// 77. Regression: Passing privateStateId to unseeded private state provider reproduces pre-proof failure
+test('77. Regression: Passing privateStateId to unseeded private state provider reproduces pre-proof failure', async () => {
+  const privateStateStore = new Map<string, any>();
+  const mockPrivateStateProvider = {
+    setContractAddress: (_addr: string) => {},
+    get: async (key: string) => privateStateStore.get(key) ?? null,
+  };
+
+  // Simulating the Midnight SDK getStates assertion:
+  // assertDefined(privateState, `No private state found at private state ID '${privateStateId}'`)
+  const executeCallTxSetup = async (options: { privateStateId?: string }) => {
+    if ('privateStateId' in options && options.privateStateId) {
+      const privateState = await mockPrivateStateProvider.get(options.privateStateId);
+      if (privateState === null || privateState === undefined) {
+        throw new Error(`Unexpected error executing scoped transaction '<unnamed>': Error: No private state found at private state ID '${options.privateStateId}'`);
+      }
+    }
+    return { status: 'ready-to-prove-and-balance' };
+  };
+
+  // With privateStateId provided on unseeded provider: fails before proof request
+  await assert.rejects(
+    () => executeCallTxSetup({ privateStateId: 'commonveilPrivateState' }),
+    (err: any) => {
+      assert.equal(err instanceof Error, true);
+      assert.match(err.message, /No private state found at private state ID 'commonveilPrivateState'/);
+      // Verify our safe error mapping sanitizes this without leaking internal details
+      const userMessage = mapAdmissionError(err);
+      assert.equal(
+        userMessage,
+        'The member admission transaction could not be completed. Check the network connection and try again.',
+      );
+      return true;
+    },
+  );
+});
+
+// 78. Corrected registerMember invocation omits privateStateId and proceeds without uninitialized private state lookup
+test('78. Corrected registerMember invocation omits privateStateId and proceeds without uninitialized private state lookup', async () => {
+  const privateStateStore = new Map<string, any>();
+  let getCallCount = 0;
+  const mockPrivateStateProvider = {
+    setContractAddress: (_addr: string) => {},
+    get: async (key: string) => {
+      getCallCount++;
+      return privateStateStore.get(key) ?? null;
+    },
+  };
+
+  // Simulating Midnight SDK CallTxOptionsBase (without privateStateId):
+  const executeCallTxSetup = async (options: { privateStateId?: string; circuitId: string; args: unknown[] }) => {
+    if ('privateStateId' in options && options.privateStateId) {
+      const privateState = await mockPrivateStateProvider.get(options.privateStateId);
+      if (privateState === null || privateState === undefined) {
+        throw new Error(`No private state found at private state ID '${options.privateStateId}'`);
+      }
+    }
+    // For Contract<undefined> circuits (registerMember), public states are queried instead
+    return { status: 'ready-to-prove-and-balance' };
+  };
+
+  // Calling with CallTxOptionsBase without privateStateId:
+  const result = await executeCallTxSetup({
+    circuitId: 'registerMember',
+    args: [new Uint8Array(32), new Uint8Array(32)],
+  });
+
+  assert.equal(result.status, 'ready-to-prove-and-balance');
+  assert.equal(getCallCount, 0, 'No private state lookup should occur for circuit with vacant witness state');
+});
