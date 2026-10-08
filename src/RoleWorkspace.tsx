@@ -107,6 +107,7 @@ import {
   onBackupRecoveryTested,
   canExportMemberAdmissionPackage,
   canExportCertifierKeyPackage,
+  triggerBlobDownload,
 } from './role-workspace-state';
 import './role-workspace.css';
 
@@ -685,15 +686,10 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
         throw new Error('Pre-download backup validation failed: derived admin key mismatch.');
       }
 
-      const blob = new Blob([JSON.stringify(envelope, null, 2)], {
-        type: 'application/json',
-      });
-      const url = URL.createObjectURL(blob);
-      const anchor = document.createElement('a');
-      anchor.href = url;
-      anchor.download = `commonveil-registrar-backup-${Date.now()}.json`;
-      anchor.click();
-      URL.revokeObjectURL(url);
+      triggerBlobDownload(
+        JSON.stringify(envelope, null, 2),
+        `commonveil-registrar-backup-${Date.now()}.json`,
+      );
 
       setExportPassphrase('');
       setExportConfirmPassphrase('');
@@ -996,15 +992,10 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
         throw new Error('Pre-download backup validation failed: derived certifier key mismatch.');
       }
 
-      const blob = new Blob([JSON.stringify(envelope, null, 2)], {
-        type: 'application/json',
-      });
-      const url = URL.createObjectURL(blob);
-      const anchor = document.createElement('a');
-      anchor.href = url;
-      anchor.download = `commonveil-certifier-backup-${Date.now()}.json`;
-      anchor.click();
-      URL.revokeObjectURL(url);
+      triggerBlobDownload(
+        JSON.stringify(envelope, null, 2),
+        `commonveil-certifier-backup-${Date.now()}.json`,
+      );
 
       setCertifierExportPassphrase('');
       setCertifierExportConfirmPassphrase('');
@@ -1176,15 +1167,10 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
       );
       const pkg = buildCertifierKeyPackage(derivedPublicKeyBytes);
 
-      const blob = new Blob([JSON.stringify(pkg, null, 2)], {
-        type: 'application/json',
-      });
-      const url = URL.createObjectURL(blob);
-      const anchor = document.createElement('a');
-      anchor.href = url;
-      anchor.download = `commonveil-certifier-key-${Date.now()}.json`;
-      anchor.click();
-      URL.revokeObjectURL(url);
+      triggerBlobDownload(
+        JSON.stringify(pkg, null, 2),
+        `commonveil-certifier-key-${Date.now()}.json`,
+      );
 
       setCertifierNotice(
         'Public Certifier Key Package exported. Share this package with the Registrar for contract deployment.',
@@ -1465,15 +1451,10 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
     if (!deploymentUi.receipt) return;
     try {
       const validated = validateDeploymentReceipt(deploymentUi.receipt);
-      const blob = new Blob([JSON.stringify(validated, null, 2)], {
-        type: 'application/json',
-      });
-      const url = URL.createObjectURL(blob);
-      const anchor = document.createElement('a');
-      anchor.href = url;
-      anchor.download = `commonveil-deployment-receipt-${validated.contractAddress.slice(0, 10)}.json`;
-      anchor.click();
-      URL.revokeObjectURL(url);
+      triggerBlobDownload(
+        JSON.stringify(validated, null, 2),
+        `commonveil-deployment-receipt-${validated.contractAddress.slice(0, 10)}.json`,
+      );
     } catch (err: unknown) {
       setDeploymentUi((prev) =>
         onDeploymentFailed(prev, 'Could not create valid deployment receipt.'),
@@ -1623,15 +1604,10 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
         throw new Error('Pre-download backup validation failed: derived member credential mismatch.');
       }
 
-      const blob = new Blob([JSON.stringify(envelope, null, 2)], {
-        type: 'application/json',
-      });
-      const url = URL.createObjectURL(blob);
-      const anchor = document.createElement('a');
-      anchor.href = url;
-      anchor.download = `commonveil-member-backup-${Date.now()}.json`;
-      anchor.click();
-      URL.revokeObjectURL(url);
+      triggerBlobDownload(
+        JSON.stringify(envelope, null, 2),
+        `commonveil-member-backup-${Date.now()}.json`,
+      );
 
       setMemberExportPassphrase('');
       setMemberExportConfirmPassphrase('');
@@ -1820,15 +1796,10 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
         credentialBytes,
       );
 
-      const blob = new Blob([JSON.stringify(admissionPkg, null, 2)], {
-        type: 'application/json',
-      });
-      const url = URL.createObjectURL(blob);
-      const anchor = document.createElement('a');
-      anchor.href = url;
-      anchor.download = `commonveil-member-admission-${admissionPkg.memberCredential.slice(0, 10)}.json`;
-      anchor.click();
-      URL.revokeObjectURL(url);
+      triggerBlobDownload(
+        JSON.stringify(admissionPkg, null, 2),
+        `commonveil-member-admission-${admissionPkg.memberCredential.slice(0, 10)}.json`,
+      );
 
       setMemberNotice(
         'Restricted Member Admission Package downloaded. Send this file to the Registrar to request admission.',
@@ -2156,15 +2127,10 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
     if (!admissionUi.receipt) return;
     try {
       const validated = validateMemberAdmissionReceipt(admissionUi.receipt);
-      const blob = new Blob([JSON.stringify(validated, null, 2)], {
-        type: 'application/json',
-      });
-      const url = URL.createObjectURL(blob);
-      const anchor = document.createElement('a');
-      anchor.href = url;
-      anchor.download = `commonveil-member-admission-receipt-${validated.admittedMemberCredential.slice(0, 10)}.json`;
-      anchor.click();
-      URL.revokeObjectURL(url);
+      triggerBlobDownload(
+        JSON.stringify(validated, null, 2),
+        `commonveil-member-admission-receipt-${validated.admittedMemberCredential.slice(0, 10)}.json`,
+      );
     } catch (err: unknown) {
       setAdmissionUi((prev) =>
         onAdmissionFailed(prev, 'Could not create valid admission receipt.'),
@@ -3666,6 +3632,12 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
                     >
                       Deploy CommonVeil Contract
                     </button>
+
+                    {registrarUi.backupRecoveryStatus !== 'recovery-tested' && (
+                      <p className="form-hint-text">
+                        Deploying the CommonVeil contract requires testing and verifying your encrypted backup in Step 03 first.
+                      </p>
+                    )}
                   </div>
                 )}
             </article>

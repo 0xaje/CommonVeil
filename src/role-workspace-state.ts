@@ -237,6 +237,42 @@ export function formatDust(raw: bigint): string {
   return `${whole}.${fraction}`;
 }
 
+/**
+ * Safely triggers a browser file download from a Blob or JSON string,
+ * appending the anchor temporarily to the DOM, invoking .click(), removing it,
+ * and asynchronously revoking the object URL after the browser has begun processing.
+ * Does not create persistent storage.
+ */
+export function triggerBlobDownload(
+  blobOrText: Blob | string,
+  filename: string,
+  mimeType: string = 'application/json',
+  revokeDelayMs: number = 60_000,
+): () => void {
+  const blob = typeof blobOrText === 'string'
+    ? new Blob([blobOrText], { type: mimeType })
+    : blobOrText;
+
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.style.display = 'none';
+  document.body.appendChild(anchor);
+  anchor.click();
+  document.body.removeChild(anchor);
+
+  // Safely defer revocation so browser download queue processes the blob
+  const timer = setTimeout(() => {
+    URL.revokeObjectURL(url);
+  }, revokeDelayMs);
+
+  return () => {
+    clearTimeout(timer);
+    URL.revokeObjectURL(url);
+  };
+}
+
 // ============================================================================
 // Registrar Secret & Backup Pure Helpers
 // ============================================================================
@@ -1150,7 +1186,7 @@ export function canInitiateDeployment(params: {
   readonly isConnected: boolean;
   readonly hasSecret: boolean;
   readonly backupConfirmed: boolean;
-  readonly backupRecoveryStatus?: BackupRecoveryStatus;
+  readonly backupRecoveryStatus: BackupRecoveryStatus;
   readonly isDeploying: boolean;
   readonly proofProviderAvailable: boolean;
   readonly certifierPublicKey: string | null;
@@ -1160,7 +1196,7 @@ export function canInitiateDeployment(params: {
     isHex(params.certifierPublicKey, 32) &&
     params.certifierPublicKey.toLowerCase() !== '00'.repeat(32);
 
-  const isRecoveryTested = params.backupRecoveryStatus ? params.backupRecoveryStatus === 'recovery-tested' : params.backupConfirmed;
+  const isRecoveryTested = params.backupRecoveryStatus === 'recovery-tested';
 
   return (
     params.isConnected &&

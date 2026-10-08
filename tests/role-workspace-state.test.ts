@@ -19,6 +19,7 @@ import {
   zeroizeBytes,
   REGISTRAR_BACKUP_SCHEMA,
   type RegistrarSecretUiState,
+  type BackupRecoveryStatus,
   INITIAL_REGISTRAR_SECRET_UI_STATE,
   onSecretGeneratedOrImported,
   onSecretRestoredFromBackup,
@@ -87,6 +88,7 @@ import {
   CERTIFIER_BACKUP_SCHEMA,
   INITIAL_CERTIFIER_SECRET_UI_STATE,
   generateCertifierSecret,
+  triggerBlobDownload,
 } from '../src/role-workspace-state.ts';
 import {
   bytesToHex,
@@ -821,6 +823,7 @@ test('37. Deployment disabled without wallet, secret, backup confirmation, or va
     isConnected: true,
     hasSecret: true,
     backupConfirmed: true,
+    backupRecoveryStatus: 'recovery-tested' as const,
     isDeploying: false,
     proofProviderAvailable: true,
     certifierPublicKey: dummyCertifierKey,
@@ -833,8 +836,12 @@ test('37. Deployment disabled without wallet, secret, backup confirmation, or va
   // Missing secret
   assert.equal(canInitiateDeployment({ ...fullyReady, hasSecret: false }), false);
 
-  // Missing backup confirmation
+  // Missing backup confirmation checkbox (both recovery-tested and explicit checkbox required)
   assert.equal(canInitiateDeployment({ ...fullyReady, backupConfirmed: false }), false);
+
+  // Untested backup recovery status blocks deployment even if backupConfirmed checkbox is true
+  assert.equal(canInitiateDeployment({ ...fullyReady, backupRecoveryStatus: 'created-untested' }), false);
+  assert.equal(canInitiateDeployment({ ...fullyReady, backupRecoveryStatus: 'none' }), false);
 
   // Already deploying
   assert.equal(canInitiateDeployment({ ...fullyReady, isDeploying: true }), false);
@@ -1046,6 +1053,7 @@ test('43. Finalized-but-not-indexed state and retry inspection without redeployi
       isConnected: true,
       hasSecret: true,
       backupConfirmed: true,
+      backupRecoveryStatus: 'recovery-tested',
       isDeploying: true, // finalized-indexing is treated as busy/isDeploying
       proofProviderAvailable: true,
       certifierPublicKey: '44'.repeat(32),
@@ -2185,10 +2193,30 @@ test('86. Registrar deployment gating enforces recovery-tested backup', () => {
     false,
   );
 
-  // Enabled only when 'recovery-tested'
+  // Blocked if backupRecoveryStatus is undefined/omitted at runtime (no fallback to backupConfirmed)
   assert.equal(
     canInitiateDeployment({
       ...baseParams,
+      backupRecoveryStatus: undefined as unknown as BackupRecoveryStatus,
+    }),
+    false,
+  );
+
+  // Blocked even if recovery-tested when backupConfirmed checkbox is false (both are mandatory)
+  assert.equal(
+    canInitiateDeployment({
+      ...baseParams,
+      backupConfirmed: false,
+      backupRecoveryStatus: 'recovery-tested',
+    }),
+    false,
+  );
+
+  // Enabled only when 'recovery-tested' AND backupConfirmed is true
+  assert.equal(
+    canInitiateDeployment({
+      ...baseParams,
+      backupConfirmed: true,
       backupRecoveryStatus: 'recovery-tested',
     }),
     true,
@@ -2257,5 +2285,116 @@ test('88. Member admission package export gating enforces recovery-tested backup
       backupRecoveryStatus: 'recovery-tested',
     }),
     true,
+  );
+});
+
+// 89. Asynchronous deferred revocation and anchor cleanup in triggerBlobDownload helper
+test('89. Asynchronous deferred revocation and anchor cleanup in triggerBlobDownload helper', async () => {
+  let createdUrl = '';
+  let revokedUrls: string[] = [];
+  let clicked = false;
+  let appendedChild = false;
+  let removedChild = false;
+
+  // Mock DOM environment for node test runner
+  const originalCreateObjectURL = URL.createObjectURL;
+  const originalRevokeObjectURL = URL.revokeObjectURL;
+  const originalDocument = globalThis.document;
+
+  try {
+    URL.createObjectURL = (blob: Blob) => {
+      createdUrl = `blob:test-${Date.now()}`;
+      return createdUrl;
+    };
+    URL.revokeObjectURL = (url: string) => {
+      revokedUrls.push(url);
+    };
+
+    const mockAnchor = {
+      href: '',
+      download: '',
+      style: { display: '' },
+      click() {
+        clicked = true;
+      },
+    };
+
+    globalThis.document = {
+      body: {
+        appendChild(node: any) {
+          appendedChild = true;
+          return node;
+        },
+        removeChild(node: any) {
+          removedChild = true;
+          return node;
+        },
+      },
+      createElement(tag: string) {
+        if (tag === 'a') return mockAnchor;
+        throw new Error(`Unexpected tag: ${tag}`);
+      },
+    } as any;
+
+    // Use a very short delay (5ms) for the test
+    const cleanup = triggerBlobDownload('{"test":true}', 'test-file.json', 'application/json', 5);
+
+    // Synchronous execution checks: anchor was appended, clicked, removed, but URL not yet revoked
+    assert.equal(appendedChild, true);
+    assert.equal(clicked, true);
+    assert.equal(removedChild, true);
+    assert.equal(mockAnchor.download, 'test-file.json');
+    assert.equal(revokedUrls.length, 0, 'Object URL must not be revoked synchronously upon click');
+
+    // Wait for the asynchronous deferred revocation timer
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(revokedUrls.includes(createdUrl), true, 'Object URL must be revoked after timeout');
+  } finally {
+    URL.createObjectURL = originalCreateObjectURL;
+    URL.revokeObjectURL = originalRevokeObjectURL;
+    globalThis.document = originalDocument;
+  }
+});
+
+// 90. Strict deployment gating rejects omission and demands both recovery-tested and confirmation
+test('90. Strict deployment gating rejects omission and demands both recovery-tested and confirmation', () => {
+  const readyParams = {
+    isConnected: true,
+    hasSecret: true,
+    backupConfirmed: true,
+    backupRecoveryStatus: 'recovery-tested' as const,
+    isDeploying: false,
+    proofProviderAvailable: true,
+    certifierPublicKey: 'ee'.repeat(32),
+  };
+
+  // Valid configuration passes
+  assert.equal(canInitiateDeployment(readyParams), true);
+
+  // Status = none is strictly rejected
+  assert.equal(
+    canInitiateDeployment({ ...readyParams, backupRecoveryStatus: 'none' }),
+    false,
+  );
+
+  // Status = created-untested is strictly rejected
+  assert.equal(
+    canInitiateDeployment({ ...readyParams, backupRecoveryStatus: 'created-untested' }),
+    false,
+  );
+
+  // Missing status / undefined rejected even if backupConfirmed is true
+  assert.equal(
+    canInitiateDeployment({
+      ...readyParams,
+      backupRecoveryStatus: undefined as unknown as BackupRecoveryStatus,
+    }),
+    false,
+  );
+
+  // recovery-tested alone without explicit backupConfirmed checkbox rejected
+  assert.equal(
+    canInitiateDeployment({ ...readyParams, backupConfirmed: false }),
+    false,
   );
 });
