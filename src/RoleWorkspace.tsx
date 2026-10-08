@@ -98,6 +98,9 @@ import {
   onAdmissionReset,
   mapMemberOperationError,
   mapAdmissionError,
+  mapAdmissionInspectionError,
+  canInitiateAdmission,
+  ADMISSION_VERIFICATION_ERROR_MESSAGES,
 } from './role-workspace-state';
 import './role-workspace.css';
 
@@ -1506,6 +1509,24 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
     const file = e.target.files?.[0];
     if (!file) return;
 
+    if (
+      !canInitiateAdmission({
+        isConnected: !!wallet,
+        attachedContractAddress: contractState.attachedAddress,
+        hasSecret: registrarUi.hasSecret,
+        verificationStatus: registrarUi.verificationStatus,
+        isAdmitting,
+      })
+    ) {
+      setAdmissionUi((prev) =>
+        onAdmissionFailed(
+          prev,
+          'Member admission package import requires a connected wallet on Preprod, an attached contract, and an active verified Registrar secret.',
+        ),
+      );
+      return;
+    }
+
     const reader = new FileReader();
     reader.onload = (event) => {
       const content = event.target?.result;
@@ -1514,9 +1535,14 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
         const parsed = JSON.parse(content);
         const validated = validateMemberAdmissionPackage(parsed);
 
-        // State transition with pure contractAddress check
+        // State transition with pure contractAddress check and verified authority
         setAdmissionUi((prev) =>
-          onAdmissionPackageImported(prev, validated, contractState.attachedAddress),
+          onAdmissionPackageImported(
+            prev,
+            validated,
+            contractState.attachedAddress,
+            registrarUi.verificationStatus,
+          ),
         );
       } catch (err: unknown) {
         setAdmissionUi((prev) =>
@@ -1552,6 +1578,24 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
       !admissionUi.importedPackage ||
       admissionUi.stage !== 'confirming'
     ) {
+      return;
+    }
+
+    if (
+      !canInitiateAdmission({
+        isConnected: !!wallet,
+        attachedContractAddress: contractState.attachedAddress,
+        hasSecret: registrarUi.hasSecret,
+        verificationStatus: registrarUi.verificationStatus,
+        isAdmitting,
+      })
+    ) {
+      setAdmissionUi((prev) =>
+        onAdmissionFailed(
+          prev,
+          'Registrar authority must be verified against the attached contract before admitting members.',
+        ),
+      );
       return;
     }
 
@@ -1610,8 +1654,8 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
 
         const isMember = session.hasMemberCredential(credentialBytes);
         if (!isMember) {
-          // Finalized on-chain, but indexer ledger not yet reflecting it
-          setAdmissionUi((prev) => onAdmissionFinalizedIndexing(prev));
+          // Finalized on-chain, but indexer ledger not yet reflecting it - preserve txId
+          setAdmissionUi((prev) => onAdmissionFinalizedIndexing(prev, txId));
           return;
         }
 
@@ -1636,8 +1680,22 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
         if (!isMounted.current || activeAdmissionTokenRef.current !== operationToken) {
           return;
         }
-        // Indexer query lag after finalization: transition to finalized-indexing without resubmission
-        setAdmissionUi((prev) => onAdmissionFinalizedIndexing(prev));
+
+        const errorCode =
+          inspectError instanceof ContractSessionError
+            ? inspectError.code
+            : (inspectError as { code?: string } | null)?.code;
+
+        if (errorCode === 'CONTRACT_NOT_FOUND' || errorCode === 'INDEXER_QUERY_FAILED') {
+          // Indexer query lag after finalization: transition to finalized-indexing preserving genuine txId
+          setAdmissionUi((prev) => onAdmissionFinalizedIndexing(prev, txId));
+        } else {
+          // Hard failure (INCOMPATIBLE_CONTRACT, key mismatch, unknown decoder/provider errors)
+          activeAdmissionTokenRef.current = null;
+          setAdmissionUi((prev) =>
+            onAdmissionFailed(prev, mapAdmissionInspectionError(inspectError)),
+          );
+        }
       }
     } catch (admitError: unknown) {
       if (!isMounted.current || activeAdmissionTokenRef.current !== operationToken) {
@@ -1693,10 +1751,11 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
         return;
       }
 
+      // Build receipt using preserved genuine admissionTxId
       const receipt: MemberAdmissionReceipt = buildMemberAdmissionReceipt({
         contractAddress: attachedAddress,
         memberCredential: credentialHex,
-        admissionTxId: null, // Indexer retry does not re-fetch txId
+        admissionTxId: admissionUi.admissionTxId,
       });
 
       setAdmissionUi((prev) => onAdmissionCompleted(prev, receipt));
@@ -1709,7 +1768,21 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
         inspectedState: session.publicState,
       }));
     } catch (inspectError: unknown) {
-      // Retry query failed; remain in finalized-indexing
+      if (!isMounted.current) return;
+      const errorCode =
+        inspectError instanceof ContractSessionError
+          ? inspectError.code
+          : (inspectError as { code?: string } | null)?.code;
+
+      if (errorCode === 'CONTRACT_NOT_FOUND' || errorCode === 'INDEXER_QUERY_FAILED') {
+        // Retry query failed due to lookup/lag; stay in finalized-indexing
+        return;
+      }
+
+      // Hard failure (incompatible contract or unknown error)
+      setAdmissionUi((prev) =>
+        onAdmissionFailed(prev, mapAdmissionInspectionError(inspectError)),
+      );
     }
   };
 
@@ -2992,13 +3065,24 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
                     id="member-admission-file-input"
                     type="file"
                     accept=".json,application/json"
-                    disabled={!contractState.attachedAddress || !registrarUi.hasSecret}
+                    disabled={
+                      !canInitiateAdmission({
+                        isConnected: !!wallet,
+                        attachedContractAddress: contractState.attachedAddress,
+                        hasSecret: registrarUi.hasSecret,
+                        verificationStatus: registrarUi.verificationStatus,
+                        isAdmitting,
+                      })
+                    }
                     onChange={handleAdmissionPackageSelect}
                   />
 
-                  {(!contractState.attachedAddress || !registrarUi.hasSecret) && (
+                  {(!wallet ||
+                    !contractState.attachedAddress ||
+                    !registrarUi.hasSecret ||
+                    registrarUi.verificationStatus !== 'verified') && (
                     <p className="form-hint-text warning-text">
-                      Requires an attached verified contract and active Registrar secret before importing admission packages.
+                      Requires a connected 1AM wallet on Preprod, an attached contract, and an active verified Registrar secret before importing admission packages.
                     </p>
                   )}
                 </div>
@@ -3031,7 +3115,15 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
                     <button
                       type="button"
                       className="action-button primary"
-                      disabled={isAdmitting}
+                      disabled={
+                        !canInitiateAdmission({
+                          isConnected: !!wallet,
+                          attachedContractAddress: contractState.attachedAddress,
+                          hasSecret: registrarUi.hasSecret,
+                          verificationStatus: registrarUi.verificationStatus,
+                          isAdmitting,
+                        })
+                      }
                       onClick={handleConfirmAndAdmitMember}
                       aria-label="Confirm member registration and submit transaction via 1AM"
                     >
@@ -3053,8 +3145,8 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
               {/* In-Flight States */}
               {admissionUi.stage === 'requesting-wallet' && (
                 <div className="status-callout warning">
-                  <span className="status-indicator warning">1AM Approval Required</span>
-                  <p>Please review and approve the member admission transaction in the 1AM popup.</p>
+                  <span className="status-indicator warning">Preparing 1AM Transaction</span>
+                  <p>Preparing proof and transaction. Review 1AM when the approval request appears.</p>
                 </div>
               )}
 

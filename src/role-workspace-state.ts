@@ -1464,6 +1464,7 @@ export type RegistrarAdmissionStage =
 export interface RegistrarAdmissionUiState {
   readonly stage: RegistrarAdmissionStage;
   readonly importedPackage: MemberAdmissionPackage | null;
+  readonly admissionTxId: string | null;     // genuine transaction id preserved across indexer lag & retry
   readonly receipt: MemberAdmissionReceipt | null;
   readonly errorMessage: string | null;
 }
@@ -1471,24 +1472,64 @@ export interface RegistrarAdmissionUiState {
 export const INITIAL_REGISTRAR_ADMISSION_UI_STATE: RegistrarAdmissionUiState = {
   stage: 'idle',
   importedPackage: null,
+  admissionTxId: null,
   receipt: null,
   errorMessage: null,
 };
 
 /**
+ * Pure helper checking if member admission workflow or transaction submission can be initiated.
+ * Requires all of:
+ * - Connected 1AM wallet on Midnight Preprod
+ * - Attached verified CommonVeil contract
+ * - Active Registrar secret in volatile memory
+ * - registrarUi.verificationStatus === 'verified'
+ * - No admission transaction currently in progress
+ */
+export function canInitiateAdmission(params: {
+  readonly isConnected: boolean;
+  readonly attachedContractAddress: string | null;
+  readonly hasSecret: boolean;
+  readonly verificationStatus: RegistrarVerificationStatus;
+  readonly isAdmitting: boolean;
+}): boolean {
+  return (
+    params.isConnected &&
+    typeof params.attachedContractAddress === 'string' &&
+    params.attachedContractAddress.trim().length > 0 &&
+    params.hasSecret &&
+    params.verificationStatus === 'verified' &&
+    !params.isAdmitting
+  );
+}
+
+/**
  * Pure state reducer when a candidate admission package is imported and validated.
- * Requires the package contract address to match the active attached contract address.
+ * Requires:
+ * - attachedContractAddress is present and matches the package contract address
+ * - registrarVerificationStatus === 'verified'
  */
 export function onAdmissionPackageImported(
   prevState: RegistrarAdmissionUiState,
   pkg: MemberAdmissionPackage,
   attachedContractAddress: string | null,
+  registrarVerificationStatus?: RegistrarVerificationStatus,
 ): RegistrarAdmissionUiState {
   if (!attachedContractAddress) {
     return {
       ...prevState,
       importedPackage: null,
+      admissionTxId: null,
       errorMessage: 'Attach to a verified CommonVeil contract before importing member admission packages.',
+      stage: 'failed',
+    };
+  }
+  if (registrarVerificationStatus && registrarVerificationStatus !== 'verified') {
+    return {
+      ...prevState,
+      importedPackage: null,
+      admissionTxId: null,
+      errorMessage: 'Active Registrar secret must be verified against attached contract before importing admission packages.',
       stage: 'failed',
     };
   }
@@ -1496,6 +1537,7 @@ export function onAdmissionPackageImported(
     return {
       ...prevState,
       importedPackage: null,
+      admissionTxId: null,
       errorMessage: 'Admission package contract address does not match the attached contract.',
       stage: 'failed',
     };
@@ -1503,6 +1545,7 @@ export function onAdmissionPackageImported(
   return {
     stage: 'confirming',
     importedPackage: pkg,
+    admissionTxId: null,
     receipt: null,
     errorMessage: null,
   };
@@ -1541,12 +1584,23 @@ export function onAdmissionSubmitting(
   };
 }
 
+/**
+ * Enters finalized-indexing while retaining any captured genuine transaction ID.
+ * Never replaces an already-captured genuine txId with null.
+ */
 export function onAdmissionFinalizedIndexing(
   prevState: RegistrarAdmissionUiState,
+  txId?: string | null,
 ): RegistrarAdmissionUiState {
+  const resolvedTxId =
+    typeof txId === 'string' && txId.trim() !== ''
+      ? txId
+      : prevState.admissionTxId;
+
   return {
     ...prevState,
     stage: 'finalized-indexing',
+    admissionTxId: resolvedTxId,
     errorMessage: null,
   };
 }
@@ -1558,6 +1612,7 @@ export function onAdmissionCompleted(
   return {
     stage: 'admitted',
     importedPackage: prevState.importedPackage,
+    admissionTxId: receipt.admissionTxId ?? prevState.admissionTxId,
     receipt,
     errorMessage: null,
   };
@@ -1579,6 +1634,61 @@ export function onAdmissionReset(
   _prevState?: RegistrarAdmissionUiState,
 ): RegistrarAdmissionUiState {
   return INITIAL_REGISTRAR_ADMISSION_UI_STATE;
+}
+
+/**
+ * Fixed safe error messages for post-finalization member admission inspection.
+ */
+export const ADMISSION_VERIFICATION_ERROR_MESSAGES = {
+  INCOMPATIBLE_CONTRACT: 'The contract at this address does not expose a compatible CommonVeil ledger.',
+  REGISTRAR_KEY_MISMATCH: 'Contract registrar public key does not match the active registrar secret.',
+  GENERIC_VERIFICATION_FAILURE: 'Member admission verification failed. Check the network status and try again.',
+} as const;
+
+/**
+ * Sanitizes errors encountered during post-admission verification inspection.
+ * Maps ContractSessionError codes to fixed safe messages.
+ * Never passes raw error messages, URLs, or internal exceptions to UI state.
+ */
+export function mapAdmissionInspectionError(error: unknown): string {
+  if (error instanceof ContractSessionError) {
+    if (error.code === 'INCOMPATIBLE_CONTRACT') {
+      const msg = error.message.toLowerCase();
+      if (msg.includes('registrar') || msg.includes('secret') || msg.includes('key')) {
+        return ADMISSION_VERIFICATION_ERROR_MESSAGES.REGISTRAR_KEY_MISMATCH;
+      }
+      return ADMISSION_VERIFICATION_ERROR_MESSAGES.INCOMPATIBLE_CONTRACT;
+    }
+    return CONTRACT_SESSION_ERROR_MESSAGES[error.code] ?? ADMISSION_VERIFICATION_ERROR_MESSAGES.GENERIC_VERIFICATION_FAILURE;
+  }
+
+  if (error && typeof error === 'object' && 'code' in error && typeof (error as any).code === 'string') {
+    const code = (error as any).code as ContractSessionErrorCode;
+    if (code === 'INCOMPATIBLE_CONTRACT') {
+      return ADMISSION_VERIFICATION_ERROR_MESSAGES.INCOMPATIBLE_CONTRACT;
+    }
+    if (code in CONTRACT_SESSION_ERROR_MESSAGES) {
+      return CONTRACT_SESSION_ERROR_MESSAGES[code];
+    }
+  }
+
+  const raw = (
+    error instanceof Error
+      ? error.message
+      : typeof error === 'string'
+        ? error
+        : ''
+  ).toLowerCase();
+
+  if (raw.includes('registrar') && (raw.includes('mismatch') || raw.includes('key') || raw.includes('secret'))) {
+    return ADMISSION_VERIFICATION_ERROR_MESSAGES.REGISTRAR_KEY_MISMATCH;
+  }
+
+  if (raw.includes('incompatible') || raw.includes('ledger')) {
+    return ADMISSION_VERIFICATION_ERROR_MESSAGES.INCOMPATIBLE_CONTRACT;
+  }
+
+  return ADMISSION_VERIFICATION_ERROR_MESSAGES.GENERIC_VERIFICATION_FAILURE;
 }
 
 /**

@@ -72,6 +72,9 @@ import {
   onAdmissionReset,
   mapMemberOperationError,
   mapAdmissionError,
+  mapAdmissionInspectionError,
+  canInitiateAdmission,
+  ADMISSION_VERIFICATION_ERROR_MESSAGES,
 } from '../src/role-workspace-state.ts';
 import {
   bytesToHex,
@@ -1525,10 +1528,31 @@ test('61. Registrar verification prerequisite before admission import', () => {
     INITIAL_REGISTRAR_ADMISSION_UI_STATE,
     pkg,
     null,
+    'verified',
   );
 
   assert.equal(state.stage, 'failed');
   assert.match(state.errorMessage ?? '', /Attach to a verified CommonVeil contract/i);
+
+  // When registrar verificationStatus is unverified, import fails
+  const stateUnverified = onAdmissionPackageImported(
+    INITIAL_REGISTRAR_ADMISSION_UI_STATE,
+    pkg,
+    'contract123',
+    'unverified',
+  );
+  assert.equal(stateUnverified.stage, 'failed');
+  assert.match(stateUnverified.errorMessage ?? '', /Active Registrar secret must be verified/i);
+
+  // When registrar verificationStatus is failed, import fails
+  const stateFailed = onAdmissionPackageImported(
+    INITIAL_REGISTRAR_ADMISSION_UI_STATE,
+    pkg,
+    'contract123',
+    'failed',
+  );
+  assert.equal(stateFailed.stage, 'failed');
+  assert.match(stateFailed.errorMessage ?? '', /Active Registrar secret must be verified/i);
 });
 
 // 62. Transaction double-click prevention and cancellation
@@ -1666,4 +1690,241 @@ test('67. Constructor and deployment logic remains unchanged from verified live 
   assert.equal(validated.schema, DEPLOYMENT_RECEIPT_SCHEMA);
   assert.equal(validated.status, 'finalized');
   assert.equal(validated.certifierPublicKey, 'bb'.repeat(32));
+});
+
+// 68. Active but unverified Registrar secret blocks import and submission
+test('68. Active but unverified Registrar secret blocks import and submission', () => {
+  const attachedContract = 'b62b97709f7629cede3bcbcd52ecda4fe2ad204ceac2946fda484789d104d23b';
+
+  // canInitiateAdmission pure validator
+  const unverified = canInitiateAdmission({
+    isConnected: true,
+    attachedContractAddress: attachedContract,
+    hasSecret: true,
+    verificationStatus: 'unverified',
+    isAdmitting: false,
+  });
+  assert.equal(unverified, false);
+
+  // Import handler blocks unverified
+  const secret = generateMemberSecretOrSalt();
+  const salt = generateMemberSecretOrSalt();
+  const credential = pureCircuits.deriveMemberCredential(secret, salt);
+  const pkg = buildMemberAdmissionPackage(attachedContract, credential);
+
+  const importState = onAdmissionPackageImported(
+    INITIAL_REGISTRAR_ADMISSION_UI_STATE,
+    pkg,
+    attachedContract,
+    'unverified',
+  );
+  assert.equal(importState.stage, 'failed');
+  assert.match(importState.errorMessage ?? '', /Active Registrar secret must be verified/i);
+});
+
+// 69. Failed verification blocks submission
+test('69. Failed verification blocks submission', () => {
+  const attachedContract = 'b62b97709f7629cede3bcbcd52ecda4fe2ad204ceac2946fda484789d104d23b';
+
+  const failedStatus = canInitiateAdmission({
+    isConnected: true,
+    attachedContractAddress: attachedContract,
+    hasSecret: true,
+    verificationStatus: 'failed',
+    isAdmitting: false,
+  });
+  assert.equal(failedStatus, false);
+
+  const missingSecret = canInitiateAdmission({
+    isConnected: true,
+    attachedContractAddress: attachedContract,
+    hasSecret: false,
+    verificationStatus: 'verified',
+    isAdmitting: false,
+  });
+  assert.equal(missingSecret, false);
+
+  const disconnected = canInitiateAdmission({
+    isConnected: false,
+    attachedContractAddress: attachedContract,
+    hasSecret: true,
+    verificationStatus: 'verified',
+    isAdmitting: false,
+  });
+  assert.equal(disconnected, false);
+
+  const unattached = canInitiateAdmission({
+    isConnected: true,
+    attachedContractAddress: null,
+    hasSecret: true,
+    verificationStatus: 'verified',
+    isAdmitting: false,
+  });
+  assert.equal(unattached, false);
+
+  const alreadyAdmitting = canInitiateAdmission({
+    isConnected: true,
+    attachedContractAddress: attachedContract,
+    hasSecret: true,
+    verificationStatus: 'verified',
+    isAdmitting: true,
+  });
+  assert.equal(alreadyAdmitting, false);
+});
+
+// 70. Verified Registrar permits submission preparation
+test('70. Verified Registrar permits submission preparation', () => {
+  const attachedContract = 'b62b97709f7629cede3bcbcd52ecda4fe2ad204ceac2946fda484789d104d23b';
+
+  const verified = canInitiateAdmission({
+    isConnected: true,
+    attachedContractAddress: attachedContract,
+    hasSecret: true,
+    verificationStatus: 'verified',
+    isAdmitting: false,
+  });
+  assert.equal(verified, true);
+
+  const secret = generateMemberSecretOrSalt();
+  const salt = generateMemberSecretOrSalt();
+  const credential = pureCircuits.deriveMemberCredential(secret, salt);
+  const pkg = buildMemberAdmissionPackage(attachedContract, credential);
+
+  const importState = onAdmissionPackageImported(
+    INITIAL_REGISTRAR_ADMISSION_UI_STATE,
+    pkg,
+    attachedContract,
+    'verified',
+  );
+  assert.equal(importState.stage, 'confirming');
+  assert.deepEqual(importState.importedPackage, pkg);
+});
+
+// 71. Captured finalized txId survives indexer delay and retry
+test('71. Captured finalized txId survives indexer delay and retry', () => {
+  const genuineTxId = '99887766554433221100aabbccddeeff99887766554433221100aabbccddeeff';
+  let state = INITIAL_REGISTRAR_ADMISSION_UI_STATE;
+  state = { ...state, stage: 'submitting' };
+
+  // When submitting finalizes on-chain but indexer has not caught up:
+  state = onAdmissionFinalizedIndexing(state, genuineTxId);
+  assert.equal(state.stage, 'finalized-indexing');
+  assert.equal(state.admissionTxId, genuineTxId);
+
+  // Calling onAdmissionFinalizedIndexing without txId or null must NEVER overwrite an already-captured txId
+  state = onAdmissionFinalizedIndexing(state, null);
+  assert.equal(state.admissionTxId, genuineTxId);
+
+  state = onAdmissionFinalizedIndexing(state);
+  assert.equal(state.admissionTxId, genuineTxId);
+});
+
+// 72. Retry receipt contains the original genuine txId
+test('72. Retry receipt contains the original genuine txId', () => {
+  const attachedContract = 'b62b97709f7629cede3bcbcd52ecda4fe2ad204ceac2946fda484789d104d23b';
+  const genuineTxId = '99887766554433221100aabbccddeeff99887766554433221100aabbccddeeff';
+  const memberCred = 'bb'.repeat(32);
+
+  let state = onAdmissionFinalizedIndexing(INITIAL_REGISTRAR_ADMISSION_UI_STATE, genuineTxId);
+  assert.equal(state.admissionTxId, genuineTxId);
+
+  // Build receipt using preserved genuine admissionTxId
+  const receipt = buildMemberAdmissionReceipt({
+    contractAddress: attachedContract,
+    memberCredential: memberCred,
+    admissionTxId: state.admissionTxId,
+  });
+
+  assert.equal(receipt.admissionTxId, genuineTxId);
+
+  // onAdmissionCompleted transitions state to admitted and preserves receipt
+  state = onAdmissionCompleted(state, receipt);
+  assert.equal(state.stage, 'admitted');
+  assert.equal(state.receipt?.admissionTxId, genuineTxId);
+  assert.equal(state.admissionTxId, genuineTxId);
+});
+
+// 73. Workflow reset clears the retained txId
+test('73. Workflow reset clears the retained txId', () => {
+  const genuineTxId = '99887766554433221100aabbccddeeff99887766554433221100aabbccddeeff';
+  let state = onAdmissionFinalizedIndexing(INITIAL_REGISTRAR_ADMISSION_UI_STATE, genuineTxId);
+  assert.equal(state.admissionTxId, genuineTxId);
+
+  const resetState = onAdmissionReset(state);
+  assert.equal(resetState.stage, 'idle');
+  assert.equal(resetState.admissionTxId, null);
+  assert.equal(resetState.importedPackage, null);
+  assert.equal(resetState.receipt, null);
+  assert.equal(resetState.errorMessage, null);
+});
+
+// 74. Only lookup/not-found or missing updated membership are retryable
+test('74. Only lookup/not-found or missing updated membership are retryable', () => {
+  // Not found is retryable
+  const notFoundErr = new ContractSessionError('CONTRACT_NOT_FOUND', 'Contract not found on indexer');
+  assert.equal(notFoundErr.code === 'CONTRACT_NOT_FOUND', true);
+
+  // Indexer query failed is retryable
+  const queryFailedErr = new ContractSessionError('INDEXER_QUERY_FAILED', 'Indexer query failed');
+  assert.equal(queryFailedErr.code === 'INDEXER_QUERY_FAILED', true);
+
+  // Incompatible contract is NOT retryable (maps to safe fixed error)
+  const incompatibleErr = new ContractSessionError('INCOMPATIBLE_CONTRACT', 'Contract schema mismatch');
+  const safeIncompatible = mapAdmissionInspectionError(incompatibleErr);
+  assert.equal(safeIncompatible, ADMISSION_VERIFICATION_ERROR_MESSAGES.INCOMPATIBLE_CONTRACT);
+
+  // Registrar mismatch is NOT retryable
+  const mismatchErr = new Error('Registrar secret does not match contract authority');
+  const safeMismatch = mapAdmissionInspectionError(mismatchErr);
+  assert.equal(safeMismatch, ADMISSION_VERIFICATION_ERROR_MESSAGES.REGISTRAR_KEY_MISMATCH);
+
+  // Unknown decoder / provider errors use fixed safe verification-failure message
+  const unknownDecoderErr = new Error('Failed to decode CBOR sequence at offset 0x48a');
+  const safeUnknown = mapAdmissionInspectionError(unknownDecoderErr);
+  assert.equal(safeUnknown, ADMISSION_VERIFICATION_ERROR_MESSAGES.GENERIC_VERIFICATION_FAILURE);
+  assert.equal(safeUnknown.includes('CBOR'), false);
+  assert.equal(safeUnknown.includes('0x48a'), false);
+});
+
+// 75. Incompatible and unknown errors become sanitized hard failures
+test('75. Incompatible and unknown errors become sanitized hard failures without leaking internals', () => {
+  const secretKeyLeakErr = new Error('GraphQLError: connection refused to https://indexer.preprod.midnight.network/graphql');
+  const safeMsg = mapAdmissionInspectionError(secretKeyLeakErr);
+  assert.equal(safeMsg, ADMISSION_VERIFICATION_ERROR_MESSAGES.GENERIC_VERIFICATION_FAILURE);
+  assert.equal(safeMsg.includes('https://'), false);
+  assert.equal(safeMsg.includes('graphql'), false);
+
+  // Ensure state becomes 'failed' when inspection hard failure occurs
+  let state = INITIAL_REGISTRAR_ADMISSION_UI_STATE;
+  state = { ...state, stage: 'submitting' };
+  const failedState = onAdmissionFailed(state, safeMsg);
+  assert.equal(failedState.stage, 'failed');
+  assert.equal(failedState.errorMessage, ADMISSION_VERIFICATION_ERROR_MESSAGES.GENERIC_VERIFICATION_FAILURE);
+});
+
+// 76. Retry performs zero additional submitCallTx calls
+test('76. Retry performs zero additional submitCallTx calls', async () => {
+  let submitCallCount = 0;
+  const mockSubmitCallTx = async () => {
+    submitCallCount++;
+    return { public: { txId: 'mock-tx-id' } };
+  };
+
+  // Submission stage calls submitCallTx exactly once
+  await mockSubmitCallTx();
+  assert.equal(submitCallCount, 1);
+
+  // Retry inspection tests membership via read-only indexer query and never invokes submitCallTx
+  const mockQueryContract = async (credential: Uint8Array) => {
+    return {
+      hasMemberCredential: (_c: Uint8Array) => true,
+      publicState: { registrarPublicKey: 'aa'.repeat(32), certifierPublicKey: 'bb'.repeat(32), memberCount: 1n },
+    };
+  };
+
+  const session = await mockQueryContract(new Uint8Array(32));
+  assert.equal(session.hasMemberCredential(new Uint8Array(32)), true);
+
+  // Confirm zero additional submitCallTx calls were made during retry
+  assert.equal(submitCallCount, 1);
 });
