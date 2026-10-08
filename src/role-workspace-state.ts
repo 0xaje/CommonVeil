@@ -7,7 +7,15 @@
  */
 
 import { ContractSessionError, type ContractSessionErrorCode } from './contract-session';
-import { isHex, hexToBytes, bytesToHex, isValidIsoTimestamp } from './role-packages';
+import {
+  isHex,
+  hexToBytes,
+  bytesToHex,
+  isValidIsoTimestamp,
+  CERTIFIER_KEY_SCHEMA,
+  type CertifierKeyPackage,
+  validateCertifierKeyPackage,
+} from './role-packages';
 
 export type RoleType = 'registrar' | 'certifier' | 'member';
 
@@ -340,6 +348,135 @@ export function buildRegistrarBackupPackage(
   };
 }
 
+export const CERTIFIER_BACKUP_SCHEMA = 'commonveil.certifier-backup/v1' as const;
+
+export interface CertifierBackupPackage {
+  readonly schema: typeof CERTIFIER_BACKUP_SCHEMA;
+  readonly role: 'certifier';
+  readonly certifierSecret: string; // 32-byte hex (64 chars)
+  readonly createdAt: string;        // ISO timestamp
+}
+
+export type CertifierVerificationStatus = 'unverified' | 'verified' | 'failed';
+
+export interface CertifierSecretUiState {
+  readonly hasSecret: boolean;
+  readonly isLocked: boolean;
+  readonly verificationStatus: CertifierVerificationStatus;
+  readonly canCopyOnce: boolean;
+  readonly copyStatus: 'idle' | 'pending' | 'copied' | 'failed';
+}
+
+export const INITIAL_CERTIFIER_SECRET_UI_STATE: CertifierSecretUiState = {
+  hasSecret: false,
+  isLocked: false,
+  verificationStatus: 'unverified',
+  canCopyOnce: false,
+  copyStatus: 'idle',
+};
+
+/**
+ * Validates a candidate 32-byte hexadecimal certifier secret string.
+ * Returns normalized 64-char lowercase hex string.
+ * Throws clean error if invalid without returning secret contents.
+ */
+export function validateCertifierSecretHex(hex: unknown): string {
+  if (typeof hex !== 'string') {
+    throw new Error('Secret must be a hexadecimal string.');
+  }
+  const trimmed = hex.trim();
+  if (trimmed.length !== 64) {
+    throw new Error(`Secret must be exactly 32 bytes (64 hex characters), received ${trimmed.length} characters.`);
+  }
+  if (!isHex(trimmed, 32)) {
+    throw new Error('Secret contains invalid non-hexadecimal characters.');
+  }
+  return trimmed.toLowerCase();
+}
+
+/**
+ * Converts a validated 32-byte hex certifier secret string to a Uint8Array.
+ */
+export function parseCertifierSecretHex(hex: unknown): Uint8Array {
+  const validated = validateCertifierSecretHex(hex);
+  return hexToBytes(validated);
+}
+
+/**
+ * Generates a fresh 32-byte cryptographically secure random certifier secret.
+ */
+export function generateCertifierSecret(): Uint8Array {
+  return crypto.getRandomValues(new Uint8Array(32));
+}
+
+/**
+ * Validates an unencrypted CertifierBackupPackage payload before envelope encryption or after decryption.
+ */
+export function validateCertifierBackupPackage(pkg: unknown): CertifierBackupPackage {
+  if (!pkg || typeof pkg !== 'object') {
+    throw new Error('Certifier backup package must be an object.');
+  }
+  const p = pkg as Record<string, unknown>;
+  if (p.schema !== CERTIFIER_BACKUP_SCHEMA) {
+    throw new Error(`Invalid backup schema: expected '${CERTIFIER_BACKUP_SCHEMA}'.`);
+  }
+  if (p.role !== 'certifier') {
+    throw new Error("Invalid backup role: expected 'certifier'.");
+  }
+  const validatedSecret = validateCertifierSecretHex(p.certifierSecret);
+  if (!isValidIsoTimestamp(p.createdAt)) {
+    throw new Error('Backup createdAt must be a valid ISO timestamp.');
+  }
+  return {
+    schema: CERTIFIER_BACKUP_SCHEMA,
+    role: 'certifier',
+    certifierSecret: validatedSecret,
+    createdAt: p.createdAt as string,
+  };
+}
+
+/**
+ * Creates an unencrypted CertifierBackupPackage from an active 32-byte secret.
+ */
+export function buildCertifierBackupPackage(
+  secretBytes: Uint8Array,
+  options?: { now?: Date },
+): CertifierBackupPackage {
+  if (!(secretBytes instanceof Uint8Array) || secretBytes.length !== 32) {
+    throw new Error('Secret bytes must be a 32-byte Uint8Array.');
+  }
+  const now = options?.now ?? new Date();
+  return {
+    schema: CERTIFIER_BACKUP_SCHEMA,
+    role: 'certifier',
+    certifierSecret: bytesToHex(secretBytes),
+    createdAt: now.toISOString(),
+  };
+}
+
+/**
+ * Builds a public CertifierKeyPackage from a derived 32-byte certifier public key.
+ * Never includes the private secret. Rejects all-zero public keys.
+ */
+export function buildCertifierKeyPackage(
+  certifierPublicKeyBytes: Uint8Array,
+  options?: { now?: Date },
+): CertifierKeyPackage {
+  if (!(certifierPublicKeyBytes instanceof Uint8Array) || certifierPublicKeyBytes.length !== 32) {
+    throw new Error('Certifier public key must be a 32-byte Uint8Array.');
+  }
+  const hex = bytesToHex(certifierPublicKeyBytes);
+  if (hex === '00'.repeat(32)) {
+    throw new Error('Certifier public key cannot be a zero key.');
+  }
+  const now = options?.now ?? new Date();
+  return {
+    schema: CERTIFIER_KEY_SCHEMA,
+    certifierKey: hex,
+    createdAt: now.toISOString(),
+  };
+}
+
 /**
  * Zeroizes a Uint8Array in memory.
  */
@@ -493,8 +630,66 @@ export function mapRegistrarOperationError(error: unknown): string {
   if (raw.includes('copy') || raw.includes('clipboard')) {
     return 'Clipboard write failed. Please check browser permissions and try again.';
   }
+  if (raw.includes('certifier public key') || raw.includes('zero key') || raw.includes('certifier-key')) {
+    return 'Invalid Certifier public key package. Key must be a genuine non-zero 32-byte hex key.';
+  }
 
   return 'The operation could not be completed. Check the input and try again.';
+}
+
+/**
+ * Pure sanitizer for certifier operation errors.
+ * Never leaks raw Web Crypto, FileReader, JSON parse, stack traces, URLs, or exception messages.
+ */
+export function mapCertifierOperationError(error: unknown): string {
+  if (!error) {
+    return 'The certifier operation could not be completed. Check the input and try again.';
+  }
+
+  const raw = (
+    error instanceof Error
+      ? error.message
+      : typeof error === 'string'
+        ? error
+        : typeof (error as any)?.message === 'string'
+          ? (error as any).message
+          : ''
+  ).toLowerCase();
+
+  if (raw.includes('64 hex characters') || raw.includes('exactly 32 bytes')) {
+    return 'Certifier secret must be exactly 32 bytes (64 hexadecimal characters).';
+  }
+  if (raw.includes('non-hex') || raw.includes('hexadecimal')) {
+    return 'Certifier secret contains invalid non-hexadecimal characters.';
+  }
+  if (raw.includes('passphrase') && (raw.includes('12') || raw.includes('length'))) {
+    return 'Passphrase must be at least 12 characters.';
+  }
+  if (
+    raw.includes('incorrect passphrase') ||
+    raw.includes('tampered') ||
+    raw.includes('decrypt') ||
+    raw.includes('crypto') ||
+    raw.includes('operationerror') ||
+    raw.includes('tag mismatch') ||
+    raw.includes('aes')
+  ) {
+    return 'Decryption failed. Check the passphrase or verify the backup file.';
+  }
+  if (raw.includes('json') || raw.includes('backup file') || raw.includes('schema') || raw.includes('package')) {
+    return 'The selected file is not a valid CommonVeil encrypted backup.';
+  }
+  if (raw.includes('read') || raw.includes('file')) {
+    return 'Could not read the selected backup file.';
+  }
+  if (raw.includes('copy') || raw.includes('clipboard')) {
+    return 'Clipboard write failed. Please check browser permissions and try again.';
+  }
+  if (raw.includes('zero key')) {
+    return 'Certifier key cannot be an all-zero key.';
+  }
+
+  return 'The certifier operation could not be completed. Check the input and try again.';
 }
 
 export const DEPLOYMENT_RECEIPT_SCHEMA = 'commonveil.deployment-receipt/v1' as const;
@@ -568,6 +763,9 @@ export function validateDeploymentReceipt(receipt: unknown): DeploymentReceipt {
   ) {
     throw new Error('Receipt certifierPublicKey must be a 64-character hexadecimal string.');
   }
+  if (r.certifierPublicKey.toLowerCase() === '00'.repeat(32)) {
+    throw new Error('Receipt certifierPublicKey cannot be a zero key.');
+  }
   if (!isValidIsoTimestamp(r.deployedAt)) {
     throw new Error('Receipt deployedAt must be a valid ISO timestamp.');
   }
@@ -600,6 +798,7 @@ export type DeploymentStage =
 export interface RegistrarDeploymentUiState {
   readonly stage: DeploymentStage;
   readonly backupConfirmed: boolean;
+  readonly certifierPublicKey: string | null;
   readonly contractAddress: string | null;
   readonly deploymentTxId: string | null;
   readonly receipt: DeploymentReceipt | null;
@@ -609,6 +808,7 @@ export interface RegistrarDeploymentUiState {
 export const INITIAL_REGISTRAR_DEPLOYMENT_UI_STATE: RegistrarDeploymentUiState = {
   stage: 'idle',
   backupConfirmed: false,
+  certifierPublicKey: null,
   contractAddress: null,
   deploymentTxId: null,
   receipt: null,
@@ -617,6 +817,13 @@ export const INITIAL_REGISTRAR_DEPLOYMENT_UI_STATE: RegistrarDeploymentUiState =
 
 /**
  * Pure helper checking if the registrar deployment flow can be initiated.
+ * Requires:
+ * - Connected 1AM wallet on Midnight Preprod
+ * - Active Registrar secret in volatile memory
+ * - Confirmed encrypted Registrar backup
+ * - Imported and validated non-zero Certifier public-key package (32-byte hex)
+ * - Proof provider configured
+ * - No active deployment in progress
  */
 export function canInitiateDeployment(params: {
   readonly isConnected: boolean;
@@ -624,14 +831,44 @@ export function canInitiateDeployment(params: {
   readonly backupConfirmed: boolean;
   readonly isDeploying: boolean;
   readonly proofProviderAvailable: boolean;
+  readonly certifierPublicKey: string | null;
 }): boolean {
+  const isNonZeroCertifierKey =
+    typeof params.certifierPublicKey === 'string' &&
+    isHex(params.certifierPublicKey, 32) &&
+    params.certifierPublicKey.toLowerCase() !== '00'.repeat(32);
+
   return (
     params.isConnected &&
     params.hasSecret &&
     params.backupConfirmed &&
     !params.isDeploying &&
-    params.proofProviderAvailable
+    params.proofProviderAvailable &&
+    isNonZeroCertifierKey
   );
+}
+
+/**
+ * Pure state reducer when a validated Certifier public key package is imported by the Registrar.
+ * Stores only the public key string in Registrar UI state.
+ * Never stores or touches any Certifier secret.
+ */
+export function onCertifierKeyImported(
+  prevState: RegistrarDeploymentUiState,
+  certifierPublicKeyHex: string,
+): RegistrarDeploymentUiState {
+  const validated = certifierPublicKeyHex.trim().toLowerCase();
+  if (!isHex(validated, 32)) {
+    throw new Error('Certifier public key must be exactly 32 hexadecimal bytes.');
+  }
+  if (validated === '00'.repeat(32)) {
+    throw new Error('Certifier public key cannot be a zero key.');
+  }
+  return {
+    ...prevState,
+    certifierPublicKey: validated,
+    errorMessage: null,
+  };
 }
 
 /**
@@ -769,6 +1006,7 @@ export function onDeploymentReset(
   return {
     ...INITIAL_REGISTRAR_DEPLOYMENT_UI_STATE,
     backupConfirmed: prevState.backupConfirmed,
+    certifierPublicKey: prevState.certifierPublicKey,
   };
 }
 

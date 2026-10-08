@@ -705,6 +705,47 @@ input:focus-visible {
   cursor: pointer;
 }
 
+.certifier-key-import-section {
+  border-top: 1px solid #1c3526;
+  border-bottom: 1px solid #1c3526;
+  padding: 14px 0;
+  margin-bottom: 18px;
+}
+
+.certifier-key-import-section h3 {
+  font-size: 0.95rem;
+  margin: 0 0 6px;
+  color: #dbe8df;
+}
+
+.key-package-file-row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.key-package-file-row label {
+  font-size: 0.82rem;
+  color: #8bb199;
+}
+
+.imported-key-badge {
+  background: #08150f;
+  border: 1px solid #234832;
+  border-radius: 6px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.imported-key-badge code {
+  color: #72e09b;
+  font-size: 0.78rem;
+  word-break: break-all;
+}
+
 .deployment-confirmation-box {
   background: #0d1e15;
   border: 1px solid #2f5a40;

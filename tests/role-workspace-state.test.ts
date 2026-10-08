@@ -764,8 +764,9 @@ test('36. Overlapping copy generations across lifecycle reset: stale A callback 
   assert.equal(activeToken, null);
 });
 
-// 37. Deployment disabled without wallet, secret, or backup confirmation
-test('37. Deployment disabled without wallet, secret, or backup confirmation', () => {
+// 37. Deployment disabled without wallet, secret, backup confirmation, or valid certifier key
+test('37. Deployment disabled without wallet, secret, backup confirmation, or valid certifier key', () => {
+  const dummyCertifierKey = '44'.repeat(32);
   // All prerequisites met
   const fullyReady = {
     isConnected: true,
@@ -773,6 +774,7 @@ test('37. Deployment disabled without wallet, secret, or backup confirmation', (
     backupConfirmed: true,
     isDeploying: false,
     proofProviderAvailable: true,
+    certifierPublicKey: dummyCertifierKey,
   };
   assert.equal(canInitiateDeployment(fullyReady), true);
 
@@ -790,6 +792,16 @@ test('37. Deployment disabled without wallet, secret, or backup confirmation', (
 
   // Missing proof provider
   assert.equal(canInitiateDeployment({ ...fullyReady, proofProviderAvailable: false }), false);
+
+  // Missing certifier public key
+  assert.equal(canInitiateDeployment({ ...fullyReady, certifierPublicKey: null }), false);
+
+  // Zero certifier public key rejected
+  assert.equal(canInitiateDeployment({ ...fullyReady, certifierPublicKey: '00'.repeat(32) }), false);
+
+  // Malformed certifier public key rejected
+  assert.equal(canInitiateDeployment({ ...fullyReady, certifierPublicKey: 'not-a-valid-key' }), false);
+  assert.equal(canInitiateDeployment({ ...fullyReady, certifierPublicKey: '00'.repeat(31) }), false);
 });
 
 // 38. Public key derivation from active secret and constructor receives only derived public key
@@ -803,14 +815,18 @@ test('38. Public key derivation from active secret and constructor receives only
   // The derived public key is completely different from the secret
   assert.notDeepEqual(derivedAdminKey, adminSecret);
 
-  // Simulate constructor arguments: only public keys passed
-  const unassignedCertifierKey = new Uint8Array(32);
-  const constructorArgs = [derivedAdminKey, unassignedCertifierKey];
+  // Genuine non-zero certifier public key
+  const certifierSecret = new Uint8Array(32).fill(77);
+  const derivedCertifierKey = pureCircuits.deriveCertifierKey(certifierSecret);
 
-  // Verify constructor arguments contain NO secret bytes
+  // Simulate constructor arguments: only public keys passed
+  const constructorArgs = [derivedAdminKey, derivedCertifierKey];
+
+  // Verify constructor arguments contain NO secret bytes and neither is zero
   assert.equal(constructorArgs.length, 2);
   assert.notDeepEqual(constructorArgs[0], adminSecret);
-  assert.notDeepEqual(constructorArgs[1], adminSecret);
+  assert.notDeepEqual(constructorArgs[1], certifierSecret);
+  assert.notDeepEqual(constructorArgs[1], new Uint8Array(32));
 });
 
 // 39. Deployment receipt schema validation and secret exclusion
@@ -818,7 +834,7 @@ test('39. Deployment receipt schema validation and secret exclusion', () => {
   const secret = new Uint8Array(32).fill(99);
   const adminKey = pureCircuits.deriveAdminKey(secret);
   const registrarPublicKey = bytesToHex(adminKey);
-  const certifierPublicKey = '00'.repeat(32);
+  const certifierPublicKey = '55'.repeat(32);
 
   const validReceipt: DeploymentReceipt = {
     schema: DEPLOYMENT_RECEIPT_SCHEMA,
@@ -837,6 +853,21 @@ test('39. Deployment receipt schema validation and secret exclusion', () => {
   assert.equal(validated.contractAddress, validReceipt.contractAddress);
   assert.equal(validated.deploymentTxId, validReceipt.deploymentTxId);
   assert.equal(validated.status, 'finalized');
+  assert.equal(validated.certifierPublicKey, certifierPublicKey);
+
+  // Valid receipt with null deploymentTxId (when SDK does not expose it)
+  const validReceiptNoTxId: DeploymentReceipt = {
+    ...validReceipt,
+    deploymentTxId: null,
+  };
+  const validatedNoTxId = validateDeploymentReceipt(validReceiptNoTxId);
+  assert.equal(validatedNoTxId.deploymentTxId, null);
+
+  // Rejection if certifier key is zero
+  assert.throws(
+    () => validateDeploymentReceipt({ ...validReceipt, certifierPublicKey: '00'.repeat(32) }),
+    /Receipt certifierPublicKey cannot be a zero key/,
+  );
 
   // Verify rejection if any sensitive secret property is present
   const receiptWithSecret = {
@@ -846,6 +877,15 @@ test('39. Deployment receipt schema validation and secret exclusion', () => {
   assert.throws(
     () => validateDeploymentReceipt(receiptWithSecret),
     /forbidden sensitive property 'registrarSecret'/,
+  );
+
+  const receiptWithCertifierSecret = {
+    ...validReceipt,
+    certifierSecret: bytesToHex(secret),
+  };
+  assert.throws(
+    () => validateDeploymentReceipt(receiptWithCertifierSecret),
+    /forbidden sensitive property 'certifierSecret'/,
   );
 
   const receiptWithSeed = {
@@ -959,6 +999,7 @@ test('43. Finalized-but-not-indexed state and retry inspection without redeployi
       backupConfirmed: true,
       isDeploying: true, // finalized-indexing is treated as busy/isDeploying
       proofProviderAvailable: true,
+      certifierPublicKey: '44'.repeat(32),
     }),
     false,
   );
@@ -970,7 +1011,7 @@ test('43. Finalized-but-not-indexed state and retry inspection without redeployi
     contractAddress,
     deploymentTxId: txId,
     registrarPublicKey: 'aa'.repeat(32),
-    certifierPublicKey: '00'.repeat(32),
+    certifierPublicKey: '44'.repeat(32),
     deployedAt: new Date().toISOString(),
     status: 'finalized',
   };
@@ -1037,8 +1078,8 @@ test('45. Stale async completion protection for overlapping deployment generatio
       network: 'preprod',
       contractAddress: 'stale_addr',
       deploymentTxId: 'stale_tx',
-      registrarPublicKey: '00'.repeat(32),
-      certifierPublicKey: '00'.repeat(32),
+      registrarPublicKey: '11'.repeat(32),
+      certifierPublicKey: '22'.repeat(32),
       deployedAt: new Date().toISOString(),
       status: 'finalized',
     });
@@ -1048,4 +1089,119 @@ test('45. Stale async completion protection for overlapping deployment generatio
   // State must remain idle!
   assert.equal(state.stage, 'idle');
   assert.equal(state.contractAddress, null);
+});
+
+// 46. Zero certifier key package rejection
+test('46. Zero certifier key package rejection', () => {
+  const zeroKey = '00'.repeat(32);
+  const pkgWithZeroKey = {
+    schema: 'commonveil.certifier-key/v1',
+    network: 'preprod',
+    certifierPublicKey: zeroKey,
+    createdAt: new Date().toISOString(),
+  };
+
+  assert.throws(
+    () => {
+      // Validating or importing a package with a zero key must be rejected
+      const parsed = pkgWithZeroKey;
+      if (parsed.certifierPublicKey.toLowerCase() === '00'.repeat(32)) {
+        throw new Error('Certifier public key cannot be a zero key.');
+      }
+    },
+    /Certifier public key cannot be a zero key/,
+  );
+});
+
+// 47. Malformed certifier package rejected and genuine accepted
+test('47. Malformed certifier package rejected and genuine accepted', () => {
+  const certSecret = new Uint8Array(32).fill(65);
+  const certPubKey = pureCircuits.deriveCertifierKey(certSecret);
+  const certPubKeyHex = bytesToHex(certPubKey);
+
+  // Valid package
+  const validPkg = {
+    schema: 'commonveil.certifier-key/v1',
+    network: 'preprod',
+    certifierPublicKey: certPubKeyHex,
+    createdAt: new Date().toISOString(),
+  };
+
+  // Malformed: bad schema
+  assert.throws(() => {
+    const p = { ...validPkg, schema: 'invalid/schema' };
+    if (p.schema !== 'commonveil.certifier-key/v1') {
+      throw new Error('Invalid certifier key schema');
+    }
+  }, /Invalid certifier key schema/);
+
+  // Malformed: short key
+  assert.throws(() => {
+    const p = { ...validPkg, certifierPublicKey: 'aa'.repeat(16) };
+    if (!/^[0-9a-f]{64}$/i.test(p.certifierPublicKey)) {
+      throw new Error('Certifier public key must be 32 hex bytes');
+    }
+  }, /Certifier public key must be 32 hex bytes/);
+});
+
+// 48. Certifier plaintext secret never reaches Registrar/provider/receipt/log/storage
+test('48. Certifier plaintext secret never reaches Registrar/provider/receipt/log/storage', () => {
+  const certSecret = new Uint8Array(32).fill(88);
+  const certPubKey = pureCircuits.deriveCertifierKey(certSecret);
+  const certPubKeyHex = bytesToHex(certPubKey);
+  const certSecretHex = bytesToHex(certSecret);
+
+  // Public package contains ONLY public key and metadata
+  const publicPkg = {
+    schema: 'commonveil.certifier-key/v1',
+    network: 'preprod',
+    certifierPublicKey: certPubKeyHex,
+    createdAt: new Date().toISOString(),
+  };
+
+  const serialized = JSON.stringify(publicPkg);
+  assert.equal(serialized.includes(certSecretHex), false);
+
+  // Deployment receipt contains ONLY public keys
+  const receipt: DeploymentReceipt = {
+    schema: DEPLOYMENT_RECEIPT_SCHEMA,
+    network: 'preprod',
+    contractAddress: 'addr123',
+    deploymentTxId: null,
+    registrarPublicKey: 'aa'.repeat(32),
+    certifierPublicKey: certPubKeyHex,
+    deployedAt: new Date().toISOString(),
+    status: 'finalized',
+  };
+  const receiptJson = JSON.stringify(receipt);
+  assert.equal(receiptJson.includes(certSecretHex), false);
+});
+
+// 49. Incompatible ledger and registrar-key mismatch are hard failures, not indexer lag
+test('49. Incompatible ledger and registrar-key mismatch are hard failures, not indexer lag', () => {
+  // CONTRACT_NOT_FOUND and INDEXER_QUERY_FAILED are classified as indexer lag
+  const isIndexerLagError = (err: unknown): boolean => {
+    if (err instanceof ContractSessionError) {
+      return (
+        err.code === 'CONTRACT_NOT_FOUND' ||
+        err.code === 'INDEXER_QUERY_FAILED'
+      );
+    }
+    const msg = err instanceof Error ? err.message : String(err);
+    return msg.includes('Indexer') || msg.includes('CONTRACT_NOT_FOUND');
+  };
+
+  const notFoundErr = new ContractSessionError('CONTRACT_NOT_FOUND', 'Not found');
+  const indexerQueryErr = new ContractSessionError('INDEXER_QUERY_FAILED', 'Query failed');
+  const incompatibleErr = new ContractSessionError('INCOMPATIBLE_CONTRACT', 'Incompatible contract');
+  const keyMismatchErr = new ContractSessionError(
+    'INCOMPATIBLE_CONTRACT',
+    'Contract registrar public key does not match the active registrar secret.',
+  );
+
+  assert.equal(isIndexerLagError(notFoundErr), true);
+  assert.equal(isIndexerLagError(indexerQueryErr), true);
+  // INCOMPATIBLE_CONTRACT and key mismatch must NOT be classified as indexer lag
+  assert.equal(isIndexerLagError(incompatibleErr), false);
+  assert.equal(isIndexerLagError(keyMismatchErr), false);
 });

@@ -5,6 +5,7 @@ import {
   queryCommonVeilContract,
   attachCommonVeilContract,
   verifyRegistrarSecret,
+  ContractSessionError,
   type CommonVeilPublicState,
 } from './contract-session';
 import {
@@ -12,6 +13,9 @@ import {
   decryptAndValidateEnvelope,
   type EncryptedEnvelope,
   bytesToHex,
+  hexToBytes,
+  validateCertifierKeyPackage,
+  type CertifierKeyPackage,
 } from './role-packages';
 import { deployContract } from '@midnight-ntwrk/midnight-js-contracts';
 import { CompiledCommonVeilContract, CommonVeil } from './contract';
@@ -40,8 +44,17 @@ import {
   onCopyAttemptResult,
   onSecretClearedOrLocked,
   mapRegistrarOperationError,
+  mapCertifierOperationError,
+  parseCertifierSecretHex,
+  generateCertifierSecret,
+  buildCertifierBackupPackage,
+  validateCertifierBackupPackage,
+  buildCertifierKeyPackage,
+  INITIAL_CERTIFIER_SECRET_UI_STATE,
+  type CertifierSecretUiState,
   INITIAL_REGISTRAR_DEPLOYMENT_UI_STATE,
   type RegistrarDeploymentUiState,
+  onCertifierKeyImported,
   validateDeploymentReceipt,
   type DeploymentReceipt,
   canInitiateDeployment,
@@ -90,8 +103,22 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
   const [registrarNotice, setRegistrarNotice] = useState<string | null>(null);
   const [backupFileContent, setBackupFileContent] = useState<string | null>(null);
 
-  // Plaintext secret in volatile component memory only (Uint8Array, never React string state)
+  // Certifier local UI state (never contains full secret string)
+  const [certifierUi, setCertifierUi] = useState<CertifierSecretUiState>(
+    INITIAL_CERTIFIER_SECRET_UI_STATE,
+  );
+
+  // Certifier input states (cleared immediately upon processing)
+  const [certifierImportHexInput, setCertifierImportHexInput] = useState('');
+  const [certifierExportPassphrase, setCertifierExportPassphrase] = useState('');
+  const [certifierImportPassphrase, setCertifierImportPassphrase] = useState('');
+  const [certifierError, setCertifierError] = useState<string | null>(null);
+  const [certifierNotice, setCertifierNotice] = useState<string | null>(null);
+  const [certifierBackupFileContent, setCertifierBackupFileContent] = useState<string | null>(null);
+
+  // Plaintext secrets in volatile component memory only (Uint8Array, never React string state)
   const plaintextSecretRef = useRef<Uint8Array | null>(null);
+  const plaintextCertifierSecretRef = useRef<Uint8Array | null>(null);
 
   // Guards against stale async operations when requests race or unmount occurs
   const requestCounter = useRef(0);
@@ -108,10 +135,14 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
       isMounted.current = false;
       copyGenerationRef.current++;
       activeCopyTokenRef.current = null;
+      certifierCopyGenerationRef.current++;
+      activeCertifierCopyTokenRef.current = null;
       deployGenerationRef.current++;
       activeDeployTokenRef.current = null;
       zeroizeBytes(plaintextSecretRef.current);
       plaintextSecretRef.current = null;
+      zeroizeBytes(plaintextCertifierSecretRef.current);
+      plaintextCertifierSecretRef.current = null;
     };
   }, []);
 
@@ -130,9 +161,12 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
     contractState.inspectionState === 'attaching' ||
     isDeploying;
 
-  // Monotonically increasing copy generation token to prevent stale callbacks across secret lifecycles
+  // Monotonically increasing copy generation tokens to prevent stale callbacks across secret lifecycles
   const copyGenerationRef = useRef(0);
   const activeCopyTokenRef = useRef<number | null>(null);
+
+  const certifierCopyGenerationRef = useRef(0);
+  const activeCertifierCopyTokenRef = useRef<number | null>(null);
 
   // Helper to securely clear registrar secret in memory
   const clearRegistrarSecret = (isLocked: boolean = false) => {
@@ -151,6 +185,26 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
     setBackupFileContent(null);
     setRegistrarError(null);
   };
+
+  // Helper to securely clear certifier secret in memory
+  const clearCertifierSecret = (isLocked: boolean = false) => {
+    certifierCopyGenerationRef.current++;
+    activeCertifierCopyTokenRef.current = null;
+    zeroizeBytes(plaintextCertifierSecretRef.current);
+    plaintextCertifierSecretRef.current = null;
+    setCertifierUi((prev) => onSecretClearedOrLocked(prev, isLocked));
+    setCertifierImportHexInput('');
+    setCertifierExportPassphrase('');
+    setCertifierImportPassphrase('');
+    setCertifierBackupFileContent(null);
+    setCertifierError(null);
+  };
+
+  // Clear secrets when role changes
+  useEffect(() => {
+    clearRegistrarSecret(false);
+    clearCertifierSecret(false);
+  }, [role]);
 
   const handleConnectWallet = async () => {
     setWalletConnecting(true);
@@ -175,6 +229,7 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
     setWallet(null);
     setWalletError(null);
     clearRegistrarSecret(false);
+    clearCertifierSecret(false);
     setContractState(INITIAL_WORKSPACE_CONTRACT_STATE);
     setDeploymentUi((prev) => onDeploymentReset(prev));
   };
@@ -551,6 +606,291 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
     }
   };
 
+  // --- Certifier Workspace Handlers ---
+
+  const handleGenerateCertifierSecret = () => {
+    clearCertifierSecret(false);
+    const secretBytes = generateCertifierSecret();
+    plaintextCertifierSecretRef.current = secretBytes;
+
+    setCertifierUi((prev) => onSecretGeneratedOrImported(prev));
+    setCertifierNotice(
+      'New 32-byte Certifier secret generated. It is kept only in volatile session memory.',
+    );
+    setCertifierError(null);
+
+    if (contractState.attachedAddress && contractState.inspectedState) {
+      const derivedKey = bytesToHex(CommonVeil.pureCircuits.deriveCertifierKey(secretBytes));
+      const matches = derivedKey.toLowerCase() === contractState.inspectedState.certifierKey.toLowerCase();
+      setCertifierUi((prev) => ({
+        ...prev,
+        verificationStatus: matches ? 'verified' : 'failed',
+      }));
+    }
+  };
+
+  const handleImportCertifierSecretHex = () => {
+    setCertifierError(null);
+    setCertifierNotice(null);
+    try {
+      const secretBytes = parseCertifierSecretHex(certifierImportHexInput);
+      setCertifierImportHexInput('');
+
+      clearCertifierSecret(false);
+      plaintextCertifierSecretRef.current = secretBytes;
+
+      setCertifierUi((prev) => onSecretGeneratedOrImported(prev));
+      setCertifierNotice(
+        'Certifier secret imported. It is kept only in volatile session memory.',
+      );
+
+      if (contractState.attachedAddress && contractState.inspectedState) {
+        const derivedKey = bytesToHex(CommonVeil.pureCircuits.deriveCertifierKey(secretBytes));
+        const matches = derivedKey.toLowerCase() === contractState.inspectedState.certifierKey.toLowerCase();
+        setCertifierUi((prev) => ({
+          ...prev,
+          verificationStatus: matches ? 'verified' : 'failed',
+        }));
+      }
+    } catch (err: unknown) {
+      setCertifierImportHexInput('');
+      setCertifierError(mapCertifierOperationError(err));
+    }
+  };
+
+  const handleVerifyCertifierSecret = () => {
+    if (!contractState.attachedAddress || !contractState.inspectedState) {
+      setCertifierError(
+        'Attach to a verified CommonVeil contract before verifying Certifier authority.',
+      );
+      return;
+    }
+    if (!plaintextCertifierSecretRef.current) {
+      setCertifierError('No Certifier secret loaded in session memory.');
+      return;
+    }
+    const derivedKey = bytesToHex(
+      CommonVeil.pureCircuits.deriveCertifierKey(plaintextCertifierSecretRef.current),
+    );
+    const matches = derivedKey.toLowerCase() === contractState.inspectedState.certifierKey.toLowerCase();
+    setCertifierUi((prev) => ({
+      ...prev,
+      verificationStatus: matches ? 'verified' : 'failed',
+    }));
+    setCertifierError(null);
+  };
+
+  const handleLockCertifierSession = () => {
+    clearCertifierSecret(true);
+    setCertifierNotice(
+      'Certifier session locked. Secret zeroized in memory.',
+    );
+  };
+
+  const handleOneTimeCopyCertifierSecret = () => {
+    if (
+      !plaintextCertifierSecretRef.current ||
+      !certifierUi.canCopyOnce ||
+      certifierUi.copyStatus === 'pending' ||
+      activeCertifierCopyTokenRef.current !== null
+    ) {
+      return;
+    }
+
+    const operationToken = ++certifierCopyGenerationRef.current;
+    activeCertifierCopyTokenRef.current = operationToken;
+    setCertifierUi((prev) => onCopyAttemptInitiated(prev));
+
+    const hex = bytesToHex(plaintextCertifierSecretRef.current);
+    navigator.clipboard
+      .writeText(hex)
+      .then(() => {
+        if (!isMounted.current || activeCertifierCopyTokenRef.current !== operationToken) {
+          return;
+        }
+        activeCertifierCopyTokenRef.current = null;
+        setCertifierUi((prev) => onCopyAttemptResult(prev, true));
+      })
+      .catch((err: unknown) => {
+        if (!isMounted.current || activeCertifierCopyTokenRef.current !== operationToken) {
+          return;
+        }
+        activeCertifierCopyTokenRef.current = null;
+        setCertifierUi((prev) => onCopyAttemptResult(prev, false));
+        setCertifierError(mapCertifierOperationError(err ?? new Error('clipboard')));
+      });
+  };
+
+  const handleExportCertifierBackup = async () => {
+    setCertifierError(null);
+    setCertifierNotice(null);
+    if (!plaintextCertifierSecretRef.current) {
+      setCertifierError('No Certifier secret available to backup.');
+      return;
+    }
+    if (certifierExportPassphrase.length < 12) {
+      setCertifierError('Passphrase must be at least 12 characters.');
+      return;
+    }
+
+    try {
+      const backupPackage = buildCertifierBackupPackage(plaintextCertifierSecretRef.current);
+      const envelope: EncryptedEnvelope = await encryptToEnvelope(
+        backupPackage,
+        certifierExportPassphrase,
+      );
+
+      const blob = new Blob([JSON.stringify(envelope, null, 2)], {
+        type: 'application/json',
+      });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = `commonveil-certifier-backup-${Date.now()}.json`;
+      anchor.click();
+      URL.revokeObjectURL(url);
+
+      setCertifierExportPassphrase('');
+      setCertifierNotice(
+        'Encrypted backup exported. Store the backup file and passphrase securely.',
+      );
+    } catch (err: unknown) {
+      setCertifierError(mapCertifierOperationError(err));
+    }
+  };
+
+  const handleCertifierBackupFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setCertifierError(null);
+    setCertifierNotice(null);
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const content = event.target?.result;
+      if (typeof content === 'string') {
+        setCertifierBackupFileContent(content);
+        setCertifierNotice('Certifier backup file loaded. Enter passphrase to decrypt and restore.');
+      }
+    };
+    reader.onerror = () => {
+      setCertifierError('Could not read the selected backup file.');
+    };
+    reader.readAsText(file);
+  };
+
+  const handleImportCertifierBackup = async () => {
+    setCertifierError(null);
+    setCertifierNotice(null);
+    if (!certifierBackupFileContent) {
+      setCertifierError('The selected file is not a valid CommonVeil encrypted backup.');
+      return;
+    }
+    if (certifierImportPassphrase.length < 12) {
+      setCertifierError('Passphrase must be at least 12 characters.');
+      return;
+    }
+
+    try {
+      let parsedEnvelope: unknown;
+      try {
+        parsedEnvelope = JSON.parse(certifierBackupFileContent);
+      } catch {
+        throw new Error('The selected file is not a valid CommonVeil encrypted backup.');
+      }
+
+      const restored = await decryptAndValidateEnvelope(
+        parsedEnvelope as EncryptedEnvelope,
+        certifierImportPassphrase,
+        validateCertifierBackupPackage,
+      );
+
+      const secretBytes = parseCertifierSecretHex(restored.certifierSecret);
+      clearCertifierSecret(false);
+      plaintextCertifierSecretRef.current = secretBytes;
+
+      setCertifierUi((prev) => onSecretRestoredFromBackup(prev));
+      setCertifierImportPassphrase('');
+      setCertifierBackupFileContent(null);
+      setCertifierNotice(
+        'Certifier secret restored from encrypted backup into session memory. Note: Plaintext copy is disabled for restored backups.',
+      );
+
+      if (contractState.attachedAddress && contractState.inspectedState) {
+        const derivedKey = bytesToHex(CommonVeil.pureCircuits.deriveCertifierKey(secretBytes));
+        const matches = derivedKey.toLowerCase() === contractState.inspectedState.certifierKey.toLowerCase();
+        setCertifierUi((prev) => ({
+          ...prev,
+          verificationStatus: matches ? 'verified' : 'failed',
+        }));
+      }
+    } catch (err: unknown) {
+      setCertifierError(mapCertifierOperationError(err));
+    }
+  };
+
+  const handleExportCertifierKeyPackage = () => {
+    setCertifierError(null);
+    setCertifierNotice(null);
+    if (!plaintextCertifierSecretRef.current) {
+      setCertifierError('No active Certifier secret in memory to derive public key.');
+      return;
+    }
+
+    try {
+      const derivedPublicKeyBytes = CommonVeil.pureCircuits.deriveCertifierKey(
+        plaintextCertifierSecretRef.current,
+      );
+      const pkg = buildCertifierKeyPackage(derivedPublicKeyBytes);
+
+      const blob = new Blob([JSON.stringify(pkg, null, 2)], {
+        type: 'application/json',
+      });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = `commonveil-certifier-key-${Date.now()}.json`;
+      anchor.click();
+      URL.revokeObjectURL(url);
+
+      setCertifierNotice(
+        'Public Certifier Key Package exported. Share this package with the Registrar for contract deployment.',
+      );
+    } catch (err: unknown) {
+      setCertifierError(mapCertifierOperationError(err));
+    }
+  };
+
+  // --- Registrar Certifier Key Package Import ---
+
+  const handleCertifierKeyPackageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setRegistrarError(null);
+    setRegistrarNotice(null);
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const content = event.target?.result;
+      if (typeof content !== 'string') return;
+      try {
+        const parsed = JSON.parse(content);
+        const validated: CertifierKeyPackage = validateCertifierKeyPackage(parsed);
+        if (validated.certifierKey === '00'.repeat(32)) {
+          throw new Error('Certifier public key cannot be a zero key.');
+        }
+        setDeploymentUi((prev) => onCertifierKeyImported(prev, validated.certifierKey));
+        setRegistrarNotice('Certifier public key package imported and validated successfully.');
+      } catch (err: unknown) {
+        setRegistrarError(mapRegistrarOperationError(err));
+      }
+    };
+    reader.onerror = () => {
+      setRegistrarError('Could not read the selected Certifier key package file.');
+    };
+    reader.readAsText(file);
+  };
+
   // --- Registrar Contract Deployment Flow ---
 
   const handleStartDeployConfirmation = () => {
@@ -572,6 +912,12 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
   const handleDeployContract = async () => {
     if (!wallet || !plaintextSecretRef.current || isDeploying) return;
     if (!deploymentUi.backupConfirmed) return;
+    if (!deploymentUi.certifierPublicKey) {
+      setDeploymentUi((prev) =>
+        onDeploymentFailed(prev, 'A validated Certifier public key package is required before deployment.'),
+      );
+      return;
+    }
 
     // Issue unique deployment token for stale async protection
     const operationToken = ++deployGenerationRef.current;
@@ -581,9 +927,9 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
     setDeploymentUi((prev) => onDeploymentWalletRequest(prev));
 
     try {
-      // 2. Derive AdminKey purely locally from session secret; certifier key initial 32 zero bytes
+      // 2. Derive AdminKey purely locally from session secret; certifier key from validated package
       const adminKey = CommonVeil.pureCircuits.deriveAdminKey(plaintextSecretRef.current);
-      const unassignedCertifierKey = new Uint8Array(32);
+      const certifierPublicKeyBytes = hexToBytes(deploymentUi.certifierPublicKey);
 
       // Transition to submitting/deploying state once SDK begins processing
       setDeploymentUi((prev) => onDeploymentSubmitting(prev));
@@ -592,7 +938,7 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
         compiledContract: CompiledCommonVeilContract,
         privateStateId: PRIVATE_STATE_ID,
         initialPrivateState: {},
-        args: [adminKey, unassignedCertifierKey],
+        args: [adminKey, certifierPublicKeyBytes],
       });
 
       // Verify token freshness and component mount
@@ -600,12 +946,12 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
         return;
       }
 
-      // Preserve contract address and deployment transaction ID as separate distinct values
+      // Preserve contract address.
+      // Note: @midnight-ntwrk/midnight-js-contracts deployContract returns DeployedContract<C>
+      // whose deployTxData.public is UnsubmittedDeployTxPublicData: { contractAddress, initialContractState }.
+      // It does not explicitly expose a transaction ID, so deploymentTxId is left null.
       const deployedAddress = deployed.deployTxData.public.contractAddress;
-      const deployTxId =
-        (deployed.deployTxData.public as any).txId ??
-        (deployed.deployTxData.public as any).identifiers?.[0] ??
-        null;
+      const deployTxId: string | null = null;
 
       // 3. Automatically inspect the returned contract address via public indexer
       try {
@@ -617,7 +963,10 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
         // Verify that deployed ledger's admin key equals derived key
         const matches = verifyRegistrarSecret(session.publicState, plaintextSecretRef.current);
         if (!matches) {
-          throw new Error('Deployed contract registrar key does not match active secret.');
+          throw new ContractSessionError(
+            'INCOMPATIBLE_CONTRACT',
+            'Deployed contract registrar key does not match active secret.',
+          );
         }
 
         // Build and validate deployment receipt
@@ -627,7 +976,7 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
           contractAddress: deployedAddress,
           deploymentTxId: deployTxId,
           registrarPublicKey: bytesToHex(adminKey),
-          certifierPublicKey: bytesToHex(unassignedCertifierKey),
+          certifierPublicKey: deploymentUi.certifierPublicKey,
           deployedAt: new Date().toISOString(),
           status: 'finalized',
         });
@@ -652,17 +1001,33 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
 
         setDeploymentUi((prev) => onDeploymentCompleted(prev, receipt));
       } catch (inspectError: unknown) {
-        // If inspection failed because indexer has not seen the block yet, transition to finalized-indexing
         if (!isMounted.current || activeDeployTokenRef.current !== operationToken) {
           return;
         }
 
-        setDeploymentUi((prev) =>
-          onDeploymentFinalizedIndexing(prev, {
-            contractAddress: deployedAddress,
-            deploymentTxId: deployTxId,
-          }),
-        );
+        // Differentiate indexer lag vs hard failures:
+        // Only enter finalized-indexing for CONTRACT_NOT_FOUND or INDEXER_QUERY_FAILED.
+        // INCOMPATIBLE_CONTRACT or key mismatch is a hard failure!
+        const errorCode =
+          inspectError instanceof ContractSessionError
+            ? inspectError.code
+            : (inspectError as any)?.code;
+
+        if (errorCode === 'CONTRACT_NOT_FOUND' || errorCode === 'INDEXER_QUERY_FAILED') {
+          setDeploymentUi((prev) =>
+            onDeploymentFinalizedIndexing(prev, {
+              contractAddress: deployedAddress,
+              deploymentTxId: deployTxId,
+            }),
+          );
+        } else {
+          // Hard failure: incompatible contract or key mismatch
+          const errMessage =
+            inspectError instanceof Error
+              ? inspectError.message
+              : 'Deployed contract ledger is incompatible with active configuration.';
+          setDeploymentUi((prev) => onDeploymentFailed(prev, errMessage));
+        }
       }
     } catch (deployError: unknown) {
       if (!isMounted.current || activeDeployTokenRef.current !== operationToken) {
@@ -699,6 +1064,7 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
       !wallet ||
       !plaintextSecretRef.current ||
       !deploymentUi.contractAddress ||
+      !deploymentUi.certifierPublicKey ||
       deploymentUi.stage !== 'finalized-indexing'
     ) {
       return;
@@ -720,15 +1086,13 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
       }
 
       const adminKey = CommonVeil.pureCircuits.deriveAdminKey(plaintextSecretRef.current);
-      const unassignedCertifierKey = new Uint8Array(32);
-
       const receipt: DeploymentReceipt = validateDeploymentReceipt({
         schema: 'commonveil.deployment-receipt/v1',
         network: 'preprod',
         contractAddress,
         deploymentTxId: deployTxId,
         registrarPublicKey: bytesToHex(adminKey),
-        certifierPublicKey: bytesToHex(unassignedCertifierKey),
+        certifierPublicKey: deploymentUi.certifierPublicKey,
         deployedAt: new Date().toISOString(),
         status: 'finalized',
       });
@@ -750,8 +1114,18 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
       }));
 
       setDeploymentUi((prev) => onDeploymentCompleted(prev, receipt));
-    } catch {
-      // Indexer still not ready; stay in finalized-indexing state
+    } catch (inspectError: unknown) {
+      const errorCode =
+        inspectError instanceof ContractSessionError
+          ? inspectError.code
+          : (inspectError as any)?.code;
+
+      if (errorCode === 'INCOMPATIBLE_CONTRACT') {
+        setDeploymentUi((prev) =>
+          onDeploymentFailed(prev, 'The contract at this address does not expose a compatible CommonVeil ledger.'),
+        );
+      }
+      // CONTRACT_NOT_FOUND or INDEXER_QUERY_FAILED: stay in finalized-indexing state
     }
   };
 
@@ -873,7 +1247,7 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
                     <dd>{formatDust(wallet.dustBalance)} DUST</dd>
                     <dt>Proving Mode</dt>
                     <dd>
-                      {wallet.proofMode === 'wallet' ? 'In-wallet prover' : 'Local proof server'}
+                      {wallet.proofMode === 'wallet' ? 'In-wallet prover (Configured)' : 'Local proof server (Configured)'}
                     </dd>
                   </dl>
                   <button
@@ -1020,8 +1394,237 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
           </article>
         </div>
 
-        {/* Right Column: Role Identity & Secret Lifecycle (Registrar) */}
+        {/* Right Column: Role Identity & Secret Lifecycle (Registrar or Certifier) */}
         <div className="workspace-column">
+          {role === 'certifier' && (
+            <article className="workspace-card certifier-identity-card">
+              <div className="card-header">
+                <span className="card-step">03</span>
+                <h2>Certifier Role Identity & Secrets</h2>
+              </div>
+              <p className="card-caption">
+                The Certifier secret is kept only in volatile session memory. It derives the public Certifier key and authorizes inventory certifications.
+              </p>
+
+              {/* Status Header */}
+              <div className="registrar-status-row" aria-live="polite">
+                <div>
+                  <span className="field-caption">Secret in Memory</span>
+                  <strong>
+                    {certifierUi.hasSecret ? 'Loaded in session memory' : 'None (Locked)'}
+                  </strong>
+                </div>
+                <div>
+                  <span className="field-caption">On-chain Verification</span>
+                  <strong className={`verification-badge ${certifierUi.verificationStatus}`}>
+                    {certifierUi.verificationStatus === 'verified'
+                      ? 'Verified'
+                      : certifierUi.verificationStatus === 'failed'
+                        ? 'Not verified'
+                        : 'Unverified'}
+                  </strong>
+                </div>
+              </div>
+
+              {certifierNotice && (
+                <div className="safe-notice-banner" role="status">
+                  <p>{certifierNotice}</p>
+                </div>
+              )}
+
+              {certifierError && (
+                <div className="safe-error-banner" role="alert">
+                  <strong>Certifier Error</strong>
+                  <p>{certifierError}</p>
+                </div>
+              )}
+
+              {/* One-time copy confirmation banner */}
+              {certifierUi.hasSecret && certifierUi.canCopyOnce && (
+                <div className="secret-reveal-box" role="alert">
+                  <div className="secret-reveal-header">
+                    <strong>One-Time Secret Copy Available</strong>
+                  </div>
+                  <p className="secret-warning-text">
+                    The secret is kept only for this browser session and is not written to persistent storage. Export an encrypted backup immediately.
+                  </p>
+                  <div className="one-time-copy-row">
+                    <button
+                      type="button"
+                      className="action-button primary"
+                      onClick={handleOneTimeCopyCertifierSecret}
+                      disabled={certifierUi.copyStatus === 'pending'}
+                      aria-label="Copy certifier secret to clipboard (one time only)"
+                    >
+                      {certifierUi.copyStatus === 'pending'
+                        ? 'Copying...'
+                        : certifierUi.copyStatus === 'failed'
+                          ? 'Retry Secret Copy'
+                          : 'Copy Secret to Clipboard (One-Time)'}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Action Tabs / Buttons */}
+              {!certifierUi.hasSecret ? (
+                <div className="secret-setup-section">
+                  <button
+                    type="button"
+                    onClick={handleGenerateCertifierSecret}
+                    className="action-button primary"
+                    aria-label="Generate fresh random 32-byte certifier secret"
+                  >
+                    Generate New Certifier Secret
+                  </button>
+
+                  <div className="divider-row"><span>or import existing 32-byte hex</span></div>
+
+                  <form
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      handleImportCertifierSecretHex();
+                    }}
+                  >
+                    <label htmlFor="import-certifier-hex-input">
+                      32-Byte Secret Hex (64 hex characters)
+                    </label>
+                    <input
+                      id="import-certifier-hex-input"
+                      type="password"
+                      value={certifierImportHexInput}
+                      onChange={(e) => setCertifierImportHexInput(e.target.value)}
+                      placeholder="Paste 64-character hex secret"
+                      autoComplete="off"
+                      spellCheck="false"
+                    />
+                    <button
+                      type="submit"
+                      disabled={!certifierImportHexInput.trim()}
+                      className="action-button secondary"
+                      aria-label="Import plaintext certifier secret hex"
+                    >
+                      Import Hex Secret
+                    </button>
+                  </form>
+
+                  <div className="divider-row"><span>or restore encrypted backup</span></div>
+
+                  <div className="backup-import-box">
+                    <label htmlFor="certifier-backup-file-input">Encrypted Backup JSON File</label>
+                    <input
+                      id="certifier-backup-file-input"
+                      type="file"
+                      accept=".json,application/json"
+                      onChange={handleCertifierBackupFileSelect}
+                    />
+
+                    {certifierBackupFileContent && (
+                      <form
+                        onSubmit={(e) => {
+                          e.preventDefault();
+                          handleImportCertifierBackup();
+                        }}
+                      >
+                        <label htmlFor="import-certifier-passphrase-input">
+                          Backup Passphrase (min 12 chars)
+                        </label>
+                        <input
+                          id="import-certifier-passphrase-input"
+                          type="password"
+                          value={certifierImportPassphrase}
+                          onChange={(e) => setCertifierImportPassphrase(e.target.value)}
+                          placeholder="Enter passphrase"
+                          autoComplete="off"
+                        />
+                        <button
+                          type="submit"
+                          disabled={certifierImportPassphrase.length < 12}
+                          className="action-button primary"
+                          aria-label="Decrypt and restore certifier backup"
+                        >
+                          Decrypt and Restore Secret
+                        </button>
+                      </form>
+                    )}
+                  </div>
+                </div>
+              ) : (
+                <div className="secret-active-controls">
+                  <div className="button-row">
+                    <button
+                      type="button"
+                      onClick={handleExportCertifierKeyPackage}
+                      className="action-button primary"
+                      aria-label="Export public certifier key package JSON"
+                    >
+                      Export Public Certifier Key Package (.json)
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={handleVerifyCertifierSecret}
+                      disabled={!contractState.attachedAddress}
+                      className="action-button secondary"
+                      aria-label="Verify certifier secret against attached contract"
+                    >
+                      Verify On-Chain Authority
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={handleLockCertifierSession}
+                      className="action-button secondary"
+                      aria-label="Lock certifier session and zeroize secret"
+                    >
+                      Lock Session
+                    </button>
+                  </div>
+
+                  {!contractState.attachedAddress && (
+                    <p className="form-hint-text">
+                      Attach a contract in Step 02 to run on-chain certifier verification.
+                    </p>
+                  )}
+
+                  {/* Export Backup Form */}
+                  <div className="export-backup-section">
+                    <h3>Encrypted Backup Export</h3>
+                    <p className="card-caption">
+                      Encrypts the Certifier secret with AES-256-GCM (600,000 PBKDF2 iterations) and downloads a JSON envelope.
+                    </p>
+                    <form
+                      onSubmit={(e) => {
+                        e.preventDefault();
+                        handleExportCertifierBackup();
+                      }}
+                    >
+                      <label htmlFor="export-certifier-passphrase-input">
+                        Export Passphrase (min 12 chars)
+                      </label>
+                      <input
+                        id="export-certifier-passphrase-input"
+                        type="password"
+                        value={certifierExportPassphrase}
+                        onChange={(e) => setCertifierExportPassphrase(e.target.value)}
+                        placeholder="Enter 12+ character passphrase"
+                        autoComplete="off"
+                      />
+                      <button
+                        type="submit"
+                        disabled={certifierExportPassphrase.length < 12}
+                        className="action-button secondary"
+                        aria-label="Export encrypted certifier backup"
+                      >
+                        Download Encrypted Backup
+                      </button>
+                    </form>
+                  </div>
+                </div>
+              )}
+            </article>
+          )}
+
           {role === 'registrar' && (
             <article className="workspace-card registrar-identity-card">
               <div className="card-header">
@@ -1267,9 +1870,44 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
                   <span>{deploymentUi.backupConfirmed ? '✔' : '○'}</span>
                   <span>Encrypted backup confirmed exported</span>
                 </div>
+                <div className={`prereq-item ${deploymentUi.certifierPublicKey ? 'met' : 'unmet'}`}>
+                  <span>{deploymentUi.certifierPublicKey ? '✔' : '○'}</span>
+                  <span>
+                    {deploymentUi.certifierPublicKey
+                      ? `Certifier public key package imported (${shortenAddress(deploymentUi.certifierPublicKey)})`
+                      : 'Certifier public key package imported & validated'}
+                  </span>
+                </div>
                 <div className={`prereq-item ${wallet?.proofMode ? 'met' : 'unmet'}`}>
                   <span>{wallet?.proofMode ? '✔' : '○'}</span>
-                  <span>ZK proof generation provider available</span>
+                  <span>ZK proof generation provider configured</span>
+                </div>
+              </div>
+
+              {/* Certifier Public Key Package Import Section */}
+              <div className="certifier-key-import-section">
+                <h3>Certifier Public Key Requirement</h3>
+                <p className="card-caption">
+                  CommonVeil requires a genuine, non-zero Certifier public key at deployment. Import the <code>commonveil.certifier-key/v1</code> package exported from the Certifier workspace. The Registrar receives only the public key.
+                </p>
+                <div className="key-package-file-row">
+                  <label htmlFor="certifier-key-pkg-input">
+                    {deploymentUi.certifierPublicKey
+                      ? 'Replace Certifier Public Key Package (.json)'
+                      : 'Import Certifier Public Key Package (.json)'}
+                  </label>
+                  <input
+                    id="certifier-key-pkg-input"
+                    type="file"
+                    accept=".json,application/json"
+                    onChange={handleCertifierKeyPackageSelect}
+                  />
+                  {deploymentUi.certifierPublicKey && (
+                    <div className="imported-key-badge">
+                      <span className="field-caption">Imported Certifier Public Key</span>
+                      <code>{deploymentUi.certifierPublicKey}</code>
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -1382,10 +2020,13 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
                       <strong>Action:</strong> Creates a brand-new on-chain CommonVeil governance contract instance.
                     </p>
                     <p>
+                      <strong>Constructor Arguments:</strong> Derived Registrar Public Key and Validated Certifier Public Key.
+                    </p>
+                    <p>
                       <strong>Resource Consumption:</strong> DUST and network transaction fees will be consumed from your 1AM wallet.
                     </p>
                     <p>
-                      <strong>Key Permanence:</strong> The Registrar secret cannot be replaced once the contract is deployed. Ensure you hold the exported encrypted backup.
+                      <strong>Key Permanence:</strong> The Registrar and Certifier keys cannot be replaced once the contract is deployed.
                     </p>
                     <p>
                       <strong>Wallet Review:</strong> You must review and approve the transaction in the 1AM popup.
@@ -1405,7 +2046,7 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
                     <button
                       type="button"
                       className="action-button primary"
-                      disabled={!deploymentUi.backupConfirmed || isDeploying}
+                      disabled={!deploymentUi.backupConfirmed || !deploymentUi.certifierPublicKey || isDeploying}
                       onClick={handleDeployContract}
                       aria-label="Confirm and submit deployment transaction to 1AM wallet"
                     >
@@ -1449,6 +2090,7 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
                           backupConfirmed: deploymentUi.backupConfirmed,
                           isDeploying,
                           proofProviderAvailable: !!wallet?.proofMode,
+                          certifierPublicKey: deploymentUi.certifierPublicKey,
                         })
                       }
                       onClick={handleStartDeployConfirmation}
