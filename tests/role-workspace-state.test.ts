@@ -18,6 +18,13 @@ import {
   validateRegistrarBackupPackage,
   zeroizeBytes,
   REGISTRAR_BACKUP_SCHEMA,
+  type RegistrarSecretUiState,
+  INITIAL_REGISTRAR_SECRET_UI_STATE,
+  onSecretGeneratedOrImported,
+  onSecretRestoredFromBackup,
+  onCopyAttemptResult,
+  onSecretClearedOrLocked,
+  mapRegistrarOperationError,
 } from '../src/role-workspace-state.ts';
 import {
   bytesToHex,
@@ -421,4 +428,126 @@ test('24. Zeroization wipes secret bytes in memory', () => {
   zeroizeBytes(secret);
   assert.equal(secret[0], 0);
   assert.equal(secret.every((b) => b === 0), true);
+});
+
+// 25. No full secret in persistent state model (RegistrarSecretUiState contains only metadata)
+test('25. RegistrarSecretUiState contains no plaintext secret strings', () => {
+  const initial: RegistrarSecretUiState = INITIAL_REGISTRAR_SECRET_UI_STATE;
+  assert.equal(initial.hasSecret, false);
+  assert.equal(initial.isLocked, false);
+  assert.equal(initial.verificationStatus, 'unverified');
+  assert.equal(initial.canCopyOnce, false);
+  assert.equal(initial.copyStatus, 'idle');
+
+  // Verify type/model property keys do not contain any secret or hex fields
+  const keys = Object.keys(initial);
+  assert.ok(!keys.includes('secret'));
+  assert.ok(!keys.includes('secretHex'));
+  assert.ok(!keys.includes('activeSecretHex'));
+  assert.ok(!keys.includes('plaintextSecret'));
+
+  const generatedState = onSecretGeneratedOrImported(initial);
+  assert.equal(generatedState.hasSecret, true);
+  assert.equal(generatedState.canCopyOnce, true);
+  assert.equal(generatedState.copyStatus, 'idle');
+  const genKeys = Object.keys(generatedState);
+  assert.ok(!genKeys.includes('secret'));
+  assert.ok(!genKeys.includes('secretHex'));
+  assert.ok(!genKeys.includes('activeSecretHex'));
+});
+
+// 26. One successful copy permanently disables further copying
+test('26. One successful copy permanently disables further copying', () => {
+  const state = onSecretGeneratedOrImported(INITIAL_REGISTRAR_SECRET_UI_STATE);
+  assert.equal(state.canCopyOnce, true);
+
+  // Simulate successful copy
+  const copiedState = onCopyAttemptResult(state, true);
+  assert.equal(copiedState.canCopyOnce, false);
+  assert.equal(copiedState.copyStatus, 'copied');
+
+  // Any subsequent attempt cannot be initiated or remains disabled
+  const attemptAgain = onCopyAttemptResult(copiedState, true);
+  assert.equal(attemptAgain.canCopyOnce, false);
+  assert.equal(attemptAgain.copyStatus, 'copied');
+});
+
+// 27. Failed copy permits retry
+test('27. Failed copy permits retry', () => {
+  const state = onSecretGeneratedOrImported(INITIAL_REGISTRAR_SECRET_UI_STATE);
+  assert.equal(state.canCopyOnce, true);
+
+  // Simulate failed clipboard write
+  const failedState = onCopyAttemptResult(state, false);
+  assert.equal(failedState.canCopyOnce, true); // Still allowed to retry
+  assert.equal(failedState.copyStatus, 'failed');
+
+  // Second attempt succeeds -> now disabled
+  const retrySuccess = onCopyAttemptResult(failedState, true);
+  assert.equal(retrySuccess.canCopyOnce, false);
+  assert.equal(retrySuccess.copyStatus, 'copied');
+});
+
+// 28. Restored backup provides no copy or reveal opportunity
+test('28. Restored backup provides no copy or reveal opportunity', () => {
+  const state = onSecretRestoredFromBackup(INITIAL_REGISTRAR_SECRET_UI_STATE);
+  assert.equal(state.hasSecret, true);
+  assert.equal(state.canCopyOnce, false); // Invariant: restored backup cannot be copied
+  assert.equal(state.copyStatus, 'idle');
+  assert.equal(state.verificationStatus, 'unverified');
+});
+
+// 29. Lock, disconnect, or address change removes reveal/copy capability immediately
+test('29. Lock, disconnect, or address change removes reveal/copy capability immediately', () => {
+  const activeState = onSecretGeneratedOrImported(INITIAL_REGISTRAR_SECRET_UI_STATE);
+  assert.equal(activeState.hasSecret, true);
+  assert.equal(activeState.canCopyOnce, true);
+
+  // On lock
+  const lockedState = onSecretClearedOrLocked(activeState, true);
+  assert.equal(lockedState.hasSecret, false);
+  assert.equal(lockedState.isLocked, true);
+  assert.equal(lockedState.canCopyOnce, false);
+  assert.equal(lockedState.copyStatus, 'idle');
+
+  // On disconnect / address change / unmount
+  const clearedState = onSecretClearedOrLocked(activeState, false);
+  assert.equal(clearedState.hasSecret, false);
+  assert.equal(clearedState.isLocked, false);
+  assert.equal(clearedState.canCopyOnce, false);
+  assert.equal(clearedState.copyStatus, 'idle');
+});
+
+// 30. Raw internal errors never reach displayed messages (sanitized mapping)
+test('30. Raw internal errors never reach displayed messages', () => {
+  // Web Crypto / AES GCM raw failure
+  const cryptoError = new Error('OperationError: WebCrypto AES-GCM tag mismatch at 0x7fff');
+  const mappedCrypto = mapRegistrarOperationError(cryptoError);
+  assert.equal(mappedCrypto, 'Decryption failed. Check the passphrase or verify the backup file.');
+  assert.ok(!mappedCrypto.includes('WebCrypto'));
+  assert.ok(!mappedCrypto.includes('0x7fff'));
+
+  // JSON parse raw error
+  const jsonError = new SyntaxError('Unexpected token < in JSON at position 0');
+  const mappedJson = mapRegistrarOperationError(jsonError);
+  assert.equal(mappedJson, 'The selected file is not a valid CommonVeil encrypted backup.');
+  assert.ok(!mappedJson.includes('Unexpected token'));
+
+  // FileReader raw error
+  const fileError = new Error('FileReader failed to read blob');
+  const mappedFile = mapRegistrarOperationError(fileError);
+  assert.equal(mappedFile, 'Could not read the selected backup file.');
+  assert.ok(!mappedFile.includes('blob'));
+
+  // Clipboard raw error
+  const clipError = new Error('NotAllowedError: Clipboard write failed due to permissions');
+  const mappedClip = mapRegistrarOperationError(clipError);
+  assert.equal(mappedClip, 'Clipboard write failed. Please check browser permissions and try again.');
+  assert.ok(!mappedClip.includes('NotAllowedError'));
+
+  // Generic internal exception with sensitive string
+  const secretLeakError = new Error('Secret 0123456789abcdef failed to process');
+  const mappedGeneric = mapRegistrarOperationError(secretLeakError);
+  assert.equal(mappedGeneric, 'The operation could not be completed. Check the input and try again.');
+  assert.ok(!mappedGeneric.includes('0123456789abcdef'));
 });

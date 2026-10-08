@@ -3,7 +3,7 @@
  *
  * Provides pure helpers for URL parsing, role validation, safe error mapping,
  * safe wallet error mapping, address invalidation, registrar secret validation,
- * registrar backup payload schemas, and async request race protection.
+ * registrar backup payload schemas, safe registrar error sanitization, and async request race protection.
  */
 
 import { ContractSessionError, type ContractSessionErrorCode } from './contract-session';
@@ -241,16 +241,24 @@ export interface RegistrarBackupPackage {
 
 export type RegistrarVerificationStatus = 'unverified' | 'verified' | 'failed';
 
-export interface RegistrarSecretState {
-  readonly secretBytes: Uint8Array | null;
+/**
+ * Pure state model for Registrar secret lifecycle.
+ * Invariant: Never contains a full plaintext secret string.
+ */
+export interface RegistrarSecretUiState {
+  readonly hasSecret: boolean;
   readonly isLocked: boolean;
   readonly verificationStatus: RegistrarVerificationStatus;
+  readonly canCopyOnce: boolean;
+  readonly copyStatus: 'idle' | 'copied' | 'failed';
 }
 
-export const INITIAL_REGISTRAR_SECRET_STATE: RegistrarSecretState = {
-  secretBytes: null,
+export const INITIAL_REGISTRAR_SECRET_UI_STATE: RegistrarSecretUiState = {
+  hasSecret: false,
   isLocked: false,
   verificationStatus: 'unverified',
+  canCopyOnce: false,
+  copyStatus: 'idle',
 };
 
 /**
@@ -339,4 +347,131 @@ export function zeroizeBytes(bytes?: Uint8Array | null): void {
   if (bytes && bytes instanceof Uint8Array) {
     bytes.fill(0);
   }
+}
+
+/**
+ * Pure state reducer when a fresh secret is created or imported directly.
+ * Grants a one-time copy opportunity.
+ */
+export function onSecretGeneratedOrImported(
+  prevState: RegistrarSecretUiState,
+): RegistrarSecretUiState {
+  return {
+    ...prevState,
+    hasSecret: true,
+    isLocked: false,
+    verificationStatus: 'unverified',
+    canCopyOnce: true,
+    copyStatus: 'idle',
+  };
+}
+
+/**
+ * Pure state reducer when a secret is restored from an encrypted backup.
+ * Restored backups NEVER enable plaintext copying or revealing.
+ */
+export function onSecretRestoredFromBackup(
+  prevState: RegistrarSecretUiState,
+): RegistrarSecretUiState {
+  return {
+    ...prevState,
+    hasSecret: true,
+    isLocked: false,
+    verificationStatus: 'unverified',
+    canCopyOnce: false, // Invariant: Restored backups cannot be copied in plaintext
+    copyStatus: 'idle',
+  };
+}
+
+/**
+ * Pure state reducer when a copy attempt succeeds or fails.
+ */
+export function onCopyAttemptResult(
+  prevState: RegistrarSecretUiState,
+  success: boolean,
+): RegistrarSecretUiState {
+  if (success) {
+    return {
+      ...prevState,
+      canCopyOnce: false, // Permanently consumed
+      copyStatus: 'copied',
+    };
+  }
+  return {
+    ...prevState,
+    canCopyOnce: true, // Remains eligible for retry on failure
+    copyStatus: 'failed',
+  };
+}
+
+/**
+ * Pure state reducer when session is locked, disconnected, or address changes.
+ * Immediately purges any copy or reveal capability and resets verification.
+ */
+export function onSecretClearedOrLocked(
+  prevState: RegistrarSecretUiState,
+  isLocked: boolean = false,
+): RegistrarSecretUiState {
+  return {
+    hasSecret: false,
+    isLocked,
+    verificationStatus: 'unverified',
+    canCopyOnce: false,
+    copyStatus: 'idle',
+  };
+}
+
+/**
+ * Pure sanitizer for registrar operation errors.
+ * Never leaks raw Web Crypto, FileReader, JSON parse, stack traces, URLs, or exception messages.
+ */
+export function mapRegistrarOperationError(error: unknown): string {
+  if (!error) {
+    return 'The operation could not be completed. Check the input and try again.';
+  }
+
+  const raw = (
+    error instanceof Error
+      ? error.message
+      : typeof error === 'string'
+        ? error
+        : typeof (error as any)?.message === 'string'
+          ? (error as any).message
+          : ''
+  ).toLowerCase();
+
+  if (raw.includes('64 hex characters') || raw.includes('exactly 32 bytes')) {
+    return 'Secret must be exactly 32 bytes (64 hexadecimal characters).';
+  }
+  if (raw.includes('non-hex') || raw.includes('hexadecimal')) {
+    return 'Secret contains invalid non-hexadecimal characters.';
+  }
+  if (raw.includes('passphrase') && (raw.includes('12') || raw.includes('length'))) {
+    return 'Passphrase must be at least 12 characters.';
+  }
+  if (
+    raw.includes('incorrect passphrase') ||
+    raw.includes('tampered') ||
+    raw.includes('decrypt') ||
+    raw.includes('crypto') ||
+    raw.includes('operationerror') ||
+    raw.includes('tag mismatch') ||
+    raw.includes('aes')
+  ) {
+    return 'Decryption failed. Check the passphrase or verify the backup file.';
+  }
+  if (raw.includes('json') || raw.includes('backup file') || raw.includes('schema') || raw.includes('package')) {
+    return 'The selected file is not a valid CommonVeil encrypted backup.';
+  }
+  if (raw.includes('read') || raw.includes('file')) {
+    return 'Could not read the selected backup file.';
+  }
+  if (raw.includes('attach')) {
+    return 'Attach to a verified CommonVeil contract before verifying registrar identity.';
+  }
+  if (raw.includes('copy') || raw.includes('clipboard')) {
+    return 'Clipboard write failed. Please check browser permissions and try again.';
+  }
+
+  return 'The operation could not be completed. Check the input and try again.';
 }

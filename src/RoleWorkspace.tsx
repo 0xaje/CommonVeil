@@ -8,10 +8,10 @@ import {
   type CommonVeilPublicState,
 } from './contract-session';
 import {
-  bytesToHex,
   encryptToEnvelope,
   decryptAndValidateEnvelope,
   type EncryptedEnvelope,
+  bytesToHex,
 } from './role-packages';
 import {
   ROLE_DESCRIPTORS,
@@ -29,7 +29,13 @@ import {
   buildRegistrarBackupPackage,
   validateRegistrarBackupPackage,
   zeroizeBytes,
-  type RegistrarVerificationStatus,
+  INITIAL_REGISTRAR_SECRET_UI_STATE,
+  type RegistrarSecretUiState,
+  onSecretGeneratedOrImported,
+  onSecretRestoredFromBackup,
+  onCopyAttemptResult,
+  onSecretClearedOrLocked,
+  mapRegistrarOperationError,
 } from './role-workspace-state';
 import './role-workspace.css';
 
@@ -47,14 +53,12 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
     INITIAL_WORKSPACE_CONTRACT_STATE,
   );
 
-  // Registrar local secret state (in-memory only)
-  const [hasRegistrarSecret, setHasRegistrarSecret] = useState(false);
-  const [isLocked, setIsLocked] = useState(false);
-  const [verificationStatus, setVerificationStatus] = useState<RegistrarVerificationStatus>('unverified');
-  const [activeSecretHex, setActiveSecretHex] = useState<string | null>(null); // Only shown during creation/import
-  const [secretCopied, setSecretCopied] = useState(false);
+  // Registrar local UI state (never contains full secret string)
+  const [registrarUi, setRegistrarUi] = useState<RegistrarSecretUiState>(
+    INITIAL_REGISTRAR_SECRET_UI_STATE,
+  );
 
-  // Registrar input states
+  // Registrar input states (cleared immediately upon processing)
   const [importHexInput, setImportHexInput] = useState('');
   const [exportPassphrase, setExportPassphrase] = useState('');
   const [importPassphrase, setImportPassphrase] = useState('');
@@ -62,14 +66,14 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
   const [registrarNotice, setRegistrarNotice] = useState<string | null>(null);
   const [backupFileContent, setBackupFileContent] = useState<string | null>(null);
 
-  // Plaintext secret in component memory only
+  // Plaintext secret in volatile component memory only (Uint8Array, never React string state)
   const plaintextSecretRef = useRef<Uint8Array | null>(null);
 
   // Guards against stale async operations when requests race or unmount occurs
   const requestCounter = useRef(0);
   const isMounted = useRef(true);
 
-  // Zeroize and clean up secret on unmount or role change
+  // Zeroize bytes and clear references on unmount or role change
   useEffect(() => {
     isMounted.current = true;
     return () => {
@@ -88,14 +92,11 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
     contractState.inspectionState === 'inspecting' ||
     contractState.inspectionState === 'attaching';
 
-  // Helper to clear registrar secret in memory
-  const clearRegistrarSecret = () => {
+  // Helper to securely clear registrar secret in memory
+  const clearRegistrarSecret = (isLocked: boolean = false) => {
     zeroizeBytes(plaintextSecretRef.current);
     plaintextSecretRef.current = null;
-    setHasRegistrarSecret(false);
-    setIsLocked(false);
-    setActiveSecretHex(null);
-    setVerificationStatus('unverified');
+    setRegistrarUi((prev) => onSecretClearedOrLocked(prev, isLocked));
     setImportHexInput('');
     setExportPassphrase('');
     setImportPassphrase('');
@@ -125,17 +126,19 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
   const handleDisconnectWallet = () => {
     setWallet(null);
     setWalletError(null);
-    clearRegistrarSecret();
+    clearRegistrarSecret(false);
     setContractState(INITIAL_WORKSPACE_CONTRACT_STATE);
   };
 
   const handleAddressChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const next = handleAddressInputChange(contractState, e.target.value);
     setContractState(next);
-    // Address changed: invalidate verification status
-    if (verificationStatus !== 'unverified') {
-      setVerificationStatus('unverified');
-    }
+    // Address changed: reset verification and remove any copy capability
+    setRegistrarUi((prev) => ({
+      ...prev,
+      verificationStatus: 'unverified',
+      canCopyOnce: false,
+    }));
   };
 
   const handleInspect = async () => {
@@ -214,7 +217,10 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
       // If we already have a secret in memory, verify it against the newly attached public state
       if (plaintextSecretRef.current && session.publicState) {
         const matches = verifyRegistrarSecret(session.publicState, plaintextSecretRef.current);
-        setVerificationStatus(matches ? 'verified' : 'failed');
+        setRegistrarUi((prev) => ({
+          ...prev,
+          verificationStatus: matches ? 'verified' : 'failed',
+        }));
       }
     } catch (err: unknown) {
       if (!isMounted.current) return;
@@ -258,20 +264,23 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
   // --- Registrar Secret Handlers ---
 
   const handleGenerateSecret = () => {
-    clearRegistrarSecret();
+    clearRegistrarSecret(false);
     const secretBytes = generateRegistrarSecret();
     plaintextSecretRef.current = secretBytes;
-    const hex = bytesToHex(secretBytes);
-    setActiveSecretHex(hex);
-    setHasRegistrarSecret(true);
-    setIsLocked(false);
-    setRegistrarNotice('New 32-byte registrar secret generated in session memory.');
+
+    setRegistrarUi((prev) => onSecretGeneratedOrImported(prev));
+    setRegistrarNotice(
+      'New 32-byte registrar secret generated. It is kept only for this browser session and is not written to persistent storage.',
+    );
     setRegistrarError(null);
 
     // Verify immediately if attached
     if (contractState.attachedAddress && contractState.inspectedState) {
       const matches = verifyRegistrarSecret(contractState.inspectedState, secretBytes);
-      setVerificationStatus(matches ? 'verified' : 'failed');
+      setRegistrarUi((prev) => ({
+        ...prev,
+        verificationStatus: matches ? 'verified' : 'failed',
+      }));
     }
   };
 
@@ -280,63 +289,76 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
     setRegistrarNotice(null);
     try {
       const secretBytes = parseRegistrarSecretHex(importHexInput);
-      clearRegistrarSecret();
-      plaintextSecretRef.current = secretBytes;
-      const hex = bytesToHex(secretBytes);
-      setActiveSecretHex(hex);
-      setHasRegistrarSecret(true);
-      setIsLocked(false);
+      // Immediately clear the input string
       setImportHexInput('');
-      setRegistrarNotice('Registrar secret imported successfully into session memory.');
+
+      clearRegistrarSecret(false);
+      plaintextSecretRef.current = secretBytes;
+
+      setRegistrarUi((prev) => onSecretGeneratedOrImported(prev));
+      setRegistrarNotice(
+        'Registrar secret imported. It is kept only for this browser session and is not written to persistent storage.',
+      );
 
       if (contractState.attachedAddress && contractState.inspectedState) {
         const matches = verifyRegistrarSecret(contractState.inspectedState, secretBytes);
-        setVerificationStatus(matches ? 'verified' : 'failed');
+        setRegistrarUi((prev) => ({
+          ...prev,
+          verificationStatus: matches ? 'verified' : 'failed',
+        }));
       }
     } catch (err: unknown) {
-      setRegistrarError(err instanceof Error ? err.message : 'Invalid hex secret format.');
+      setImportHexInput('');
+      setRegistrarError(mapRegistrarOperationError(err));
     }
   };
 
   const handleVerifySecret = () => {
     if (!contractState.attachedAddress || !contractState.inspectedState) {
-      setRegistrarError('Attach to a verified CommonVeil contract before verifying registrar identity.');
+      setRegistrarError(
+        'Attach to a verified CommonVeil contract before verifying registrar identity.',
+      );
       return;
     }
     if (!plaintextSecretRef.current) {
-      setRegistrarError('No registrar secret in session memory to verify.');
+      setRegistrarError('No registrar secret loaded in session memory.');
       return;
     }
-    const matches = verifyRegistrarSecret(contractState.inspectedState, plaintextSecretRef.current);
-    setVerificationStatus(matches ? 'verified' : 'failed');
+    const matches = verifyRegistrarSecret(
+      contractState.inspectedState,
+      plaintextSecretRef.current,
+    );
+    setRegistrarUi((prev) => ({
+      ...prev,
+      verificationStatus: matches ? 'verified' : 'failed',
+    }));
     setRegistrarError(null);
   };
 
   const handleLockSession = () => {
-    clearRegistrarSecret();
-    setIsLocked(true);
-    setRegistrarNotice('Session locked. Plaintext secret zeroized and removed from memory.');
+    clearRegistrarSecret(true);
+    setRegistrarNotice(
+      'Session locked. Secret zeroized in memory. Note that JavaScript runtime cannot guarantee absolute memory scrubbing.',
+    );
   };
 
-  const handleDismissRevealedSecret = () => {
-    setActiveSecretHex(null);
-  };
-
-  const handleCopySecret = () => {
-    if (!activeSecretHex) return;
+  // Immediate one-time copy from byte array (no persistent React string state)
+  const handleOneTimeCopySecret = () => {
+    if (!plaintextSecretRef.current || !registrarUi.canCopyOnce) return;
+    const hex = bytesToHex(plaintextSecretRef.current);
     navigator.clipboard
-      .writeText(activeSecretHex)
+      .writeText(hex)
       .then(() => {
         if (isMounted.current) {
-          setSecretCopied(true);
-          setTimeout(() => {
-            if (isMounted.current) setSecretCopied(false);
-          }, 2500);
+          // Permanently disable further copying for this secret
+          setRegistrarUi((prev) => onCopyAttemptResult(prev, true));
         }
       })
       .catch(() => {
         if (isMounted.current) {
-          setRegistrarError('Copy failed. Select the secret manually.');
+          // Allow retry on failure
+          setRegistrarUi((prev) => onCopyAttemptResult(prev, false));
+          setRegistrarError('Clipboard write failed. Please check browser permissions and try again.');
         }
       });
   };
@@ -355,9 +377,14 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
 
     try {
       const backupPackage = buildRegistrarBackupPackage(plaintextSecretRef.current);
-      const envelope: EncryptedEnvelope = await encryptToEnvelope(backupPackage, exportPassphrase);
+      const envelope: EncryptedEnvelope = await encryptToEnvelope(
+        backupPackage,
+        exportPassphrase,
+      );
 
-      const blob = new Blob([JSON.stringify(envelope, null, 2)], { type: 'application/json' });
+      const blob = new Blob([JSON.stringify(envelope, null, 2)], {
+        type: 'application/json',
+      });
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement('a');
       anchor.href = url;
@@ -366,9 +393,11 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
       URL.revokeObjectURL(url);
 
       setExportPassphrase('');
-      setRegistrarNotice('Encrypted backup exported. Store the backup file and passphrase securely.');
+      setRegistrarNotice(
+        'Encrypted backup exported. Store the backup file and passphrase securely.',
+      );
     } catch (err: unknown) {
-      setRegistrarError(err instanceof Error ? err.message : 'Encryption failed.');
+      setRegistrarError(mapRegistrarOperationError(err));
     }
   };
 
@@ -387,7 +416,7 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
       }
     };
     reader.onerror = () => {
-      setRegistrarError('Failed to read the selected backup file.');
+      setRegistrarError('Could not read the selected backup file.');
     };
     reader.readAsText(file);
   };
@@ -396,7 +425,7 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
     setRegistrarError(null);
     setRegistrarNotice(null);
     if (!backupFileContent) {
-      setRegistrarError('Select a backup JSON file first.');
+      setRegistrarError('The selected file is not a valid CommonVeil encrypted backup.');
       return;
     }
     if (importPassphrase.length < 12) {
@@ -409,7 +438,7 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
       try {
         parsedEnvelope = JSON.parse(backupFileContent);
       } catch {
-        throw new Error('Backup file does not contain valid JSON.');
+        throw new Error('The selected file is not a valid CommonVeil encrypted backup.');
       }
 
       const restored = await decryptAndValidateEnvelope(
@@ -419,22 +448,26 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
       );
 
       const secretBytes = parseRegistrarSecretHex(restored.registrarSecret);
-      clearRegistrarSecret();
+      clearRegistrarSecret(false);
       plaintextSecretRef.current = secretBytes;
-      setHasRegistrarSecret(true);
-      setIsLocked(false);
+
+      // Restored from backup: NEVER permits plaintext copying or revealing
+      setRegistrarUi((prev) => onSecretRestoredFromBackup(prev));
       setImportPassphrase('');
       setBackupFileContent(null);
-      setRegistrarNotice('Registrar secret restored from encrypted backup into session memory.');
+      setRegistrarNotice(
+        'Registrar secret restored from encrypted backup into session memory. Note: Plaintext copy is disabled for restored backups.',
+      );
 
       if (contractState.attachedAddress && contractState.inspectedState) {
         const matches = verifyRegistrarSecret(contractState.inspectedState, secretBytes);
-        setVerificationStatus(matches ? 'verified' : 'failed');
+        setRegistrarUi((prev) => ({
+          ...prev,
+          verificationStatus: matches ? 'verified' : 'failed',
+        }));
       }
     } catch (err: unknown) {
-      setRegistrarError(
-        err instanceof Error ? err.message : 'Decryption failed. Incorrect passphrase or corrupt file.',
-      );
+      setRegistrarError(mapRegistrarOperationError(err));
     }
   };
 
@@ -461,7 +494,11 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
           >
             ← Product Overview
           </button>
-          <div className="role-nav-switch" role="navigation" aria-label="Open other role workspaces">
+          <div
+            className="role-nav-switch"
+            role="navigation"
+            aria-label="Open other role workspaces"
+          >
             {otherRoles.map((r) => (
               <a
                 key={r}
@@ -688,21 +725,23 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
                 <h2>Registrar Role Identity & Secrets</h2>
               </div>
               <p className="card-caption">
-                Manage the local 32-byte registrar secret in memory. Secrets are never transmitted, logged, or saved in storage.
+                The secret is kept only for this browser session and is not written to persistent storage. JavaScript runtime cannot guarantee absolute memory scrubbing.
               </p>
 
               {/* Status Header */}
               <div className="registrar-status-row" aria-live="polite">
                 <div>
                   <span className="field-caption">Secret in Memory</span>
-                  <strong>{hasRegistrarSecret ? 'Loaded in session memory' : 'None (Locked)'}</strong>
+                  <strong>
+                    {registrarUi.hasSecret ? 'Loaded in session memory' : 'None (Locked)'}
+                  </strong>
                 </div>
                 <div>
                   <span className="field-caption">On-chain Verification</span>
-                  <strong className={`verification-badge ${verificationStatus}`}>
-                    {verificationStatus === 'verified'
+                  <strong className={`verification-badge ${registrarUi.verificationStatus}`}>
+                    {registrarUi.verificationStatus === 'verified'
                       ? 'Verified'
-                      : verificationStatus === 'failed'
+                      : registrarUi.verificationStatus === 'failed'
                         ? 'Not verified'
                         : 'Unverified'}
                   </strong>
@@ -717,44 +756,37 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
 
               {registrarError && (
                 <div className="safe-error-banner" role="alert">
-                  <strong>Registrar Operation Error</strong>
+                  <strong>Registrar Error</strong>
                   <p>{registrarError}</p>
                 </div>
               )}
 
-              {/* One-time creation confirmation banner */}
-              {activeSecretHex && (
+              {/* One-time copy confirmation banner (no visible full secret string in DOM or state) */}
+              {registrarUi.hasSecret && registrarUi.canCopyOnce && (
                 <div className="secret-reveal-box" role="alert">
                   <div className="secret-reveal-header">
-                    <strong>New Secret Created / Imported</strong>
-                    <button
-                      type="button"
-                      className="dismiss-secret-btn"
-                      onClick={handleDismissRevealedSecret}
-                      aria-label="Dismiss revealed secret display"
-                    >
-                      Hide & Dismiss
-                    </button>
+                    <strong>One-Time Secret Copy Available</strong>
                   </div>
                   <p className="secret-warning-text">
-                    Warning: Plaintext secrets are never stored. Export an encrypted backup immediately. Losing this secret makes the registrar role permanently unrecoverable.
+                    The secret is kept only for this browser session and is not written to persistent storage. Export an encrypted backup immediately. Losing this secret makes the registrar role permanently unrecoverable.
                   </p>
-                  <div className="revealed-secret-row">
-                    <code>{activeSecretHex}</code>
+                  <div className="one-time-copy-row">
                     <button
                       type="button"
-                      className="copy-button"
-                      onClick={handleCopySecret}
-                      aria-label="Copy registrar secret to clipboard"
+                      className="action-button primary"
+                      onClick={handleOneTimeCopySecret}
+                      aria-label="Copy registrar secret to clipboard (one time only)"
                     >
-                      {secretCopied ? 'Copied' : 'Copy'}
+                      {registrarUi.copyStatus === 'failed'
+                        ? 'Retry Secret Copy'
+                        : 'Copy Secret to Clipboard (One-Time)'}
                     </button>
                   </div>
                 </div>
               )}
 
               {/* Action Tabs / Buttons */}
-              {!hasRegistrarSecret ? (
+              {!registrarUi.hasSecret ? (
                 <div className="secret-setup-section">
                   <button
                     type="button"
@@ -767,8 +799,15 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
 
                   <div className="divider-row"><span>or import existing 32-byte hex</span></div>
 
-                  <form onSubmit={(e) => { e.preventDefault(); handleImportSecretHex(); }}>
-                    <label htmlFor="import-hex-input">32-Byte Secret Hex (64 hex characters)</label>
+                  <form
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      handleImportSecretHex();
+                    }}
+                  >
+                    <label htmlFor="import-hex-input">
+                      32-Byte Secret Hex (64 hex characters)
+                    </label>
                     <input
                       id="import-hex-input"
                       type="password"
@@ -800,8 +839,15 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
                     />
 
                     {backupFileContent && (
-                      <form onSubmit={(e) => { e.preventDefault(); handleImportBackup(); }}>
-                        <label htmlFor="import-passphrase-input">Backup Passphrase (min 12 chars)</label>
+                      <form
+                        onSubmit={(e) => {
+                          e.preventDefault();
+                          handleImportBackup();
+                        }}
+                      >
+                        <label htmlFor="import-passphrase-input">
+                          Backup Passphrase (min 12 chars)
+                        </label>
                         <input
                           id="import-passphrase-input"
                           type="password"
@@ -857,8 +903,15 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
                     <p className="card-caption">
                       Encrypts the secret with AES-256-GCM (600,000 PBKDF2 iterations) and downloads a JSON envelope.
                     </p>
-                    <form onSubmit={(e) => { e.preventDefault(); handleExportBackup(); }}>
-                      <label htmlFor="export-passphrase-input">Export Passphrase (min 12 chars)</label>
+                    <form
+                      onSubmit={(e) => {
+                        e.preventDefault();
+                        handleExportBackup();
+                      }}
+                    >
+                      <label htmlFor="export-passphrase-input">
+                        Export Passphrase (min 12 chars)
+                      </label>
                       <input
                         id="export-passphrase-input"
                         type="password"

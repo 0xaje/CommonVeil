@@ -526,21 +526,12 @@ input:focus-visible {
   margin: 0 0 10px;
 }
 
-.revealed-secret-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 8px;
-  background: #090805;
-  border: 1px solid #453613;
-  border-radius: 8px;
-  padding: 8px 12px;
+.one-time-copy-row {
+  margin-top: 8px;
 }
 
-.revealed-secret-row code {
-  color: #fde89c;
-  font-size: 0.78rem;
-  word-break: break-all;
+.one-time-copy-row button {
+  width: 100%;
 }
 
 .secret-setup-section {
