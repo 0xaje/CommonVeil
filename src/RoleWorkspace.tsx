@@ -13,6 +13,9 @@ import {
   type EncryptedEnvelope,
   bytesToHex,
 } from './role-packages';
+import { deployContract } from '@midnight-ntwrk/midnight-js-contracts';
+import { CompiledCommonVeilContract, CommonVeil } from './contract';
+import { PRIVATE_STATE_ID } from './providers';
 import {
   ROLE_DESCRIPTORS,
   type RoleType,
@@ -37,6 +40,21 @@ import {
   onCopyAttemptResult,
   onSecretClearedOrLocked,
   mapRegistrarOperationError,
+  INITIAL_REGISTRAR_DEPLOYMENT_UI_STATE,
+  type RegistrarDeploymentUiState,
+  validateDeploymentReceipt,
+  type DeploymentReceipt,
+  canInitiateDeployment,
+  onDeploymentConfirmOpen,
+  onDeploymentConfirmCancel,
+  onDeploymentWalletRequest,
+  onDeploymentSubmitting,
+  onDeploymentFinalizedIndexing,
+  onDeploymentCompleted,
+  onDeploymentCancelled,
+  onDeploymentFailed,
+  onDeploymentReset,
+  mapDeploymentError,
 } from './role-workspace-state';
 import './role-workspace.css';
 
@@ -59,6 +77,11 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
     INITIAL_REGISTRAR_SECRET_UI_STATE,
   );
 
+  // Registrar contract deployment state
+  const [deploymentUi, setDeploymentUi] = useState<RegistrarDeploymentUiState>(
+    INITIAL_REGISTRAR_DEPLOYMENT_UI_STATE,
+  );
+
   // Registrar input states (cleared immediately upon processing)
   const [importHexInput, setImportHexInput] = useState('');
   const [exportPassphrase, setExportPassphrase] = useState('');
@@ -74,6 +97,10 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
   const requestCounter = useRef(0);
   const isMounted = useRef(true);
 
+  // Monotonically increasing deployment generation token to prevent stale async callbacks
+  const deployGenerationRef = useRef(0);
+  const activeDeployTokenRef = useRef<number | null>(null);
+
   // Zeroize bytes and clear references on unmount or role change
   useEffect(() => {
     isMounted.current = true;
@@ -81,6 +108,8 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
       isMounted.current = false;
       copyGenerationRef.current++;
       activeCopyTokenRef.current = null;
+      deployGenerationRef.current++;
+      activeDeployTokenRef.current = null;
       zeroizeBytes(plaintextSecretRef.current);
       plaintextSecretRef.current = null;
     };
@@ -91,9 +120,15 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
     (r) => r !== role,
   );
 
+  const isDeploying =
+    deploymentUi.stage === 'requesting-wallet' ||
+    deploymentUi.stage === 'deploying' ||
+    deploymentUi.stage === 'finalized-indexing';
+
   const isBusy =
     contractState.inspectionState === 'inspecting' ||
-    contractState.inspectionState === 'attaching';
+    contractState.inspectionState === 'attaching' ||
+    isDeploying;
 
   // Monotonically increasing copy generation token to prevent stale callbacks across secret lifecycles
   const copyGenerationRef = useRef(0);
@@ -101,12 +136,15 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
 
   // Helper to securely clear registrar secret in memory
   const clearRegistrarSecret = (isLocked: boolean = false) => {
-    // Invalidate any in-flight copy operation token
+    // Invalidate any in-flight copy and deploy operation tokens
     copyGenerationRef.current++;
     activeCopyTokenRef.current = null;
+    deployGenerationRef.current++;
+    activeDeployTokenRef.current = null;
     zeroizeBytes(plaintextSecretRef.current);
     plaintextSecretRef.current = null;
     setRegistrarUi((prev) => onSecretClearedOrLocked(prev, isLocked));
+    setDeploymentUi((prev) => onDeploymentReset(prev));
     setImportHexInput('');
     setExportPassphrase('');
     setImportPassphrase('');
@@ -138,11 +176,14 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
     setWalletError(null);
     clearRegistrarSecret(false);
     setContractState(INITIAL_WORKSPACE_CONTRACT_STATE);
+    setDeploymentUi((prev) => onDeploymentReset(prev));
   };
 
   const handleAddressChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     copyGenerationRef.current++;
     activeCopyTokenRef.current = null;
+    deployGenerationRef.current++;
+    activeDeployTokenRef.current = null;
     const next = handleAddressInputChange(contractState, e.target.value);
     setContractState(next);
     // Address changed: reset verification and remove any copy capability
@@ -151,6 +192,7 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
       verificationStatus: 'unverified',
       canCopyOnce: false,
     }));
+    setDeploymentUi((prev) => onDeploymentReset(prev));
   };
 
   const handleInspect = async () => {
@@ -506,6 +548,230 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
       }
     } catch (err: unknown) {
       setRegistrarError(mapRegistrarOperationError(err));
+    }
+  };
+
+  // --- Registrar Contract Deployment Flow ---
+
+  const handleStartDeployConfirmation = () => {
+    if (!wallet || !plaintextSecretRef.current || isDeploying) return;
+    setDeploymentUi((prev) => onDeploymentConfirmOpen(prev));
+  };
+
+  const handleCancelDeployConfirmation = () => {
+    setDeploymentUi((prev) => onDeploymentConfirmCancel(prev));
+  };
+
+  const handleToggleBackupConfirmed = (confirmed: boolean) => {
+    setDeploymentUi((prev) => ({
+      ...prev,
+      backupConfirmed: confirmed,
+    }));
+  };
+
+  const handleDeployContract = async () => {
+    if (!wallet || !plaintextSecretRef.current || isDeploying) return;
+    if (!deploymentUi.backupConfirmed) return;
+
+    // Issue unique deployment token for stale async protection
+    const operationToken = ++deployGenerationRef.current;
+    activeDeployTokenRef.current = operationToken;
+
+    // 1. Enter visible waiting for wallet approval state
+    setDeploymentUi((prev) => onDeploymentWalletRequest(prev));
+
+    try {
+      // 2. Derive AdminKey purely locally from session secret; certifier key initial 32 zero bytes
+      const adminKey = CommonVeil.pureCircuits.deriveAdminKey(plaintextSecretRef.current);
+      const unassignedCertifierKey = new Uint8Array(32);
+
+      // Transition to submitting/deploying state once SDK begins processing
+      setDeploymentUi((prev) => onDeploymentSubmitting(prev));
+
+      const deployed = await deployContract(wallet.providers, {
+        compiledContract: CompiledCommonVeilContract,
+        privateStateId: PRIVATE_STATE_ID,
+        initialPrivateState: {},
+        args: [adminKey, unassignedCertifierKey],
+      });
+
+      // Verify token freshness and component mount
+      if (!isMounted.current || activeDeployTokenRef.current !== operationToken) {
+        return;
+      }
+
+      // Preserve contract address and deployment transaction ID as separate distinct values
+      const deployedAddress = deployed.deployTxData.public.contractAddress;
+      const deployTxId =
+        (deployed.deployTxData.public as any).txId ??
+        (deployed.deployTxData.public as any).identifiers?.[0] ??
+        null;
+
+      // 3. Automatically inspect the returned contract address via public indexer
+      try {
+        const session = await queryCommonVeilContract(wallet.providers, deployedAddress);
+        if (!isMounted.current || activeDeployTokenRef.current !== operationToken) {
+          return;
+        }
+
+        // Verify that deployed ledger's admin key equals derived key
+        const matches = verifyRegistrarSecret(session.publicState, plaintextSecretRef.current);
+        if (!matches) {
+          throw new Error('Deployed contract registrar key does not match active secret.');
+        }
+
+        // Build and validate deployment receipt
+        const receipt: DeploymentReceipt = validateDeploymentReceipt({
+          schema: 'commonveil.deployment-receipt/v1',
+          network: 'preprod',
+          contractAddress: deployedAddress,
+          deploymentTxId: deployTxId,
+          registrarPublicKey: bytesToHex(adminKey),
+          certifierPublicKey: bytesToHex(unassignedCertifierKey),
+          deployedAt: new Date().toISOString(),
+          status: 'finalized',
+        });
+
+        // Scope private-state provider to deployed address
+        wallet.providers.privateStateProvider.setContractAddress(deployedAddress);
+
+        // Update contract and registrar verification state
+        setContractState((prev) => ({
+          ...prev,
+          addressInput: deployedAddress,
+          inspectionState: 'attached',
+          inspectedState: session.publicState,
+          attachedAddress: deployedAddress,
+          errorMessage: null,
+        }));
+
+        setRegistrarUi((prev) => ({
+          ...prev,
+          verificationStatus: 'verified',
+        }));
+
+        setDeploymentUi((prev) => onDeploymentCompleted(prev, receipt));
+      } catch (inspectError: unknown) {
+        // If inspection failed because indexer has not seen the block yet, transition to finalized-indexing
+        if (!isMounted.current || activeDeployTokenRef.current !== operationToken) {
+          return;
+        }
+
+        setDeploymentUi((prev) =>
+          onDeploymentFinalizedIndexing(prev, {
+            contractAddress: deployedAddress,
+            deploymentTxId: deployTxId,
+          }),
+        );
+      }
+    } catch (deployError: unknown) {
+      if (!isMounted.current || activeDeployTokenRef.current !== operationToken) {
+        return;
+      }
+      activeDeployTokenRef.current = null;
+
+      const raw = (
+        deployError instanceof Error
+          ? deployError.message
+          : typeof deployError === 'string'
+            ? deployError
+            : ''
+      ).toLowerCase();
+
+      if (
+        raw.includes('cancel') ||
+        raw.includes('reject') ||
+        raw.includes('denied') ||
+        raw.includes('declined') ||
+        raw.includes('user aborted')
+      ) {
+        setDeploymentUi((prev) => onDeploymentCancelled(prev));
+      } else {
+        setDeploymentUi((prev) =>
+          onDeploymentFailed(prev, mapDeploymentError(deployError)),
+        );
+      }
+    }
+  };
+
+  const handleRetryIndexerInspection = async () => {
+    if (
+      !wallet ||
+      !plaintextSecretRef.current ||
+      !deploymentUi.contractAddress ||
+      deploymentUi.stage !== 'finalized-indexing'
+    ) {
+      return;
+    }
+
+    const contractAddress = deploymentUi.contractAddress;
+    const deployTxId = deploymentUi.deploymentTxId;
+
+    try {
+      const session = await queryCommonVeilContract(wallet.providers, contractAddress);
+      if (!isMounted.current) return;
+
+      const matches = verifyRegistrarSecret(session.publicState, plaintextSecretRef.current);
+      if (!matches) {
+        setDeploymentUi((prev) =>
+          onDeploymentFailed(prev, 'Deployed contract registrar key does not match active secret.'),
+        );
+        return;
+      }
+
+      const adminKey = CommonVeil.pureCircuits.deriveAdminKey(plaintextSecretRef.current);
+      const unassignedCertifierKey = new Uint8Array(32);
+
+      const receipt: DeploymentReceipt = validateDeploymentReceipt({
+        schema: 'commonveil.deployment-receipt/v1',
+        network: 'preprod',
+        contractAddress,
+        deploymentTxId: deployTxId,
+        registrarPublicKey: bytesToHex(adminKey),
+        certifierPublicKey: bytesToHex(unassignedCertifierKey),
+        deployedAt: new Date().toISOString(),
+        status: 'finalized',
+      });
+
+      wallet.providers.privateStateProvider.setContractAddress(contractAddress);
+
+      setContractState((prev) => ({
+        ...prev,
+        addressInput: contractAddress,
+        inspectionState: 'attached',
+        inspectedState: session.publicState,
+        attachedAddress: contractAddress,
+        errorMessage: null,
+      }));
+
+      setRegistrarUi((prev) => ({
+        ...prev,
+        verificationStatus: 'verified',
+      }));
+
+      setDeploymentUi((prev) => onDeploymentCompleted(prev, receipt));
+    } catch {
+      // Indexer still not ready; stay in finalized-indexing state
+    }
+  };
+
+  const handleDownloadDeploymentReceipt = () => {
+    if (!deploymentUi.receipt) return;
+    try {
+      const validated = validateDeploymentReceipt(deploymentUi.receipt);
+      const blob = new Blob([JSON.stringify(validated, null, 2)], {
+        type: 'application/json',
+      });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = `commonveil-deployment-receipt-${validated.contractAddress.slice(0, 10)}.json`;
+      anchor.click();
+      URL.revokeObjectURL(url);
+    } catch (err: unknown) {
+      setDeploymentUi((prev) =>
+        onDeploymentFailed(prev, 'Could not create valid deployment receipt.'),
+      );
     }
   };
 
@@ -976,10 +1242,229 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
             </article>
           )}
 
+          {/* Registrar Contract Deployment Section (Step 04) */}
+          {role === 'registrar' && (
+            <article className="workspace-card registrar-deploy-card">
+              <div className="card-header">
+                <span className="card-step">04</span>
+                <h2>Deploy CommonVeil Contract</h2>
+              </div>
+              <p className="card-caption">
+                Deploy a fresh CommonVeil governance contract on Midnight Preprod using the active Registrar secret.
+              </p>
+
+              {/* Deployment Pre-conditions Summary */}
+              <div className="deploy-prereq-list">
+                <div className={`prereq-item ${wallet ? 'met' : 'unmet'}`}>
+                  <span>{wallet ? '✔' : '○'}</span>
+                  <span>1AM Wallet connected on Midnight Preprod</span>
+                </div>
+                <div className={`prereq-item ${registrarUi.hasSecret ? 'met' : 'unmet'}`}>
+                  <span>{registrarUi.hasSecret ? '✔' : '○'}</span>
+                  <span>Registrar secret loaded in volatile session memory</span>
+                </div>
+                <div className={`prereq-item ${deploymentUi.backupConfirmed ? 'met' : 'unmet'}`}>
+                  <span>{deploymentUi.backupConfirmed ? '✔' : '○'}</span>
+                  <span>Encrypted backup confirmed exported</span>
+                </div>
+                <div className={`prereq-item ${wallet?.proofMode ? 'met' : 'unmet'}`}>
+                  <span>{wallet?.proofMode ? '✔' : '○'}</span>
+                  <span>ZK proof generation provider available</span>
+                </div>
+              </div>
+
+              {/* Status and Notifications */}
+              <div aria-live="polite">
+                {deploymentUi.stage === 'requesting-wallet' && (
+                  <div className="status-callout waiting-wallet-callout" role="status">
+                    <span className="status-indicator notice">Waiting for wallet approval</span>
+                    <p>
+                      Review and approve the deployment transaction in your connected 1AM wallet window.
+                    </p>
+                  </div>
+                )}
+
+                {deploymentUi.stage === 'deploying' && (
+                  <div className="status-callout submitting-callout" role="status">
+                    <span className="status-indicator notice">Submitting on-chain</span>
+                    <p>
+                      Generating zero-knowledge proofs and balancing transaction on Midnight Preprod.
+                    </p>
+                  </div>
+                )}
+
+                {deploymentUi.stage === 'cancelled' && (
+                  <div className="safe-notice-banner" role="status">
+                    <strong>Transaction Cancelled</strong>
+                    <p>Deployment transaction was cancelled in 1AM. You may review parameters and try again.</p>
+                  </div>
+                )}
+
+                {deploymentUi.errorMessage && (
+                  <div className="safe-error-banner" role="alert">
+                    <strong>Deployment Error</strong>
+                    <p>{deploymentUi.errorMessage}</p>
+                  </div>
+                )}
+
+                {deploymentUi.stage === 'finalized-indexing' && (
+                  <div className="status-callout indexer-lag-callout" role="status">
+                    <span className="status-indicator notice">Finalized; waiting for indexer</span>
+                    <p>
+                      Contract transaction finalized on Midnight Preprod, but the public indexer has not yet synchronized.
+                    </p>
+                    <div className="deployed-id-row">
+                      <span className="field-caption">Contract Address</span>
+                      <code>{deploymentUi.contractAddress}</code>
+                    </div>
+                    {deploymentUi.deploymentTxId && (
+                      <div className="deployed-id-row">
+                        <span className="field-caption">Transaction ID</span>
+                        <code>{deploymentUi.deploymentTxId}</code>
+                      </div>
+                    )}
+                    <button
+                      type="button"
+                      className="action-button primary"
+                      onClick={handleRetryIndexerInspection}
+                      aria-label="Retry indexer inspection for finalized contract"
+                    >
+                      Retry Indexer Inspection
+                    </button>
+                  </div>
+                )}
+
+                {deploymentUi.stage === 'deployed' && deploymentUi.receipt && (
+                  <div className="status-callout deployed-success-callout" role="status">
+                    <span className="status-indicator success">Deployment Verified</span>
+                    <p>
+                      Contract is active on Midnight Preprod and verified with this session’s Registrar key.
+                    </p>
+                    <dl className="property-list">
+                      <dt>Contract Address</dt>
+                      <dd>
+                        <code>{deploymentUi.receipt.contractAddress}</code>
+                      </dd>
+                      <dt>Deployment Tx ID</dt>
+                      <dd>
+                        {deploymentUi.receipt.deploymentTxId ? (
+                          <code>{deploymentUi.receipt.deploymentTxId}</code>
+                        ) : (
+                          <em>Finalized without explicit SDK txId</em>
+                        )}
+                      </dd>
+                      <dt>Network</dt>
+                      <dd>Midnight Preprod</dd>
+                      <dt>Status</dt>
+                      <dd>Finalized & Verified</dd>
+                    </dl>
+                    <div className="button-row">
+                      <button
+                        type="button"
+                        className="action-button secondary"
+                        onClick={handleDownloadDeploymentReceipt}
+                        aria-label="Download public deployment receipt JSON"
+                      >
+                        Download Deployment Receipt (.json)
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Deployment Confirmation Modal / Dialog */}
+              {deploymentUi.stage === 'confirming' && (
+                <div className="deployment-confirmation-box" role="dialog" aria-labelledby="deploy-confirm-heading">
+                  <h3 id="deploy-confirm-heading">Confirm On-Chain Contract Deployment</h3>
+                  <div className="deploy-warning-details">
+                    <p><strong>Network:</strong> Midnight Preprod</p>
+                    <p>
+                      <strong>Action:</strong> Creates a brand-new on-chain CommonVeil governance contract instance.
+                    </p>
+                    <p>
+                      <strong>Resource Consumption:</strong> DUST and network transaction fees will be consumed from your 1AM wallet.
+                    </p>
+                    <p>
+                      <strong>Key Permanence:</strong> The Registrar secret cannot be replaced once the contract is deployed. Ensure you hold the exported encrypted backup.
+                    </p>
+                    <p>
+                      <strong>Wallet Review:</strong> You must review and approve the transaction in the 1AM popup.
+                    </p>
+                  </div>
+
+                  <label className="checkbox-label">
+                    <input
+                      type="checkbox"
+                      checked={deploymentUi.backupConfirmed}
+                      onChange={(e) => handleToggleBackupConfirmed(e.target.checked)}
+                    />
+                    <span>I confirm I have exported and securely stored an encrypted backup of my Registrar secret.</span>
+                  </label>
+
+                  <div className="button-row">
+                    <button
+                      type="button"
+                      className="action-button primary"
+                      disabled={!deploymentUi.backupConfirmed || isDeploying}
+                      onClick={handleDeployContract}
+                      aria-label="Confirm and submit deployment transaction to 1AM wallet"
+                    >
+                      Confirm and Deploy via 1AM
+                    </button>
+                    <button
+                      type="button"
+                      className="action-button secondary"
+                      disabled={isDeploying}
+                      onClick={handleCancelDeployConfirmation}
+                      aria-label="Cancel deployment"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Main Deployment Action Trigger */}
+              {deploymentUi.stage !== 'confirming' &&
+                deploymentUi.stage !== 'requesting-wallet' &&
+                deploymentUi.stage !== 'deploying' &&
+                deploymentUi.stage !== 'finalized-indexing' && (
+                  <div className="deploy-action-section">
+                    <label className="checkbox-label backup-confirm-checkbox">
+                      <input
+                        type="checkbox"
+                        checked={deploymentUi.backupConfirmed}
+                        onChange={(e) => handleToggleBackupConfirmed(e.target.checked)}
+                      />
+                      <span>I have exported an encrypted backup of my Registrar secret.</span>
+                    </label>
+
+                    <button
+                      type="button"
+                      className="action-button primary"
+                      disabled={
+                        !canInitiateDeployment({
+                          isConnected: !!wallet,
+                          hasSecret: registrarUi.hasSecret,
+                          backupConfirmed: deploymentUi.backupConfirmed,
+                          isDeploying,
+                          proofProviderAvailable: !!wallet?.proofMode,
+                        })
+                      }
+                      onClick={handleStartDeployConfirmation}
+                      aria-label="Initiate CommonVeil contract deployment flow"
+                    >
+                      Deploy CommonVeil Contract
+                    </button>
+                  </div>
+                )}
+            </article>
+          )}
+
           {/* Public State Panel */}
           <article className="workspace-card public-state-card">
             <div className="card-header">
-              <span className="card-step">{role === 'registrar' ? '04' : '03'}</span>
+              <span className="card-step">{role === 'registrar' ? '05' : '03'}</span>
               <h2>Public Contract State</h2>
             </div>
             <p className="privacy-guarantee-notice">

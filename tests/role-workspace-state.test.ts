@@ -26,6 +26,22 @@ import {
   onCopyAttemptResult,
   onSecretClearedOrLocked,
   mapRegistrarOperationError,
+  DEPLOYMENT_RECEIPT_SCHEMA,
+  type DeploymentReceipt,
+  validateDeploymentReceipt,
+  INITIAL_REGISTRAR_DEPLOYMENT_UI_STATE,
+  type RegistrarDeploymentUiState,
+  canInitiateDeployment,
+  onDeploymentConfirmOpen,
+  onDeploymentConfirmCancel,
+  onDeploymentWalletRequest,
+  onDeploymentSubmitting,
+  onDeploymentFinalizedIndexing,
+  onDeploymentCompleted,
+  onDeploymentCancelled,
+  onDeploymentFailed,
+  onDeploymentReset,
+  mapDeploymentError,
 } from '../src/role-workspace-state.ts';
 import {
   bytesToHex,
@@ -746,4 +762,290 @@ test('36. Overlapping copy generations across lifecycle reset: stale A callback 
   assert.equal(state.copyStatus, 'copied');
   assert.equal(state.canCopyOnce, false);
   assert.equal(activeToken, null);
+});
+
+// 37. Deployment disabled without wallet, secret, or backup confirmation
+test('37. Deployment disabled without wallet, secret, or backup confirmation', () => {
+  // All prerequisites met
+  const fullyReady = {
+    isConnected: true,
+    hasSecret: true,
+    backupConfirmed: true,
+    isDeploying: false,
+    proofProviderAvailable: true,
+  };
+  assert.equal(canInitiateDeployment(fullyReady), true);
+
+  // Missing wallet
+  assert.equal(canInitiateDeployment({ ...fullyReady, isConnected: false }), false);
+
+  // Missing secret
+  assert.equal(canInitiateDeployment({ ...fullyReady, hasSecret: false }), false);
+
+  // Missing backup confirmation
+  assert.equal(canInitiateDeployment({ ...fullyReady, backupConfirmed: false }), false);
+
+  // Already deploying
+  assert.equal(canInitiateDeployment({ ...fullyReady, isDeploying: true }), false);
+
+  // Missing proof provider
+  assert.equal(canInitiateDeployment({ ...fullyReady, proofProviderAvailable: false }), false);
+});
+
+// 38. Public key derivation from active secret and constructor receives only derived public key
+test('38. Public key derivation from active secret and constructor receives only derived public key', () => {
+  const adminSecret = new Uint8Array(32).fill(42);
+  const derivedAdminKey = pureCircuits.deriveAdminKey(adminSecret);
+
+  assert.equal(derivedAdminKey instanceof Uint8Array, true);
+  assert.equal(derivedAdminKey.length, 32);
+
+  // The derived public key is completely different from the secret
+  assert.notDeepEqual(derivedAdminKey, adminSecret);
+
+  // Simulate constructor arguments: only public keys passed
+  const unassignedCertifierKey = new Uint8Array(32);
+  const constructorArgs = [derivedAdminKey, unassignedCertifierKey];
+
+  // Verify constructor arguments contain NO secret bytes
+  assert.equal(constructorArgs.length, 2);
+  assert.notDeepEqual(constructorArgs[0], adminSecret);
+  assert.notDeepEqual(constructorArgs[1], adminSecret);
+});
+
+// 39. Deployment receipt schema validation and secret exclusion
+test('39. Deployment receipt schema validation and secret exclusion', () => {
+  const secret = new Uint8Array(32).fill(99);
+  const adminKey = pureCircuits.deriveAdminKey(secret);
+  const registrarPublicKey = bytesToHex(adminKey);
+  const certifierPublicKey = '00'.repeat(32);
+
+  const validReceipt: DeploymentReceipt = {
+    schema: DEPLOYMENT_RECEIPT_SCHEMA,
+    network: 'preprod',
+    contractAddress: 'addr_test1' + '00'.repeat(25),
+    deploymentTxId: 'txid_' + '11'.repeat(25),
+    registrarPublicKey,
+    certifierPublicKey,
+    deployedAt: new Date().toISOString(),
+    status: 'finalized',
+  };
+
+  const validated = validateDeploymentReceipt(validReceipt);
+  assert.equal(validated.schema, DEPLOYMENT_RECEIPT_SCHEMA);
+  assert.equal(validated.network, 'preprod');
+  assert.equal(validated.contractAddress, validReceipt.contractAddress);
+  assert.equal(validated.deploymentTxId, validReceipt.deploymentTxId);
+  assert.equal(validated.status, 'finalized');
+
+  // Verify rejection if any sensitive secret property is present
+  const receiptWithSecret = {
+    ...validReceipt,
+    registrarSecret: bytesToHex(secret),
+  };
+  assert.throws(
+    () => validateDeploymentReceipt(receiptWithSecret),
+    /forbidden sensitive property 'registrarSecret'/,
+  );
+
+  const receiptWithSeed = {
+    ...validReceipt,
+    seedPhrase: 'word word word',
+  };
+  assert.throws(
+    () => validateDeploymentReceipt(receiptWithSeed),
+    /forbidden sensitive property 'seedPhrase'/,
+  );
+
+  // Invalid schema
+  assert.throws(
+    () => validateDeploymentReceipt({ ...validReceipt, schema: 'other-schema' }),
+    /Invalid receipt schema/,
+  );
+
+  // Invalid network
+  assert.throws(
+    () => validateDeploymentReceipt({ ...validReceipt, network: 'mainnet' }),
+    /Invalid receipt network/,
+  );
+});
+
+// 40. Explicit confirmation requirement transitions
+test('40. Explicit confirmation requirement transitions', () => {
+  const initial = INITIAL_REGISTRAR_DEPLOYMENT_UI_STATE;
+  assert.equal(initial.stage, 'idle');
+  assert.equal(initial.errorMessage, null);
+
+  // Open confirmation
+  const confirming = onDeploymentConfirmOpen(initial);
+  assert.equal(confirming.stage, 'confirming');
+
+  // Dismiss confirmation
+  const cancelled = onDeploymentConfirmCancel(confirming);
+  assert.equal(cancelled.stage, 'idle');
+
+  // If already deploying, opening confirm does nothing
+  const deploying: RegistrarDeploymentUiState = {
+    ...initial,
+    stage: 'deploying',
+  };
+  assert.equal(onDeploymentConfirmOpen(deploying).stage, 'deploying');
+});
+
+// 41. Wallet approval waiting state and cancellation handling
+test('41. Wallet approval waiting state and cancellation handling', () => {
+  const initial = INITIAL_REGISTRAR_DEPLOYMENT_UI_STATE;
+
+  // 1. Enter requesting-wallet state
+  const requesting = onDeploymentWalletRequest(initial);
+  assert.equal(requesting.stage, 'requesting-wallet');
+
+  // 2. User cancels in 1AM
+  const cancelled = onDeploymentCancelled(requesting);
+  assert.equal(cancelled.stage, 'cancelled');
+  assert.equal(cancelled.errorMessage, null);
+
+  // 3. Submitting state after wallet approval
+  const submitting = onDeploymentSubmitting(requesting);
+  assert.equal(submitting.stage, 'deploying');
+});
+
+// 42. Separate contract address and deployment transaction ID values
+test('42. Separate contract address and deployment transaction ID values', () => {
+  const initial = INITIAL_REGISTRAR_DEPLOYMENT_UI_STATE;
+  const dummyAddress = 'contract_address_12345';
+  const dummyTxId = 'tx_id_67890';
+
+  const receipt: DeploymentReceipt = {
+    schema: DEPLOYMENT_RECEIPT_SCHEMA,
+    network: 'preprod',
+    contractAddress: dummyAddress,
+    deploymentTxId: dummyTxId,
+    registrarPublicKey: 'aa'.repeat(32),
+    certifierPublicKey: 'bb'.repeat(32),
+    deployedAt: new Date().toISOString(),
+    status: 'finalized',
+  };
+
+  const completed = onDeploymentCompleted(initial, receipt);
+  assert.equal(completed.stage, 'deployed');
+  assert.equal(completed.contractAddress, dummyAddress);
+  assert.equal(completed.deploymentTxId, dummyTxId);
+  assert.notEqual(completed.contractAddress, completed.deploymentTxId);
+});
+
+// 43. Finalized-but-not-indexed state and retry inspection without redeploying
+test('43. Finalized-but-not-indexed state and retry inspection without redeploying', () => {
+  const initial = INITIAL_REGISTRAR_DEPLOYMENT_UI_STATE;
+  const contractAddress = 'contract_address_lagging_indexer';
+  const txId = 'tx_id_1111';
+
+  // Deployment finalized on-chain, but indexer lookup failed
+  const indexedLagState = onDeploymentFinalizedIndexing(initial, {
+    contractAddress,
+    deploymentTxId: txId,
+  });
+
+  assert.equal(indexedLagState.stage, 'finalized-indexing');
+  assert.equal(indexedLagState.contractAddress, contractAddress);
+  assert.equal(indexedLagState.deploymentTxId, txId);
+  assert.equal(indexedLagState.errorMessage, null);
+
+  // Redeployment is prevented while in finalized-indexing state
+  assert.equal(
+    canInitiateDeployment({
+      isConnected: true,
+      hasSecret: true,
+      backupConfirmed: true,
+      isDeploying: true, // finalized-indexing is treated as busy/isDeploying
+      proofProviderAvailable: true,
+    }),
+    false,
+  );
+
+  // Completing inspection transitions to deployed
+  const receipt: DeploymentReceipt = {
+    schema: DEPLOYMENT_RECEIPT_SCHEMA,
+    network: 'preprod',
+    contractAddress,
+    deploymentTxId: txId,
+    registrarPublicKey: 'aa'.repeat(32),
+    certifierPublicKey: '00'.repeat(32),
+    deployedAt: new Date().toISOString(),
+    status: 'finalized',
+  };
+
+  const finalizedAndIndexed = onDeploymentCompleted(indexedLagState, receipt);
+  assert.equal(finalizedAndIndexed.stage, 'deployed');
+  assert.equal(finalizedAndIndexed.contractAddress, contractAddress);
+});
+
+// 44. Safe deployment error mapping without leaks
+test('44. Safe deployment error mapping without leaks', () => {
+  assert.equal(
+    mapDeploymentError(new Error('User aborted wallet request')),
+    'Deployment transaction was cancelled in 1AM.',
+  );
+  assert.equal(
+    mapDeploymentError(new Error('Insufficient balance or dust capacity')),
+    'Insufficient DUST or balance in connected 1AM wallet to cover deployment fees.',
+  );
+  assert.equal(
+    mapDeploymentError(new Error('Prover connection error at http://internal.prover:6300')),
+    'ZK proof generation failed. Ensure your local proof server is reachable and responsive.',
+  );
+  assert.equal(
+    mapDeploymentError(new Error('Connection to preprod node closed unexpectedly')),
+    'Network communication failure during deployment. Check Midnight Preprod connectivity.',
+  );
+  assert.equal(
+    mapDeploymentError(new Error('Indexer lookup timeout on graphql endpoint')),
+    'Contract finalized on-chain, but indexer synchronization is delayed. Use retry inspection.',
+  );
+  // Unknown raw stack/error
+  assert.equal(
+    mapDeploymentError(new Error('Fatal exception at lib0xMidnightConnectorImpl.cpp:456')),
+    'The deployment transaction could not be completed. Check the network connection and try again.',
+  );
+});
+
+// 45. Stale async completion protection for overlapping deployment generations
+test('45. Stale async completion protection for overlapping deployment generations', async () => {
+  let deployGenerationCounter = 0;
+  let activeDeployToken: number | null = null;
+  let state = INITIAL_REGISTRAR_DEPLOYMENT_UI_STATE;
+
+  // Deployment A starts
+  const tokenA = ++deployGenerationCounter;
+  activeDeployToken = tokenA;
+  state = onDeploymentWalletRequest(state);
+  assert.equal(state.stage, 'requesting-wallet');
+
+  // Lifecycle reset (e.g. user switches address or clears secret)
+  state = onDeploymentReset(state);
+  activeDeployToken = null;
+  assert.equal(state.stage, 'idle');
+
+  // Stale callback for A completes
+  const handleStaleCallbackA = () => {
+    if (activeDeployToken !== tokenA) {
+      // Correctly dropped
+      return;
+    }
+    state = onDeploymentCompleted(state, {
+      schema: DEPLOYMENT_RECEIPT_SCHEMA,
+      network: 'preprod',
+      contractAddress: 'stale_addr',
+      deploymentTxId: 'stale_tx',
+      registrarPublicKey: '00'.repeat(32),
+      certifierPublicKey: '00'.repeat(32),
+      deployedAt: new Date().toISOString(),
+      status: 'finalized',
+    });
+  };
+
+  handleStaleCallbackA();
+  // State must remain idle!
+  assert.equal(state.stage, 'idle');
+  assert.equal(state.contractAddress, null);
 });

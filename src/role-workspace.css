@@ -653,6 +653,126 @@ input:focus-visible {
   margin-top: 8px !important;
 }
 
+/* Registrar Deployment Card Styles */
+.registrar-deploy-card {
+  border-color: #1e3a2b;
+}
+
+.deploy-prereq-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: #09150f;
+  border: 1px solid #1c3526;
+  border-radius: 8px;
+  padding: 12px 14px;
+  margin-bottom: 18px;
+}
+
+.prereq-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 0.83rem;
+  color: #6d8474;
+}
+
+.prereq-item.met {
+  color: #c7ded0;
+}
+
+.prereq-item.met span:first-child {
+  color: #72e09b;
+  font-weight: 700;
+}
+
+.prereq-item.unmet span:first-child {
+  color: #556c5e;
+}
+
+.backup-confirm-checkbox {
+  margin-bottom: 14px;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 0.84rem;
+  color: #c7ded0;
+  cursor: pointer;
+}
+
+.backup-confirm-checkbox input[type='checkbox'] {
+  margin-top: 3px;
+  cursor: pointer;
+}
+
+.deployment-confirmation-box {
+  background: #0d1e15;
+  border: 1px solid #2f5a40;
+  border-radius: 10px;
+  padding: 18px;
+  margin-top: 14px;
+}
+
+.deployment-confirmation-box h3 {
+  font-size: 1.05rem;
+  margin: 0 0 12px;
+  color: #8ef0ae;
+}
+
+.deploy-warning-details {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 0.85rem;
+  color: #a4beae;
+  margin-bottom: 16px;
+  background: #07130b;
+  padding: 12px 14px;
+  border-radius: 8px;
+  border-left: 3px solid #f0b840;
+}
+
+.deploy-warning-details p {
+  margin: 0;
+}
+
+.deployed-id-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 10px 0;
+}
+
+.deployed-id-row code {
+  font-size: 0.82rem;
+  word-break: break-all;
+  background: #07130b;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid #1c3526;
+  color: #8ef0ae;
+}
+
+.waiting-wallet-callout {
+  border-left-color: #5cdb95;
+  background: #0a1f14;
+}
+
+.submitting-callout {
+  border-left-color: #63b3ed;
+  background: #0a1724;
+}
+
+.indexer-lag-callout {
+  border-left-color: #ecc94b;
+  background: #1e1b0a;
+}
+
+.deployed-success-callout {
+  border-left-color: #48bb78;
+  background: #0a1f14;
+}
+
 .role-workspace-footer {
   color: #617467;
   font-size: 0.78rem;

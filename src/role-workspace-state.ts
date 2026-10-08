@@ -496,3 +496,330 @@ export function mapRegistrarOperationError(error: unknown): string {
 
   return 'The operation could not be completed. Check the input and try again.';
 }
+
+export const DEPLOYMENT_RECEIPT_SCHEMA = 'commonveil.deployment-receipt/v1' as const;
+
+export interface DeploymentReceipt {
+  readonly schema: typeof DEPLOYMENT_RECEIPT_SCHEMA;
+  readonly network: 'preprod';
+  readonly contractAddress: string;
+  readonly deploymentTxId: string | null;
+  readonly registrarPublicKey: string;
+  readonly certifierPublicKey: string;
+  readonly deployedAt: string;
+  readonly status: 'finalized';
+}
+
+/**
+ * Validates a deployment receipt structure.
+ * Enforces schema, network preprod, 64-char hex keys, and valid ISO timestamp.
+ * Strictly verifies no private secrets, seed phrases, or passphrases are present.
+ */
+export function validateDeploymentReceipt(receipt: unknown): DeploymentReceipt {
+  if (!receipt || typeof receipt !== 'object') {
+    throw new Error('Deployment receipt must be an object.');
+  }
+  const r = receipt as Record<string, unknown>;
+
+  // Reject any private secret or credential fields
+  const forbiddenKeys = [
+    'secret',
+    'adminSecret',
+    'registrarSecret',
+    'certifierSecret',
+    'memberSecret',
+    'privateKey',
+    'seed',
+    'passphrase',
+    'salt',
+    'inventory',
+    'backup',
+  ];
+  for (const key of Object.keys(r)) {
+    const lower = key.toLowerCase();
+    if (forbiddenKeys.some((f) => lower.includes(f.toLowerCase()))) {
+      throw new Error(`Deployment receipt contains forbidden sensitive property '${key}'.`);
+    }
+  }
+
+  if (r.schema !== DEPLOYMENT_RECEIPT_SCHEMA) {
+    throw new Error(`Invalid receipt schema: expected '${DEPLOYMENT_RECEIPT_SCHEMA}'.`);
+  }
+  if (r.network !== 'preprod') {
+    throw new Error("Invalid receipt network: expected 'preprod'.");
+  }
+  if (typeof r.contractAddress !== 'string' || !r.contractAddress.trim()) {
+    throw new Error('Receipt contractAddress must be a non-empty string.');
+  }
+  if (r.deploymentTxId !== null && typeof r.deploymentTxId !== 'string') {
+    throw new Error('Receipt deploymentTxId must be a string or null.');
+  }
+  if (
+    typeof r.registrarPublicKey !== 'string' ||
+    !isHex(r.registrarPublicKey) ||
+    r.registrarPublicKey.length !== 64
+  ) {
+    throw new Error('Receipt registrarPublicKey must be a 64-character hexadecimal string.');
+  }
+  if (
+    typeof r.certifierPublicKey !== 'string' ||
+    !isHex(r.certifierPublicKey) ||
+    r.certifierPublicKey.length !== 64
+  ) {
+    throw new Error('Receipt certifierPublicKey must be a 64-character hexadecimal string.');
+  }
+  if (!isValidIsoTimestamp(r.deployedAt)) {
+    throw new Error('Receipt deployedAt must be a valid ISO timestamp.');
+  }
+  if (r.status !== 'finalized') {
+    throw new Error("Receipt status must be 'finalized'.");
+  }
+
+  return {
+    schema: DEPLOYMENT_RECEIPT_SCHEMA,
+    network: 'preprod',
+    contractAddress: r.contractAddress.trim(),
+    deploymentTxId: r.deploymentTxId ? (r.deploymentTxId as string).trim() : null,
+    registrarPublicKey: r.registrarPublicKey.toLowerCase(),
+    certifierPublicKey: r.certifierPublicKey.toLowerCase(),
+    deployedAt: r.deployedAt as string,
+    status: 'finalized',
+  };
+}
+
+export type DeploymentStage =
+  | 'idle'
+  | 'confirming'
+  | 'requesting-wallet'
+  | 'deploying'
+  | 'finalized-indexing'
+  | 'deployed'
+  | 'failed'
+  | 'cancelled';
+
+export interface RegistrarDeploymentUiState {
+  readonly stage: DeploymentStage;
+  readonly backupConfirmed: boolean;
+  readonly contractAddress: string | null;
+  readonly deploymentTxId: string | null;
+  readonly receipt: DeploymentReceipt | null;
+  readonly errorMessage: string | null;
+}
+
+export const INITIAL_REGISTRAR_DEPLOYMENT_UI_STATE: RegistrarDeploymentUiState = {
+  stage: 'idle',
+  backupConfirmed: false,
+  contractAddress: null,
+  deploymentTxId: null,
+  receipt: null,
+  errorMessage: null,
+};
+
+/**
+ * Pure helper checking if the registrar deployment flow can be initiated.
+ */
+export function canInitiateDeployment(params: {
+  readonly isConnected: boolean;
+  readonly hasSecret: boolean;
+  readonly backupConfirmed: boolean;
+  readonly isDeploying: boolean;
+  readonly proofProviderAvailable: boolean;
+}): boolean {
+  return (
+    params.isConnected &&
+    params.hasSecret &&
+    params.backupConfirmed &&
+    !params.isDeploying &&
+    params.proofProviderAvailable
+  );
+}
+
+/**
+ * Pure state reducer when deployment confirmation dialog is opened.
+ */
+export function onDeploymentConfirmOpen(
+  prevState: RegistrarDeploymentUiState,
+): RegistrarDeploymentUiState {
+  if (
+    prevState.stage === 'deploying' ||
+    prevState.stage === 'requesting-wallet' ||
+    prevState.stage === 'finalized-indexing'
+  ) {
+    return prevState;
+  }
+  return {
+    ...prevState,
+    stage: 'confirming',
+    errorMessage: null,
+  };
+}
+
+/**
+ * Pure state reducer when deployment confirmation is dismissed.
+ */
+export function onDeploymentConfirmCancel(
+  prevState: RegistrarDeploymentUiState,
+): RegistrarDeploymentUiState {
+  if (prevState.stage !== 'confirming') {
+    return prevState;
+  }
+  return {
+    ...prevState,
+    stage: 'idle',
+    errorMessage: null,
+  };
+}
+
+/**
+ * Pure state reducer when deployment is initiated and waiting for 1AM wallet approval.
+ */
+export function onDeploymentWalletRequest(
+  prevState: RegistrarDeploymentUiState,
+): RegistrarDeploymentUiState {
+  return {
+    ...prevState,
+    stage: 'requesting-wallet',
+    errorMessage: null,
+  };
+}
+
+/**
+ * Pure state reducer when wallet approves and on-chain submission/proving begins.
+ */
+export function onDeploymentSubmitting(
+  prevState: RegistrarDeploymentUiState,
+): RegistrarDeploymentUiState {
+  return {
+    ...prevState,
+    stage: 'deploying',
+    errorMessage: null,
+  };
+}
+
+/**
+ * Pure state reducer when deployment transaction finalizes on-chain,
+ * but indexer synchronization is still pending.
+ */
+export function onDeploymentFinalizedIndexing(
+  prevState: RegistrarDeploymentUiState,
+  params: {
+    readonly contractAddress: string;
+    readonly deploymentTxId: string | null;
+  },
+): RegistrarDeploymentUiState {
+  return {
+    ...prevState,
+    stage: 'finalized-indexing',
+    contractAddress: params.contractAddress,
+    deploymentTxId: params.deploymentTxId,
+    errorMessage: null,
+  };
+}
+
+/**
+ * Pure state reducer when deployment finalizes, ledger is verified, and receipt is created.
+ */
+export function onDeploymentCompleted(
+  prevState: RegistrarDeploymentUiState,
+  receipt: DeploymentReceipt,
+): RegistrarDeploymentUiState {
+  return {
+    ...prevState,
+    stage: 'deployed',
+    contractAddress: receipt.contractAddress,
+    deploymentTxId: receipt.deploymentTxId,
+    receipt,
+    errorMessage: null,
+  };
+}
+
+/**
+ * Pure state reducer when deployment is explicitly cancelled in the wallet.
+ */
+export function onDeploymentCancelled(
+  prevState: RegistrarDeploymentUiState,
+): RegistrarDeploymentUiState {
+  return {
+    ...prevState,
+    stage: 'cancelled',
+    errorMessage: null,
+  };
+}
+
+/**
+ * Pure state reducer when deployment encounters an error.
+ */
+export function onDeploymentFailed(
+  prevState: RegistrarDeploymentUiState,
+  errorMessage: string,
+): RegistrarDeploymentUiState {
+  return {
+    ...prevState,
+    stage: 'failed',
+    errorMessage,
+  };
+}
+
+/**
+ * Pure state reducer when resetting deployment state (e.g. after address change or disconnect).
+ */
+export function onDeploymentReset(
+  prevState: RegistrarDeploymentUiState,
+): RegistrarDeploymentUiState {
+  return {
+    ...INITIAL_REGISTRAR_DEPLOYMENT_UI_STATE,
+    backupConfirmed: prevState.backupConfirmed,
+  };
+}
+
+/**
+ * Pure error sanitizer for contract deployment operations.
+ * Never leaks raw endpoints, stack traces, tokens, or connector internals.
+ */
+export function mapDeploymentError(error: unknown): string {
+  if (!error) {
+    return 'The deployment transaction could not be completed. Check the network connection and try again.';
+  }
+
+  const raw = (
+    error instanceof Error
+      ? error.message
+      : typeof error === 'string'
+        ? error
+        : typeof (error as any)?.message === 'string'
+          ? (error as any).message
+          : ''
+  ).toLowerCase();
+
+  if (
+    raw.includes('cancel') ||
+    raw.includes('reject') ||
+    raw.includes('denied') ||
+    raw.includes('declined') ||
+    raw.includes('user aborted')
+  ) {
+    return 'Deployment transaction was cancelled in 1AM.';
+  }
+
+  if (raw.includes('dust') || raw.includes('balance') || raw.includes('insufficient funds')) {
+    return 'Insufficient DUST or balance in connected 1AM wallet to cover deployment fees.';
+  }
+
+  if (raw.includes('proof') || raw.includes('prover') || raw.includes('proving')) {
+    return 'ZK proof generation failed. Ensure your local proof server is reachable and responsive.';
+  }
+
+  if (raw.includes('indexer') || raw.includes('lookup')) {
+    return 'Contract finalized on-chain, but indexer synchronization is delayed. Use retry inspection.';
+  }
+
+  if (raw.includes('timeout') || raw.includes('deadline')) {
+    return 'Transaction submission timed out. Check network status and wallet activity.';
+  }
+
+  if (raw.includes('network') || raw.includes('preprod') || raw.includes('connection')) {
+    return 'Network communication failure during deployment. Check Midnight Preprod connectivity.';
+  }
+
+  return 'The deployment transaction could not be completed. Check the network connection and try again.';
+}
