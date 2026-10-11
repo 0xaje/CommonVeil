@@ -314,25 +314,29 @@ export const FORBIDDEN_SENSITIVE_PATTERNS = [
   'wallet_seed',
 ] as const;
 
-export function assertNoSensitiveFields(obj: unknown, path: string = ''): void {
+export function assertNoSensitiveFields(
+  obj: unknown,
+  path: string = '',
+  entityName: string = 'Inventory report',
+): void {
   if (!obj || typeof obj !== 'object') return;
   for (const [key, value] of Object.entries(obj)) {
     const lowerKey = key.toLowerCase();
     for (const pattern of FORBIDDEN_SENSITIVE_PATTERNS) {
       if (lowerKey.includes(pattern)) {
-        throw new Error(`Inventory report contains forbidden sensitive property '${path ? `${path}.${key}` : key}'.`);
+        throw new Error(`${entityName} contains forbidden sensitive property '${path ? `${path}.${key}` : key}'.`);
       }
     }
     if (typeof value === 'string') {
       const lowerVal = value.toLowerCase();
-      for (const phrase of ['wallet seed', 'private key', 'backup password', 'secret salt']) {
+      for (const phrase of ['wallet seed', 'private key', 'backup password', 'secret salt', 'passphrase']) {
         if (lowerVal.includes(phrase)) {
-          throw new Error(`Inventory report contains forbidden sensitive data in '${path ? `${path}.${key}` : key}'.`);
+          throw new Error(`${entityName} contains forbidden sensitive data in '${path ? `${path}.${key}` : key}'.`);
         }
       }
     }
     if (value && typeof value === 'object') {
-      assertNoSensitiveFields(value, path ? `${path}.${key}` : key);
+      assertNoSensitiveFields(value, path ? `${path}.${key}` : key, entityName);
     }
   }
 }
@@ -342,7 +346,7 @@ export async function validateLiveInventoryReport(report: unknown): Promise<Vali
     throw new Error('Inventory report must be a JSON object.');
   }
 
-  assertNoSensitiveFields(report);
+  assertNoSensitiveFields(report, '', 'Inventory report');
 
   const r = report as Record<string, unknown>;
 
@@ -447,13 +451,41 @@ export function buildCertificationRequestPackage(params: {
   };
 }
 
+export const CERTIFICATION_REQUEST_REQUIRED_FIELDS = [
+  'schema',
+  'network',
+  'contractAddress',
+  'memberCredential',
+  'provenance',
+  'product',
+  'rawVersion',
+  'version',
+  'measurementDigest',
+  'observedAt',
+  'createdAt',
+] as const;
+
 export async function validateCertificationRequestPackage(pkg: unknown): Promise<CertificationRequestPackage> {
-  if (!pkg || typeof pkg !== 'object') throw new Error('Package must be an object');
+  if (!pkg || typeof pkg !== 'object' || Array.isArray(pkg)) {
+    throw new Error('Package must be an object');
+  }
+
+  // Strictly assert no sensitive properties or leaked credentials/secrets anywhere in the package
+  assertNoSensitiveFields(pkg, '', 'Certification request');
+
   const p = pkg as Record<string, unknown>;
+
+  // Strict 11 top-level field boundary: reject every unknown additional field
+  const allowedSet = new Set<string>(CERTIFICATION_REQUEST_REQUIRED_FIELDS);
+  const extraKeys = Object.keys(p).filter((k) => !allowedSet.has(k));
+  if (extraKeys.length > 0) {
+    throw new Error(`Certification request contains unauthorized top-level fields: ${extraKeys.join(', ')}`);
+  }
+
   if (p.schema !== CERTIFICATION_REQUEST_SCHEMA) {
     throw new Error(`Invalid schema: expected '${CERTIFICATION_REQUEST_SCHEMA}', received '${String(p.schema)}'`);
   }
-  if (p.network !== undefined && p.network !== 'preprod') {
+  if (p.network !== 'preprod') {
     throw new Error("Invalid network: expected 'preprod'");
   }
   const contractAddress = validateContractAddress(p.contractAddress);

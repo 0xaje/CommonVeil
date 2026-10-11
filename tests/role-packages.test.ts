@@ -819,8 +819,8 @@ test('29. Invalid observedAt timestamp is rejected', async () => {
   );
 });
 
-// 30. Certification request package construction contains exactly the 10 required fields and network: preprod
-test('30. Certification request package construction contains exactly the 10 required fields and network: preprod', async () => {
+// 30. Certification request package construction contains exactly the 11 required fields including network: preprod
+test('30. Certification request package construction contains exactly the 11 required fields including network: preprod', async () => {
   const digest = await computeMeasurementDigest('pkg:generic/xz-utils', '5.2.5');
   const validatedReport = await validateLiveInventoryReport({
     schema: 'commonveil.inventory/v1',
@@ -853,6 +853,8 @@ test('30. Certification request package construction contains exactly the 10 req
     'version',
   ].sort();
 
+  assert.equal(expectedKeys.length, 11);
+  assert.equal(Object.keys(certReq).length, 11);
   assert.deepEqual(Object.keys(certReq).sort(), expectedKeys);
   assert.equal(certReq.schema, CERTIFICATION_REQUEST_SCHEMA);
   assert.equal(certReq.network, 'preprod');
@@ -940,5 +942,201 @@ test('32. Certification request package validation verifies network preprod and 
   await assert.rejects(
     () => validateCertificationRequestPackage({ ...validPkg, measurementDigest: '00'.repeat(32) }),
     /measurementDigest does not match normalized product\/version measurement/,
+  );
+});
+
+// 33. validateCertificationRequestPackage rejects unknown extra top-level fields, host fingerprint, username, machine name
+test('33. validateCertificationRequestPackage rejects unknown extra top-level fields, host fingerprint, username, machine name', async () => {
+  const digest = await computeMeasurementDigest('pkg:generic/xz-utils', '5.2.5');
+  const validPkg = {
+    schema: CERTIFICATION_REQUEST_SCHEMA,
+    network: 'preprod' as const,
+    contractAddress: SAMPLE_CONTRACT,
+    memberCredential: SAMPLE_HEX_32,
+    provenance: 'live-host-scan' as const,
+    product: 'pkg:generic/xz-utils',
+    rawVersion: '5.2.5-2ubuntu1.1',
+    version: { major: 5, minor: 2, patch: 5 },
+    measurementDigest: digest,
+    observedAt: FIXED_NOW.toISOString(),
+    createdAt: FIXED_NOW.toISOString(),
+  };
+
+  // Unknown arbitrary top-level field rejected
+  await assert.rejects(
+    () => validateCertificationRequestPackage({ ...validPkg, extraField: 'unauthorized-data' } as any),
+    /Certification request contains unauthorized top-level fields: extraField/,
+  );
+
+  // Host metadata rejected
+  await assert.rejects(
+    () => validateCertificationRequestPackage({ ...validPkg, host: { fingerprint: 'abc' } } as any),
+    /Certification request contains unauthorized top-level fields: host/,
+  );
+
+  // Direct fingerprint field rejected
+  await assert.rejects(
+    () => validateCertificationRequestPackage({ ...validPkg, fingerprint: 'abc' } as any),
+    /Certification request contains unauthorized top-level fields: fingerprint/,
+  );
+
+  // Username rejected
+  await assert.rejects(
+    () => validateCertificationRequestPackage({ ...validPkg, username: 'operator-1' } as any),
+    /Certification request contains unauthorized top-level fields: username/,
+  );
+
+  // Machine name rejected
+  await assert.rejects(
+    () => validateCertificationRequestPackage({ ...validPkg, machineName: 'node-cluster-a' } as any),
+    /Certification request contains unauthorized top-level fields: machineName/,
+  );
+});
+
+// 34. validateCertificationRequestPackage rejects secret, salt, passphrase, private key, wallet seed
+test('34. validateCertificationRequestPackage rejects secret, salt, passphrase, private key, wallet seed', async () => {
+  const digest = await computeMeasurementDigest('pkg:generic/xz-utils', '5.2.5');
+  const validPkg = {
+    schema: CERTIFICATION_REQUEST_SCHEMA,
+    network: 'preprod' as const,
+    contractAddress: SAMPLE_CONTRACT,
+    memberCredential: SAMPLE_HEX_32,
+    provenance: 'live-host-scan' as const,
+    product: 'pkg:generic/xz-utils',
+    rawVersion: '5.2.5-2ubuntu1.1',
+    version: { major: 5, minor: 2, patch: 5 },
+    measurementDigest: digest,
+    observedAt: FIXED_NOW.toISOString(),
+    createdAt: FIXED_NOW.toISOString(),
+  };
+
+  // Secret property rejected
+  await assert.rejects(
+    () => validateCertificationRequestPackage({ ...validPkg, memberSecret: 'secret123' } as any),
+    /Certification request contains forbidden sensitive property 'memberSecret'/,
+  );
+
+  // Salt property rejected
+  await assert.rejects(
+    () => validateCertificationRequestPackage({ ...validPkg, salt: 'salt123' } as any),
+    /Certification request contains forbidden sensitive property 'salt'/,
+  );
+
+  // Passphrase property rejected
+  await assert.rejects(
+    () => validateCertificationRequestPackage({ ...validPkg, passphrase: 'password123' } as any),
+    /Certification request contains forbidden sensitive property 'passphrase'/,
+  );
+
+  // Private key property rejected
+  await assert.rejects(
+    () => validateCertificationRequestPackage({ ...validPkg, privateKey: 'key123' } as any),
+    /Certification request contains forbidden sensitive property 'privateKey'/,
+  );
+
+  // Wallet seed property rejected
+  await assert.rejects(
+    () => validateCertificationRequestPackage({ ...validPkg, walletSeed: 'seed phrase' } as any),
+    /Certification request contains forbidden sensitive property 'walletSeed'/,
+  );
+
+  // Sensitive phrase inside string value rejected
+  await assert.rejects(
+    () => validateCertificationRequestPackage({ ...validPkg, product: 'pkg:generic/xz-utils wallet seed' }),
+    /Certification request contains forbidden sensitive data in 'product'/,
+  );
+});
+
+// 35. validateCertificationRequestPackage rejects missing/incorrect network, malformed contract address/credential/digest
+test('35. validateCertificationRequestPackage rejects missing/incorrect network, malformed contract address/credential/digest', async () => {
+  const digest = await computeMeasurementDigest('pkg:generic/xz-utils', '5.2.5');
+  const validPkg = {
+    schema: CERTIFICATION_REQUEST_SCHEMA,
+    network: 'preprod' as const,
+    contractAddress: SAMPLE_CONTRACT,
+    memberCredential: SAMPLE_HEX_32,
+    provenance: 'live-host-scan' as const,
+    product: 'pkg:generic/xz-utils',
+    rawVersion: '5.2.5-2ubuntu1.1',
+    version: { major: 5, minor: 2, patch: 5 },
+    measurementDigest: digest,
+    observedAt: FIXED_NOW.toISOString(),
+    createdAt: FIXED_NOW.toISOString(),
+  };
+
+  // Missing or wrong network
+  await assert.rejects(
+    () => validateCertificationRequestPackage({ ...validPkg, network: undefined as any }),
+    /Invalid network: expected 'preprod'/,
+  );
+  await assert.rejects(
+    () => validateCertificationRequestPackage({ ...validPkg, network: 'testnet' as any }),
+    /Invalid network: expected 'preprod'/,
+  );
+
+  // Malformed contract address
+  await assert.rejects(
+    () => validateCertificationRequestPackage({ ...validPkg, contractAddress: '' }),
+    /Contract address must be a non-empty string/,
+  );
+  await assert.rejects(
+    () => validateCertificationRequestPackage({ ...validPkg, contractAddress: '   ' }),
+    /Contract address must be a non-empty string/,
+  );
+
+  // Malformed memberCredential
+  await assert.rejects(
+    () => validateCertificationRequestPackage({ ...validPkg, memberCredential: 'not-hex-at-all' }),
+    /memberCredential must be 32-byte hex \(64 chars\)/,
+  );
+  await assert.rejects(
+    () => validateCertificationRequestPackage({ ...validPkg, memberCredential: 'aa'.repeat(31) }),
+    /memberCredential must be 32-byte hex \(64 chars\)/,
+  );
+
+  // Malformed measurementDigest
+  await assert.rejects(
+    () => validateCertificationRequestPackage({ ...validPkg, measurementDigest: 'short-digest' }),
+    /measurementDigest must be 32-byte hex \(64 chars\)/,
+  );
+});
+
+// 36. validateCertificationRequestPackage rejects invalid or non-canonical timestamps
+test('36. validateCertificationRequestPackage rejects invalid or non-canonical timestamps', async () => {
+  const digest = await computeMeasurementDigest('pkg:generic/xz-utils', '5.2.5');
+  const validPkg = {
+    schema: CERTIFICATION_REQUEST_SCHEMA,
+    network: 'preprod' as const,
+    contractAddress: SAMPLE_CONTRACT,
+    memberCredential: SAMPLE_HEX_32,
+    provenance: 'live-host-scan' as const,
+    product: 'pkg:generic/xz-utils',
+    rawVersion: '5.2.5-2ubuntu1.1',
+    version: { major: 5, minor: 2, patch: 5 },
+    measurementDigest: digest,
+    observedAt: FIXED_NOW.toISOString(),
+    createdAt: FIXED_NOW.toISOString(),
+  };
+
+  // Invalid date strings
+  await assert.rejects(
+    () => validateCertificationRequestPackage({ ...validPkg, observedAt: 'invalid-date' }),
+    /observedAt must be a valid ISO-8601 UTC timestamp/,
+  );
+  await assert.rejects(
+    () => validateCertificationRequestPackage({ ...validPkg, createdAt: 'not-a-timestamp' }),
+    /createdAt must be a valid ISO-8601 UTC timestamp/,
+  );
+
+  // Non-canonical format: missing Z
+  await assert.rejects(
+    () => validateCertificationRequestPackage({ ...validPkg, observedAt: '2026-10-11T03:00:00' }),
+    /observedAt must be a valid ISO-8601 UTC timestamp/,
+  );
+
+  // Non-canonical format: non-UTC timezone offset (+02:00)
+  await assert.rejects(
+    () => validateCertificationRequestPackage({ ...validPkg, createdAt: '2026-10-11T05:00:00.000+02:00' }),
+    /createdAt must be a valid ISO-8601 UTC timestamp/,
   );
 });

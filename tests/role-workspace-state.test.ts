@@ -110,6 +110,7 @@ import {
   type ValidatedLiveInventoryReport,
   validateLiveInventoryReport,
   buildCertificationRequestPackage,
+  validateCertificationRequestPackage,
   computeMeasurementDigest,
   CERTIFICATION_REQUEST_SCHEMA,
 } from '../src/role-packages.ts';
@@ -2916,7 +2917,10 @@ test('100. End-to-end simulated workflow from genuine npm run scan JSON structur
   assert.deepEqual(certReqPkg.version, { major: 5, minor: 2, patch: 5 });
   assert.equal(certReqPkg.measurementDigest, validatedReport.measurementDigest);
 
-  // Step 5: Verify no sensitive properties in the serialized package
+  // Step 5: Verify exactly 11 top-level fields and zero sensitive properties in the package
+  assert.equal(Object.keys(certReqPkg).length, 11);
+  const validatedPkg = await validateCertificationRequestPackage(certReqPkg);
+  assert.equal(validatedPkg.network, 'preprod');
   const serialized = JSON.stringify(certReqPkg, null, 2);
   assert.equal(serialized.includes('fingerprint'), false);
   assert.equal(serialized.includes('platform'), false);
