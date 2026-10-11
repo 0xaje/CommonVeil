@@ -2927,3 +2927,44 @@ test('100. End-to-end simulated workflow from genuine npm run scan JSON structur
   assert.equal(serialized.includes('secret'), false);
   assert.equal(serialized.includes('salt'), false);
 });
+
+// 101. Member workspace export gating strictly rejects controlled test evidence and non-live provenance
+test('101. Member workspace export gating strictly rejects controlled test evidence and non-live provenance', async () => {
+  const fakeControlledReport = {
+    schema: 'commonveil.inventory/v1' as const,
+    provenance: 'controlled-test-vector' as any,
+    status: 'detected' as const,
+    product: 'pkg:generic/xz-utils',
+    rawVersion: '5.6.1',
+    version: { major: 5, minor: 6, patch: 1 },
+    normalizedVersion: '5.6.1',
+    measurementDigest: await computeMeasurementDigest('pkg:generic/xz-utils', '5.6.1'),
+    observedAt: FIXED_NOW.toISOString(),
+  };
+
+  // canExportCertificationRequest returns false when provenance is not live-host-scan
+  const canExport = canExportCertificationRequest({
+    isConnected: true,
+    attachedContractAddress: SAMPLE_CONTRACT_ADDRESS,
+    hasSecret: true,
+    hasSalt: true,
+    memberCredentialHex: SAMPLE_HEX_64,
+    backupRecoveryStatus: 'recovery-tested',
+    importedInventory: fakeControlledReport,
+  });
+  assert.equal(canExport, false);
+
+  // checkCertificationRequestPrerequisites identifies missing genuine live inventory
+  const prereqs = checkCertificationRequestPrerequisites({
+    isConnected: true,
+    attachedContractAddress: SAMPLE_CONTRACT_ADDRESS,
+    hasSecret: true,
+    hasSalt: true,
+    memberCredentialHex: SAMPLE_HEX_64,
+    backupRecoveryStatus: 'recovery-tested',
+    importedInventory: fakeControlledReport,
+  });
+  assert.equal(prereqs.canExport, false);
+  assert.equal(prereqs.isLiveInventoryImported, false);
+  assert.deepEqual(prereqs.missingPrerequisites, ['Validated genuine live inventory report']);
+});

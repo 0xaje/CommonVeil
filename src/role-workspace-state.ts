@@ -1941,7 +1941,8 @@ export function canExportCertificationRequest(params: {
     typeof params.memberCredentialHex === 'string' &&
     isHex(params.memberCredentialHex, 32) &&
     params.backupRecoveryStatus === 'recovery-tested' &&
-    params.importedInventory !== null
+    params.importedInventory !== null &&
+    params.importedInventory.provenance === 'live-host-scan'
   );
 }
 
@@ -1974,7 +1975,9 @@ export function checkCertificationRequestPrerequisites(params: {
     typeof params.memberCredentialHex === 'string' &&
     isHex(params.memberCredentialHex, 32);
   const isBackupRecoveryTested = params.backupRecoveryStatus === 'recovery-tested';
-  const isLiveInventoryImported = params.importedInventory !== null;
+  const isLiveInventoryImported =
+    params.importedInventory !== null &&
+    params.importedInventory.provenance === 'live-host-scan';
 
   const missing: string[] = [];
   if (!isWalletConnected) missing.push('Connected 1AM wallet on Preprod');

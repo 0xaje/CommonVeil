@@ -60,8 +60,9 @@ Inventory reports label their origin as either:
 - `controlled-test-vector`: Predefined protocol demonstration vector (e.g. controlled XZ 5.6.1 input).
 
 **Honest boundary notice**:
-- Package validation preserves the claimed provenance label throughout the workflow.
+- `commonveil.certification-request/v1` accepts genuine `live-host-scan` provenance only.
+- Controlled test vectors (`controlled-test-vector`) are confined strictly to automated unit/circuit tests and are strictly rejected from operational certification requests and member export workflows.
 - Package validation verifies internal measurement consistency (that `normalized` exactly derives as `${major}.${minor}.${patch}` and matches `measurementDigest`).
 - Package validation **does not cryptographically authenticate scanner origin**.
 - Authenticated scanner provenance requires a future signature or hardware/device-attestation mechanism.
-- A controlled test vector must never be presented as a live scan.
+- A controlled test vector must never be presented as a live scan and cannot enter the Certifier workflow.

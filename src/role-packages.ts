@@ -8,11 +8,12 @@
  * - Encrypted envelope: AES-256-GCM + PBKDF2-SHA-256 for private packages & secret backups.
  *
  * PROVENANCE INTEGRITY NOTE:
- * Validation preserves claimed provenance ('live-host-scan' vs 'controlled-test-vector')
- * and verifies internal measurement consistency (derivation of tuple and digest).
+ * commonveil.certification-request/v1 accepts genuine live-host-scan provenance only.
+ * A controlled test vector must never be presented as a live scan and cannot enter
+ * the operational Certifier workflow.
+ * Validation verifies internal measurement consistency (derivation of tuple and digest).
  * Validation DOES NOT cryptographically authenticate scanner origin.
  * Authenticated scanner provenance requires a future signature or hardware/device-attestation mechanism.
- * A controlled test vector must never be presented as a live scan.
  */
 
 export const CERTIFIER_KEY_SCHEMA = 'commonveil.certifier-key/v1' as const;
@@ -49,7 +50,7 @@ export interface CertificationRequestPackage {
   readonly network: 'preprod';
   readonly contractAddress: string;
   readonly memberCredential: string; // 32 bytes hex (64 chars)
-  readonly provenance: SupportedProvenance;
+  readonly provenance: 'live-host-scan';
   readonly product: string;
   readonly rawVersion: string;
   readonly version: VersionTuple;
@@ -222,8 +223,10 @@ export async function buildCertificationRequestFromInventoryReport(
   if (inventoryReport.status !== 'detected') {
     throw new Error(`Inventory report status must be 'detected', received '${String(inventoryReport.status)}'`);
   }
-  if (inventoryReport.provenance !== 'live-host-scan' && inventoryReport.provenance !== 'controlled-test-vector') {
-    throw new Error(`Unsupported inventory provenance: '${String(inventoryReport.provenance)}'`);
+  if (inventoryReport.provenance !== 'live-host-scan') {
+    throw new Error(
+      `Invalid inventory provenance: commonveil.certification-request/v1 accepts genuine live-host-scan provenance only, received '${String(inventoryReport.provenance)}'`
+    );
   }
   if (typeof inventoryReport.product !== 'string' || inventoryReport.product.trim().length === 0) {
     throw new Error('Inventory report product must be a non-empty trimmed string');
@@ -274,7 +277,7 @@ export async function buildCertificationRequestFromInventoryReport(
     network: 'preprod',
     contractAddress,
     memberCredential: options.memberCredential.toLowerCase(),
-    provenance: inventoryReport.provenance,
+    provenance: 'live-host-scan',
     product,
     rawVersion: inventoryReport.version.raw,
     version: {
@@ -426,6 +429,11 @@ export function buildCertificationRequestPackage(params: {
   memberCredentialHex: string;
   now?: Date;
 }): CertificationRequestPackage {
+  if (params.inventoryReport.provenance !== 'live-host-scan') {
+    throw new Error(
+      `Invalid inventory provenance: commonveil.certification-request/v1 accepts genuine live-host-scan provenance only, received '${String(params.inventoryReport.provenance)}'.`
+    );
+  }
   const contractAddress = validateContractAddress(params.contractAddress);
   if (!isHex(params.memberCredentialHex, 32)) {
     throw new Error('memberCredential must be a 32-byte hex string (64 characters).');
@@ -492,8 +500,10 @@ export async function validateCertificationRequestPackage(pkg: unknown): Promise
   if (!isHex(p.memberCredential, 32)) {
     throw new Error('memberCredential must be 32-byte hex (64 chars)');
   }
-  if (p.provenance !== 'live-host-scan' && p.provenance !== 'controlled-test-vector') {
-    throw new Error(`Unsupported provenance: '${String(p.provenance)}'`);
+  if (p.provenance !== 'live-host-scan') {
+    throw new Error(
+      `Invalid provenance: commonveil.certification-request/v1 accepts genuine live-host-scan provenance only, received '${String(p.provenance)}'`
+    );
   }
   if (typeof p.product !== 'string' || p.product.trim().length === 0) {
     throw new Error('product must be a non-empty trimmed string');
@@ -525,7 +535,7 @@ export async function validateCertificationRequestPackage(pkg: unknown): Promise
     network: 'preprod',
     contractAddress,
     memberCredential: (p.memberCredential as string).toLowerCase(),
-    provenance: p.provenance,
+    provenance: 'live-host-scan',
     product: p.product.trim(),
     rawVersion: p.rawVersion,
     version: {

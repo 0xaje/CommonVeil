@@ -109,8 +109,8 @@ test('3. Live-scan certification request construction from self-consistent inven
   assert.equal(validated.provenance, 'live-host-scan');
 });
 
-// 4. Controlled-test-vector request remains labelled as such
-test('4. Controlled-test-vector request remains labelled as such and is not converted', async () => {
+// 4. Controlled-test-vector cannot pass operational certification-request validation or construction
+test('4. Controlled-test-vector cannot pass operational certification-request validation or construction', async () => {
   const digest = await computeMeasurementDigest('pkg:generic/xz-utils', '5.6.1');
   const inventoryReport = {
     schema: 'commonveil.inventory/v1' as const,
@@ -128,15 +128,36 @@ test('4. Controlled-test-vector request remains labelled as such and is not conv
     measurementDigest: digest,
   };
 
-  const req = await buildCertificationRequestFromInventoryReport(inventoryReport, {
+  // buildCertificationRequestFromInventoryReport rejects non-live provenance
+  await assert.rejects(
+    () =>
+      buildCertificationRequestFromInventoryReport(inventoryReport, {
+        contractAddress: SAMPLE_CONTRACT,
+        memberCredential: SAMPLE_HEX_32,
+        now: FIXED_NOW,
+      }),
+    /commonveil\.certification-request\/v1 accepts genuine live-host-scan provenance only/,
+  );
+
+  // Directly structured package with controlled-test-vector fails validateCertificationRequestPackage
+  const controlledPkg = {
+    schema: CERTIFICATION_REQUEST_SCHEMA,
+    network: 'preprod' as const,
     contractAddress: SAMPLE_CONTRACT,
     memberCredential: SAMPLE_HEX_32,
-    now: FIXED_NOW,
-  });
+    provenance: 'controlled-test-vector' as any,
+    product: 'pkg:generic/xz-utils',
+    rawVersion: '5.6.1',
+    version: { major: 5, minor: 6, patch: 1 },
+    measurementDigest: digest,
+    observedAt: FIXED_NOW.toISOString(),
+    createdAt: FIXED_NOW.toISOString(),
+  };
 
-  assert.equal(req.provenance, 'controlled-test-vector');
-  const validated = await validateCertificationRequestPackage(req);
-  assert.equal(validated.provenance, 'controlled-test-vector');
+  await assert.rejects(
+    () => validateCertificationRequestPackage(controlledPkg),
+    /commonveil\.certification-request\/v1 accepts genuine live-host-scan provenance only/,
+  );
 });
 
 // 5. Inventory report consistency: normalized vs tuple mismatch, not-detected, empty rawVersion
@@ -1138,5 +1159,119 @@ test('36. validateCertificationRequestPackage rejects invalid or non-canonical t
   await assert.rejects(
     () => validateCertificationRequestPackage({ ...validPkg, createdAt: '2026-10-11T05:00:00.000+02:00' }),
     /createdAt must be a valid ISO-8601 UTC timestamp/,
+  );
+});
+
+// 37. validateCertificationRequestPackage strictly rejects non-live provenance even with valid digest
+test('37. validateCertificationRequestPackage strictly rejects non-live provenance even with valid digest', async () => {
+  const digest = await computeMeasurementDigest('pkg:generic/xz-utils', '5.2.5');
+  const validPkg = {
+    schema: CERTIFICATION_REQUEST_SCHEMA,
+    network: 'preprod' as const,
+    contractAddress: SAMPLE_CONTRACT,
+    memberCredential: SAMPLE_HEX_32,
+    provenance: 'live-host-scan' as const,
+    product: 'pkg:generic/xz-utils',
+    rawVersion: '5.2.5-2ubuntu1.1',
+    version: { major: 5, minor: 2, patch: 5 },
+    measurementDigest: digest,
+    observedAt: FIXED_NOW.toISOString(),
+    createdAt: FIXED_NOW.toISOString(),
+  };
+
+  // Genuine live-host-scan passes
+  const validated = await validateCertificationRequestPackage(validPkg);
+  assert.equal(validated.provenance, 'live-host-scan');
+
+  // controlled-test-vector fails even though digest is 100% mathematically valid
+  await assert.rejects(
+    () => validateCertificationRequestPackage({ ...validPkg, provenance: 'controlled-test-vector' as any }),
+    /Invalid provenance: commonveil\.certification-request\/v1 accepts genuine live-host-scan provenance only/,
+  );
+
+  // demo fails
+  await assert.rejects(
+    () => validateCertificationRequestPackage({ ...validPkg, provenance: 'demo' as any }),
+    /Invalid provenance: commonveil\.certification-request\/v1 accepts genuine live-host-scan provenance only/,
+  );
+
+  // simulated fails
+  await assert.rejects(
+    () => validateCertificationRequestPackage({ ...validPkg, provenance: 'simulated' as any }),
+    /Invalid provenance: commonveil\.certification-request\/v1 accepts genuine live-host-scan provenance only/,
+  );
+
+  // mock fails
+  await assert.rejects(
+    () => validateCertificationRequestPackage({ ...validPkg, provenance: 'mock' as any }),
+    /Invalid provenance: commonveil\.certification-request\/v1 accepts genuine live-host-scan provenance only/,
+  );
+
+  // synthetic fails
+  await assert.rejects(
+    () => validateCertificationRequestPackage({ ...validPkg, provenance: 'synthetic' as any }),
+    /Invalid provenance: commonveil\.certification-request\/v1 accepts genuine live-host-scan provenance only/,
+  );
+
+  // undefined fails
+  await assert.rejects(
+    () => validateCertificationRequestPackage({ ...validPkg, provenance: undefined as any }),
+    /Invalid provenance: commonveil\.certification-request\/v1 accepts genuine live-host-scan provenance only/,
+  );
+});
+
+// 38. Changing live-host-scan to controlled-test-vector after construction fails validation
+test('38. Changing live-host-scan to controlled-test-vector after construction fails validation', async () => {
+  const digest = await computeMeasurementDigest('pkg:generic/xz-utils', '5.2.5');
+  const validatedReport = await validateLiveInventoryReport({
+    schema: 'commonveil.inventory/v1',
+    provenance: 'live-host-scan',
+    observedAt: FIXED_NOW.toISOString(),
+    product: 'pkg:generic/xz-utils',
+    status: 'detected',
+    version: { raw: '5.2.5-2ubuntu1.1', normalized: '5.2.5', major: 5, minor: 2, patch: 5 },
+    measurementDigest: digest,
+  });
+
+  const certReq = buildCertificationRequestPackage({
+    inventoryReport: validatedReport,
+    contractAddress: SAMPLE_CONTRACT,
+    memberCredentialHex: SAMPLE_HEX_32,
+    now: FIXED_NOW,
+  });
+
+  // Valid constructed package passes
+  const validResult = await validateCertificationRequestPackage(certReq);
+  assert.equal(validResult.provenance, 'live-host-scan');
+
+  // Altering provenance to controlled-test-vector post-construction fails validation
+  const tampered = { ...certReq, provenance: 'controlled-test-vector' as any };
+  await assert.rejects(
+    () => validateCertificationRequestPackage(tampered),
+    /Invalid provenance: commonveil\.certification-request\/v1 accepts genuine live-host-scan provenance only/,
+  );
+});
+
+// 39. buildCertificationRequestPackage strictly rejects reports with non-live provenance
+test('39. buildCertificationRequestPackage strictly rejects reports with non-live provenance', () => {
+  assert.throws(
+    () =>
+      buildCertificationRequestPackage({
+        inventoryReport: {
+          schema: 'commonveil.inventory/v1',
+          provenance: 'controlled-test-vector' as any,
+          status: 'detected',
+          product: 'pkg:generic/xz-utils',
+          rawVersion: '5.6.1',
+          version: { major: 5, minor: 6, patch: 1 },
+          normalizedVersion: '5.6.1',
+          measurementDigest: '00'.repeat(32),
+          observedAt: FIXED_NOW.toISOString(),
+        },
+        contractAddress: SAMPLE_CONTRACT,
+        memberCredentialHex: SAMPLE_HEX_32,
+        now: FIXED_NOW,
+      }),
+    /commonveil\.certification-request\/v1 accepts genuine live-host-scan provenance only/,
   );
 });
