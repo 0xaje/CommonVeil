@@ -107,6 +107,8 @@ import {
   onCertificationWalletRequest,
   onCertificationSubmitting,
   onCertificationFinalizedIndexing,
+  onSnapshotExported,
+  onSnapshotRecoveryTested,
   onCertificationCompleted,
   onCertificationFailed,
   onCertificationReset,
@@ -129,6 +131,7 @@ import {
   validateCertificationRequestPackage,
   computeMeasurementDigest,
   CERTIFICATION_REQUEST_SCHEMA,
+  validateCertifiedSnapshotPackage,
 } from '../src/role-packages.ts';
 import {
   verifyRegistrarSecret,
@@ -3247,3 +3250,105 @@ test('108. Pure circuit commitment derivation matches expected parameters', () =
   assert.deepEqual(commitment, commitment2);
 });
 
+// 109. Downloaded certified snapshot recovery lifecycle transitions
+test('109. Downloaded certified snapshot recovery lifecycle transitions', () => {
+  let state = INITIAL_CERTIFIER_CERTIFICATION_UI_STATE;
+  assert.equal(state.snapshotRecoveryStatus, 'none');
+
+  // Transition when snapshot is exported and downloaded
+  state = onSnapshotExported(state);
+  assert.equal(state.snapshotRecoveryStatus, 'created-untested');
+
+  // Transition when downloaded snapshot envelope is successfully recovery-tested
+  state = onSnapshotRecoveryTested(state);
+  assert.equal(state.snapshotRecoveryStatus, 'recovery-tested');
+
+  // Reset restores recovery status to 'none'
+  const resetState = onCertificationReset();
+  assert.equal(resetState.snapshotRecoveryStatus, 'none');
+});
+
+// 110. Full downloaded-file recovery testing of encrypted snapshot envelope
+test('110. Full downloaded-file recovery testing of encrypted snapshot envelope with tamper and mismatch rejection', async () => {
+  const passphrase = 'correct horse battery staple 999!';
+  const genuineTxId = '00162a6cea69226e4731b519f76ca71e14e011eca434cfe2a08b88dda51f02f66b';
+  const genuineCommitment = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+
+  const memberCredHex = 'b2'.repeat(32);
+
+  const snapshotPkg = {
+    schema: 'commonveil.certified-snapshot/v1',
+    network: 'preprod' as const,
+    contractAddress: SAMPLE_HEX_64,
+    memberCredential: memberCredHex,
+    product: 'commonveil-node',
+    version: { major: 1, minor: 0, patch: 0 },
+    snapshotSalt: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+    commitment: genuineCommitment,
+    txId: genuineTxId,
+    createdAt: new Date().toISOString(),
+  };
+
+  // 1. Export encrypted envelope simulating file download
+  const envelope = await encryptToEnvelope(snapshotPkg, passphrase);
+  const downloadedJson = JSON.stringify(envelope);
+
+  // 2. Read downloaded file JSON and decrypt
+  const parsedEnvelope = JSON.parse(downloadedJson) as EncryptedEnvelope;
+  const restored = await decryptAndValidateEnvelope(
+    parsedEnvelope,
+    passphrase,
+    validateCertifiedSnapshotPackage,
+  );
+  assert.equal(restored.contractAddress, SAMPLE_HEX_64);
+  assert.equal(restored.memberCredential, memberCredHex);
+  assert.equal(restored.commitment, genuineCommitment);
+  assert.equal(restored.txId, genuineTxId);
+
+  // 3. Reject wrong passphrase
+  await assert.rejects(
+    async () => {
+      await decryptAndValidateEnvelope(
+        parsedEnvelope,
+        'wrong passphrase length 12!!',
+        validateCertifiedSnapshotPackage,
+      );
+    },
+    /Failed to decrypt envelope|decryption failed|authentication tag mismatch|integrity/i,
+  );
+
+  // 4. Reject tampered envelope ciphertext
+  const tamperedEnvelope: EncryptedEnvelope = {
+    ...parsedEnvelope,
+    ciphertext: 'ff' + parsedEnvelope.ciphertext.slice(2),
+  };
+  await assert.rejects(
+    async () => {
+      await decryptAndValidateEnvelope(
+        tamperedEnvelope,
+        passphrase,
+        validateCertifiedSnapshotPackage,
+      );
+    },
+    /Failed to decrypt envelope|decryption failed|authentication tag mismatch|integrity/i,
+  );
+
+  // 5. Reject parameter mismatch against active session
+  const wrongContractSnapshot = { ...snapshotPkg, contractAddress: '01'.repeat(32) };
+  const wrongContractEnv = await encryptToEnvelope(wrongContractSnapshot, passphrase);
+  const wrongRestored = await decryptAndValidateEnvelope(
+    wrongContractEnv,
+    passphrase,
+    validateCertifiedSnapshotPackage,
+  );
+  assert.notEqual(wrongRestored.contractAddress, SAMPLE_HEX_64);
+
+  const wrongCommitmentSnapshot = { ...snapshotPkg, commitment: '02'.repeat(32) };
+  const wrongCommitmentEnv = await encryptToEnvelope(wrongCommitmentSnapshot, passphrase);
+  const wrongCommitmentRestored = await decryptAndValidateEnvelope(
+    wrongCommitmentEnv,
+    passphrase,
+    validateCertifiedSnapshotPackage,
+  );
+  assert.notEqual(wrongCommitmentRestored.commitment, genuineCommitment);
+});

@@ -139,6 +139,8 @@ import {
   onCertificationWalletRequest,
   onCertificationSubmitting,
   onCertificationFinalizedIndexing,
+  onSnapshotExported,
+  onSnapshotRecoveryTested,
   onCertificationCompleted,
   onCertificationFailed,
   onCertificationReset,
@@ -260,6 +262,14 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
   const certificationCommitmentRef = useRef<string | null>(null);
   // certificationRequestInputRef for file input DOM reset
   const certificationRequestInputRef = useRef<HTMLInputElement | null>(null);
+  // Snapshot envelope recovery test states (testing the actual downloaded file)
+  const [certSnapshotTestFileContent, setCertSnapshotTestFileContent] = useState<string | null>(null);
+  const [certSnapshotTestPassphrase, setCertSnapshotTestPassphrase] = useState('');
+  const [certSnapshotShowTestPassphrase, setCertSnapshotShowTestPassphrase] = useState(false);
+  const certSnapshotTestInputRef = useRef<HTMLInputElement | null>(null);
+  const activeSnapshotRecoveryTokenRef = useRef<number | null>(null);
+  const snapshotRecoveryGenerationRef = useRef(0);
+
   const resetCertificationState = () => {
     setCertificationUi((prev) => onCertificationReset(prev));
     setCertificationNotice(null);
@@ -267,11 +277,18 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
     setCertSnapshotConfirmPassphrase('');
     setCertSnapshotShowPassphrase(false);
     setAckWhitespaceCertSnapshot(false);
+    setCertSnapshotTestFileContent(null);
+    setCertSnapshotTestPassphrase('');
+    setCertSnapshotShowTestPassphrase(false);
+    activeSnapshotRecoveryTokenRef.current = null;
     zeroizeBytes(snapshotSaltRef.current);
     snapshotSaltRef.current = null;
     certificationCommitmentRef.current = null;
     if (certificationRequestInputRef.current) {
       certificationRequestInputRef.current.value = '';
+    }
+    if (certSnapshotTestInputRef.current) {
+      certSnapshotTestInputRef.current.value = '';
     }
   };
 
@@ -2759,9 +2776,103 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
       setCertSnapshotPassphrase('');
       setCertSnapshotConfirmPassphrase('');
       setAckWhitespaceCertSnapshot(false);
-      setCertificationNotice('Certified snapshot envelope downloaded. Share it privately with the Member.');
+      setCertificationUi((prev) => onSnapshotExported(prev));
+      setCertificationNotice(
+        'Certified snapshot envelope downloaded. Test the downloaded envelope below to complete recovery verification.',
+      );
     } catch {
       setCertificationNotice('Certified snapshot export failed. Check passphrase and try again.');
+    }
+  };
+
+  // ── CV-009: Downloaded-file recovery testing for certified snapshot ────────
+  const handleCertSnapshotTestFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setCertificationNotice(null);
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const content = event.target?.result;
+      if (typeof content === 'string') {
+        setCertSnapshotTestFileContent(content);
+        setCertificationNotice('Downloaded snapshot envelope loaded. Enter passphrase to test recovery.');
+      }
+    };
+    reader.onerror = () => {
+      setCertificationNotice('Could not read the selected snapshot file.');
+    };
+    reader.readAsText(file);
+  };
+
+  const handleTestDownloadedCertSnapshot = async () => {
+    setCertificationNotice(null);
+    if (!certSnapshotTestFileContent) {
+      setCertificationNotice('The selected file is not a valid CommonVeil encrypted snapshot envelope.');
+      return;
+    }
+    if (!certificationUi.importedRequest || !certificationCommitmentRef.current || !certificationUi.certificationTxId) {
+      setCertificationNotice('No active certification in memory to verify recovery against.');
+      return;
+    }
+    if (certSnapshotTestPassphrase.length < 12) {
+      setCertificationNotice('Snapshot recovery passphrase must be at least 12 characters.');
+      return;
+    }
+
+    const pkg = certificationUi.importedRequest;
+    const expectedCommitment = certificationCommitmentRef.current;
+    const expectedTxId = certificationUi.certificationTxId;
+    const operationToken = ++snapshotRecoveryGenerationRef.current;
+    activeSnapshotRecoveryTokenRef.current = operationToken;
+
+    try {
+      let parsedEnvelope: unknown;
+      try {
+        parsedEnvelope = JSON.parse(certSnapshotTestFileContent);
+      } catch {
+        throw new Error('The selected file is not a valid CommonVeil encrypted snapshot envelope.');
+      }
+
+      const restored = await decryptAndValidateEnvelope(
+        parsedEnvelope as EncryptedEnvelope,
+        certSnapshotTestPassphrase,
+        validateCertifiedSnapshotPackage,
+      );
+
+      if (!isMounted.current || activeSnapshotRecoveryTokenRef.current !== operationToken) {
+        return;
+      }
+      activeSnapshotRecoveryTokenRef.current = null;
+
+      // Strict match against active finalized certification parameters
+      if (restored.contractAddress.toLowerCase().trim() !== pkg.contractAddress.toLowerCase().trim()) {
+        throw new Error('Recovery test failed: snapshot contract address does not match active certified contract.');
+      }
+      if (restored.memberCredential.toLowerCase().trim() !== pkg.memberCredential.toLowerCase().trim()) {
+        throw new Error('Recovery test failed: snapshot member credential does not match active certified member.');
+      }
+      if (restored.commitment.toLowerCase().trim() !== expectedCommitment.toLowerCase().trim()) {
+        throw new Error('Recovery test failed: snapshot commitment does not match on-chain certified commitment.');
+      }
+      if (restored.txId.toLowerCase().trim() !== expectedTxId.toLowerCase().trim()) {
+        throw new Error('Recovery test failed: snapshot transaction ID does not match finalized certification txId.');
+      }
+
+      setCertificationUi((prev) => onSnapshotRecoveryTested(prev));
+      setCertSnapshotTestPassphrase('');
+      setCertSnapshotTestFileContent(null);
+      if (certSnapshotTestInputRef.current) {
+        certSnapshotTestInputRef.current.value = '';
+      }
+      setCertificationNotice('Downloaded certified snapshot successfully tested and verified! Recovery Tested ✔');
+    } catch (err: unknown) {
+      if (!isMounted.current || activeSnapshotRecoveryTokenRef.current !== operationToken) {
+        return;
+      }
+      activeSnapshotRecoveryTokenRef.current = null;
+      const msg = err instanceof Error ? err.message : String(err);
+      setCertificationNotice(`Snapshot recovery test failed: ${msg.slice(0, 150)}`);
     }
   };
 
@@ -3641,14 +3752,79 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
                       >
                         Export Encrypted Snapshot (.enc.json)
                       </button>
-                      <button
-                        type="button"
-                        className="action-button secondary"
-                        onClick={resetCertificationState}
-                        aria-label="Certify another inventory report"
-                      >
-                        Certify Another Request
-                      </button>
+                    </div>
+
+                    {/* Downloaded Snapshot Envelope Recovery Testing */}
+                    <div className="test-backup-box" style={{ marginTop: '20px', borderTop: '1px dashed var(--border-color, #444)', paddingTop: '16px' }}>
+                      <h4>Test Downloaded Snapshot Envelope</h4>
+                      <p className="card-caption">
+                        Verify your downloaded envelope file before delivering to Member. Select the downloaded file and enter the passphrase to confirm decryption and parameters match.
+                      </p>
+
+                      <div className="status-row" style={{ marginBottom: '10px' }}>
+                        <span className="field-caption">Snapshot Recovery Status: </span>
+                        <strong className={`recovery-badge ${certificationUi.snapshotRecoveryStatus}`}>
+                          {certificationUi.snapshotRecoveryStatus === 'recovery-tested'
+                            ? 'Recovery Tested ✔'
+                            : certificationUi.snapshotRecoveryStatus === 'created-untested'
+                              ? 'Created (Untested)'
+                              : 'Not Created'}
+                        </strong>
+                      </div>
+
+                      <label htmlFor="cert-snapshot-test-file-input">Select Downloaded Snapshot File (.enc.json)</label>
+                      <input
+                        ref={certSnapshotTestInputRef}
+                        id="cert-snapshot-test-file-input"
+                        type="file"
+                        accept=".json,.enc.json,application/json"
+                        onChange={handleCertSnapshotTestFileSelect}
+                      />
+
+                      {certSnapshotTestFileContent && (
+                        <div style={{ marginTop: '12px' }}>
+                          <div className="input-field-group">
+                            <label htmlFor="cert-snapshot-test-passphrase-input">Snapshot Passphrase</label>
+                            <input
+                              id="cert-snapshot-test-passphrase-input"
+                              type={certSnapshotShowTestPassphrase ? 'text' : 'password'}
+                              value={certSnapshotTestPassphrase}
+                              placeholder="Enter passphrase to verify recovery..."
+                              onChange={(e) => setCertSnapshotTestPassphrase(e.target.value)}
+                            />
+                          </div>
+                          <div className="checkbox-row" style={{ marginBottom: '10px' }}>
+                            <label>
+                              <input
+                                type="checkbox"
+                                checked={certSnapshotShowTestPassphrase}
+                                onChange={(e) => setCertSnapshotShowTestPassphrase(e.target.checked)}
+                              />
+                              Show passphrase
+                            </label>
+                          </div>
+                          <button
+                            type="button"
+                            className="action-button primary"
+                            disabled={certSnapshotTestPassphrase.length < 12}
+                            onClick={handleTestDownloadedCertSnapshot}
+                            aria-label="Verify and test downloaded snapshot envelope"
+                          >
+                            Verify and Test Snapshot Envelope
+                          </button>
+                        </div>
+                      )}
+
+                      <div className="button-row" style={{ marginTop: '16px' }}>
+                        <button
+                          type="button"
+                          className="action-button secondary"
+                          onClick={resetCertificationState}
+                          aria-label="Certify another inventory report"
+                        >
+                          Certify Another Request
+                        </button>
+                      </div>
                     </div>
                   </div>
                 </div>

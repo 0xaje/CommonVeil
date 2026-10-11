@@ -2176,6 +2176,11 @@ export interface CertifierCertificationUiState {
   readonly certificationTxId: string | null;
   /** Public certification receipt generated after tx confirmation */
   readonly receipt: InventoryCertificationReceipt | null;
+  /**
+   * Recovery test status for the exported encrypted snapshot envelope.
+   * Required before certification handoff is marked complete.
+   */
+  readonly snapshotRecoveryStatus: 'none' | 'created-untested' | 'recovery-tested';
   readonly errorMessage: string | null;
 }
 
@@ -2184,6 +2189,7 @@ export const INITIAL_CERTIFIER_CERTIFICATION_UI_STATE: CertifierCertificationUiS
   importedRequest: null,
   certificationTxId: null,
   receipt: null,
+  snapshotRecoveryStatus: 'none',
   errorMessage: null,
 };
 
@@ -2287,7 +2293,15 @@ export function onCertificationRequestImported(
       stage: 'failed',
     };
   }
-  return { stage: 'reviewing', importedRequest: pkg, certificationTxId: null, receipt: null, errorMessage: null };
+  return {
+    ...prevState,
+    stage: 'reviewing',
+    importedRequest: pkg,
+    certificationTxId: null,
+    receipt: null,
+    snapshotRecoveryStatus: 'none',
+    errorMessage: null,
+  };
 }
 
 export function onCertificationConfirmationOpen(
@@ -2328,6 +2342,32 @@ export function onCertificationFinalizedIndexing(
   return { ...prevState, stage: 'finalized-indexing', certificationTxId: resolvedTxId, errorMessage: null };
 }
 
+/**
+ * Reducer when certified snapshot envelope has been exported and downloaded.
+ */
+export function onSnapshotExported(
+  prevState: CertifierCertificationUiState,
+): CertifierCertificationUiState {
+  return {
+    ...prevState,
+    snapshotRecoveryStatus: 'created-untested',
+    errorMessage: null,
+  };
+}
+
+/**
+ * Reducer when downloaded certified snapshot envelope has successfully passed recovery testing.
+ */
+export function onSnapshotRecoveryTested(
+  prevState: CertifierCertificationUiState,
+): CertifierCertificationUiState {
+  return {
+    ...prevState,
+    snapshotRecoveryStatus: 'recovery-tested',
+    errorMessage: null,
+  };
+}
+
 export function onCertificationCompleted(
   prevState: CertifierCertificationUiState,
   receipt: InventoryCertificationReceipt,
@@ -2337,6 +2377,7 @@ export function onCertificationCompleted(
     importedRequest: prevState.importedRequest,
     certificationTxId: receipt.certificationTxId ?? prevState.certificationTxId,
     receipt,
+    snapshotRecoveryStatus: 'none',
     errorMessage: null,
   };
 }
