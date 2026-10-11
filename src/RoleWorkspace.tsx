@@ -5,6 +5,7 @@ import {
   queryCommonVeilContract,
   attachCommonVeilContract,
   verifyRegistrarSecret,
+  verifyCertifierSecret,
   ContractSessionError,
   type CommonVeilPublicState,
 } from './contract-session';
@@ -24,6 +25,13 @@ import {
   buildCertificationRequestPackage,
   type CertificationRequestPackage,
   validateCertificationRequestPackage,
+  buildCertifiedSnapshotPackage,
+  validateCertifiedSnapshotPackage,
+  validateInventoryCertificationReceipt,
+  type InventoryCertificationReceipt,
+  buildInventoryCertificationReceipt,
+  INVENTORY_CERTIFICATION_RECEIPT_SCHEMA,
+  productDigest,
 } from './role-packages';
 import { deployContract, submitCallTx } from '@midnight-ntwrk/midnight-js-contracts';
 import { CompiledCommonVeilContract, CommonVeil } from './contract';
@@ -121,6 +129,22 @@ import {
   onMemberInventoryReset,
   onMemberInventoryError,
   mapInventoryReportError,
+  type CertifierCertificationUiState,
+  INITIAL_CERTIFIER_CERTIFICATION_UI_STATE,
+  checkCertifierCertificationPrerequisites,
+  canInitiateCertification,
+  onCertificationRequestImported,
+  onCertificationConfirmationOpen,
+  onCertificationConfirmationDismissed,
+  onCertificationWalletRequest,
+  onCertificationSubmitting,
+  onCertificationFinalizedIndexing,
+  onCertificationCompleted,
+  onCertificationFailed,
+  onCertificationReset,
+  mapCertificationError,
+  mapCertificationInspectionError,
+  CERTIFICATION_VERIFICATION_ERROR_MESSAGES,
 } from './role-workspace-state';
 import './role-workspace.css';
 
@@ -220,6 +244,37 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
   );
   const [admissionNotice, setAdmissionNotice] = useState<string | null>(null);
 
+  // Certifier Certification Workflow state (CV-009)
+  const [certificationUi, setCertificationUi] = useState<CertifierCertificationUiState>(
+    INITIAL_CERTIFIER_CERTIFICATION_UI_STATE,
+  );
+  const [certificationNotice, setCertificationNotice] = useState<string | null>(null);
+  // Snapshot envelope passphrase inputs (never stored in long-lived React state)
+  const [certSnapshotPassphrase, setCertSnapshotPassphrase] = useState('');
+  const [certSnapshotConfirmPassphrase, setCertSnapshotConfirmPassphrase] = useState('');
+  const [certSnapshotShowPassphrase, setCertSnapshotShowPassphrase] = useState(false);
+  const [ackWhitespaceCertSnapshot, setAckWhitespaceCertSnapshot] = useState(false);
+  // Snapshot salt held in volatile ref only — zeroized on unmount, role switch, or certifier change
+  const snapshotSaltRef = useRef<Uint8Array | null>(null);
+  // Commitment hex captured from proof (needed for receipt and envelope)
+  const certificationCommitmentRef = useRef<string | null>(null);
+  // certificationRequestInputRef for file input DOM reset
+  const certificationRequestInputRef = useRef<HTMLInputElement | null>(null);
+  const resetCertificationState = () => {
+    setCertificationUi((prev) => onCertificationReset(prev));
+    setCertificationNotice(null);
+    setCertSnapshotPassphrase('');
+    setCertSnapshotConfirmPassphrase('');
+    setCertSnapshotShowPassphrase(false);
+    setAckWhitespaceCertSnapshot(false);
+    zeroizeBytes(snapshotSaltRef.current);
+    snapshotSaltRef.current = null;
+    certificationCommitmentRef.current = null;
+    if (certificationRequestInputRef.current) {
+      certificationRequestInputRef.current.value = '';
+    }
+  };
+
   // Plaintext secrets in volatile component memory only (Uint8Array, never React string state)
   const plaintextSecretRef = useRef<Uint8Array | null>(null);
   const plaintextCertifierSecretRef = useRef<Uint8Array | null>(null);
@@ -240,6 +295,9 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
   const admissionGenerationRef = useRef(0);
   const activeAdmissionTokenRef = useRef<number | null>(null);
 
+  const certificationGenerationRef = useRef(0);
+  const activeCertificationTokenRef = useRef<number | null>(null);
+
   // Zeroize bytes and clear references on unmount or role change
   useEffect(() => {
     isMounted.current = true;
@@ -255,6 +313,8 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
       activeDeployTokenRef.current = null;
       admissionGenerationRef.current++;
       activeAdmissionTokenRef.current = null;
+      certificationGenerationRef.current++;
+      activeCertificationTokenRef.current = null;
       zeroizeBytes(plaintextSecretRef.current);
       plaintextSecretRef.current = null;
       zeroizeBytes(plaintextCertifierSecretRef.current);
@@ -263,6 +323,8 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
       plaintextMemberSecretRef.current = null;
       zeroizeBytes(plaintextMemberSaltRef.current);
       plaintextMemberSaltRef.current = null;
+      zeroizeBytes(snapshotSaltRef.current);
+      snapshotSaltRef.current = null;
       resetMemberInventory();
     };
   }, []);
@@ -325,6 +387,8 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
   const clearCertifierSecret = (isLocked: boolean = false) => {
     certifierCopyGenerationRef.current++;
     activeCertifierCopyTokenRef.current = null;
+    certificationGenerationRef.current++;
+    activeCertificationTokenRef.current = null;
     zeroizeBytes(plaintextCertifierSecretRef.current);
     plaintextCertifierSecretRef.current = null;
     setCertifierUi((prev) => onSecretClearedOrLocked(prev, isLocked));
@@ -337,7 +401,10 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
     setCertifierImportPassphrase('');
     setCertifierBackupFileContent(null);
     setCertifierError(null);
+    // Certifier identity changed: invalidate any in-progress certification operation
+    resetCertificationState();
   };
+
 
   // Helper to securely clear member secret and salt in memory
   const clearMemberSecret = (isLocked: boolean = false) => {
@@ -396,6 +463,7 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
     setContractState(INITIAL_WORKSPACE_CONTRACT_STATE);
     setDeploymentUi((prev) => onDeploymentReset(prev));
     setAdmissionUi((prev) => onAdmissionReset(prev));
+    resetCertificationState();
   };
 
   const handleAddressChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -409,6 +477,8 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
     activeDeployTokenRef.current = null;
     admissionGenerationRef.current++;
     activeAdmissionTokenRef.current = null;
+    certificationGenerationRef.current++;
+    activeCertificationTokenRef.current = null;
     clearMemberSecret(false);
     const next = handleAddressInputChange(contractState, e.target.value);
     setContractState(next);
@@ -427,6 +497,7 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
     }));
     setDeploymentUi((prev) => onDeploymentReset(prev));
     setAdmissionUi((prev) => onAdmissionReset(prev));
+    resetCertificationState();
   };
 
   const handleInspect = async () => {
@@ -2307,6 +2378,406 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
     importedInventory: memberInventoryUi.importedReport,
   });
 
+  // ── CV-009 Certifier Certification prerequisites ──────────────────────────
+  const isCertifying =
+    certificationUi.stage === 'requesting-wallet' ||
+    certificationUi.stage === 'submitting' ||
+    certificationUi.stage === 'finalized-indexing';
+
+  const certifierCertificationPrereqs = checkCertifierCertificationPrerequisites({
+    isConnected: !!wallet,
+    attachedContractAddress: contractState.attachedAddress,
+    hasCertifierSecret: certifierUi.hasSecret,
+    certifierBackupRecoveryStatus: certifierUi.backupRecoveryStatus,
+    certifierVerificationStatus: certifierUi.verificationStatus,
+    importedRequest: certificationUi.importedRequest,
+    isMemberAdmitted: null, // unknown until we query — guard checked at invocation time
+    isProofProviderConfigured: !!wallet?.providers,
+    isOperationPending: isCertifying,
+    policyActive: publicState?.policyActive ?? false,
+  });
+
+  const canCertify = certifierCertificationPrereqs.length === 0;
+
+  // ── CV-009: Import certification request file ─────────────────────────────
+  const handleCertificationRequestFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    try {
+      const text = await file.text();
+      const raw = JSON.parse(text);
+      const pkg = await validateCertificationRequestPackage(raw);
+      setCertificationUi((prev) =>
+        onCertificationRequestImported(
+          prev,
+          pkg,
+          contractState.attachedAddress,
+          certifierUi.verificationStatus,
+        ),
+      );
+      setCertificationNotice(null);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setCertificationUi((prev) =>
+        onCertificationFailed(prev, `Invalid certification request: ${msg.slice(0, 120)}`),
+      );
+    }
+  };
+
+  // ── CV-009: Initiate certifyInventory circuit ─────────────────────────────
+  const handleInitiateCertification = async () => {
+    setCertificationNotice(null);
+
+    if (
+      !wallet ||
+      !contractState.attachedAddress ||
+      !plaintextCertifierSecretRef.current ||
+      !certificationUi.importedRequest ||
+      certificationUi.stage !== 'confirming'
+    ) {
+      return;
+    }
+
+    const attachedAddress = contractState.attachedAddress;
+    const pkg = certificationUi.importedRequest;
+    const certifierSecretBytes = plaintextCertifierSecretRef.current;
+    const credentialHex = pkg.memberCredential;
+
+    // Pre-flight: verify member credential is actually admitted on-chain
+    let isMemberAdmitted: boolean | null = null;
+    try {
+      const preflightSession = await queryCommonVeilContract(wallet.providers, attachedAddress);
+      const credentialBytes = hexToBytes(credentialHex);
+      isMemberAdmitted = preflightSession.hasMemberCredential(credentialBytes);
+    } catch {
+      // Indexer lag: proceed cautiously; the circuit will reject if truly not admitted
+      isMemberAdmitted = null;
+    }
+
+    if (isMemberAdmitted === false) {
+      setCertificationUi((prev) =>
+        onCertificationFailed(
+          prev,
+          CERTIFICATION_VERIFICATION_ERROR_MESSAGES.MEMBER_NOT_ADMITTED,
+        ),
+      );
+      return;
+    }
+
+    // Generate ephemeral snapshot salt — volatile memory only, zeroized on cleanup
+    const snapshotSalt = crypto.getRandomValues(new Uint8Array(32));
+    zeroizeBytes(snapshotSaltRef.current);
+    snapshotSaltRef.current = snapshotSalt;
+
+    const operationToken = ++certificationGenerationRef.current;
+    activeCertificationTokenRef.current = operationToken;
+
+    const logCertDiagnostic = (stage: string, detail?: { errorClass?: string; errorMessage?: string }) => {
+      if (typeof window !== 'undefined' && (window as unknown as { __COMMONVEIL_DEV__?: boolean }).__COMMONVEIL_DEV__) {
+        console.debug(`[certify:${stage}]`, detail ?? '');
+      }
+    };
+
+    logCertDiagnostic('prereqs-validated');
+    setCertificationUi((prev) => onCertificationWalletRequest(prev));
+
+    try {
+      setCertificationUi((prev) => onCertificationSubmitting(prev));
+
+      const credentialBytes = hexToBytes(credentialHex);
+
+      // productDigest: SHA-256("commonveil:product:v1:" + label) → 32 bytes ProductId
+      const productIdBytes = await productDigest(pkg.product);
+
+      logCertDiagnostic('circuit-invoke-start');
+
+      // Call genuine certifyInventory circuit via installed Midnight SDK.
+      // CommonVeil has vacant witness private state (Contract<undefined>).
+      // We omit privateStateId to invoke getContractPublicStates and avoid
+      // querying uninitialized private state store before proving.
+      const finalized = await submitCallTx(
+        wallet.providers,
+        {
+          compiledContract: CompiledCommonVeilContract,
+          contractAddress: attachedAddress,
+          circuitId: 'certifyInventory',
+          // certifyInventory(certifierSecret, credential, productId, major, minor, patch, snapshotSalt)
+          args: [
+            certifierSecretBytes,
+            credentialBytes,
+            productIdBytes,
+            BigInt(pkg.version.major),
+            BigInt(pkg.version.minor),
+            BigInt(pkg.version.patch),
+            snapshotSalt,
+          ],
+        },
+      );
+
+      logCertDiagnostic('circuit-finalized');
+
+      if (!isMounted.current || activeCertificationTokenRef.current !== operationToken) {
+        return;
+      }
+
+      const txId: string | null =
+        finalized && finalized.public && typeof finalized.public.txId === 'string'
+          ? finalized.public.txId
+          : null;
+
+      // Derive commitment exactly using CommonVeil pureCircuits.deriveInventoryCommitment
+      const derivedCommitmentBytes = CommonVeil.pureCircuits.deriveInventoryCommitment(
+        credentialBytes,
+        productIdBytes,
+        BigInt(pkg.version.major),
+        BigInt(pkg.version.minor),
+        BigInt(pkg.version.patch),
+        snapshotSalt,
+      );
+      const commitmentHex: string = bytesToHex(derivedCommitmentBytes);
+
+      // Store commitment in volatile ref for use by envelope export
+      certificationCommitmentRef.current = commitmentHex;
+
+      // Automatically inspect public ledger to verify inventoryCommitments contains commitment
+      try {
+        logCertDiagnostic('inspect-ledger-start');
+        const session = await queryCommonVeilContract(wallet.providers, attachedAddress);
+        if (!isMounted.current || activeCertificationTokenRef.current !== operationToken) {
+          return;
+        }
+
+        const commitmentBytes = hexToBytes(commitmentHex);
+        const isCommitted = session.hasInventoryCommitment(commitmentBytes);
+
+        if (!isCommitted) {
+          logCertDiagnostic('ledger-indexing-lag');
+          setCertificationUi((prev) => onCertificationFinalizedIndexing(prev, txId));
+          return;
+        }
+
+        // Build certifier key hex from the on-chain certifier key (32 bytes)
+        const certifierKeyHex = bytesToHex(
+          CommonVeil.pureCircuits.deriveCertifierKey(certifierSecretBytes),
+        );
+
+        const receipt = buildInventoryCertificationReceipt({
+          contractAddress: attachedAddress,
+          certifierKey: certifierKeyHex,
+          memberCredential: credentialHex,
+          commitment: commitmentHex,
+          certificationTxId: txId,
+        });
+
+        activeCertificationTokenRef.current = null;
+        logCertDiagnostic('certification-confirmed');
+        setCertificationUi((prev) => onCertificationCompleted(prev, receipt));
+        setCertificationNotice(
+          `Inventory commitment ${commitmentHex.slice(0, 10)}… certified on Midnight Preprod.`,
+        );
+
+        setContractState((prev) => ({
+          ...prev,
+          inspectedState: session.publicState,
+        }));
+      } catch (inspectError: unknown) {
+        if (!isMounted.current || activeCertificationTokenRef.current !== operationToken) {
+          return;
+        }
+
+        const errorCode =
+          inspectError instanceof ContractSessionError
+            ? inspectError.code
+            : (inspectError as { code?: string } | null)?.code;
+
+        logCertDiagnostic('inspect-ledger-error', {
+          errorClass: inspectError instanceof Error ? inspectError.name : typeof inspectError,
+          errorMessage: inspectError instanceof Error ? inspectError.message : String(inspectError),
+        });
+
+        if (errorCode === 'CONTRACT_NOT_FOUND' || errorCode === 'INDEXER_QUERY_FAILED') {
+          setCertificationUi((prev) => onCertificationFinalizedIndexing(prev, txId));
+        } else {
+          activeCertificationTokenRef.current = null;
+          setCertificationUi((prev) =>
+            onCertificationFailed(prev, mapCertificationInspectionError(inspectError)),
+          );
+        }
+      }
+    } catch (certError: unknown) {
+      if (!isMounted.current || activeCertificationTokenRef.current !== operationToken) {
+        return;
+      }
+      activeCertificationTokenRef.current = null;
+
+      logCertDiagnostic('circuit-invoke-error', {
+        errorClass: certError instanceof Error ? certError.name : typeof certError,
+        errorMessage: certError instanceof Error ? certError.message : String(certError),
+      });
+
+      const raw = (certError instanceof Error
+        ? certError.message
+        : typeof certError === 'string'
+          ? certError
+          : ''
+      ).toLowerCase();
+
+      if (
+        raw.includes('cancel') ||
+        raw.includes('reject') ||
+        raw.includes('denied') ||
+        raw.includes('declined') ||
+        raw.includes('user aborted')
+      ) {
+        setCertificationUi((prev) =>
+          onCertificationFailed(prev, 'Inventory certification transaction was cancelled in 1AM.', true),
+        );
+      } else {
+        setCertificationUi((prev) => onCertificationFailed(prev, mapCertificationError(certError)));
+      }
+    }
+  };
+
+  // ── CV-009: Retry commitment verification after indexer lag ───────────────
+  const handleRetryCommitmentVerification = async () => {
+    if (
+      certificationUi.stage !== 'finalized-indexing' ||
+      !wallet ||
+      !contractState.attachedAddress ||
+      !certificationCommitmentRef.current ||
+      !certificationUi.importedRequest ||
+      !plaintextCertifierSecretRef.current
+    ) {
+      return;
+    }
+
+    const attachedAddress = contractState.attachedAddress;
+    const commitmentHex = certificationCommitmentRef.current;
+    const pkg = certificationUi.importedRequest;
+    const certifierKeyHex = bytesToHex(
+      CommonVeil.pureCircuits.deriveCertifierKey(plaintextCertifierSecretRef.current),
+    );
+
+    try {
+      const session = await queryCommonVeilContract(wallet.providers, attachedAddress);
+      if (!isMounted.current) return;
+
+      const commitmentBytes = hexToBytes(commitmentHex);
+      const isCommitted = session.hasInventoryCommitment(commitmentBytes);
+
+      if (!isCommitted) {
+        // Still not indexed — stay in finalized-indexing
+        setCertificationNotice('Indexer has not yet reflected the certified commitment. Check again shortly.');
+        return;
+      }
+
+      const receipt = buildInventoryCertificationReceipt({
+        contractAddress: attachedAddress,
+        certifierKey: certifierKeyHex,
+        memberCredential: pkg.memberCredential,
+        commitment: commitmentHex,
+        certificationTxId: certificationUi.certificationTxId,
+      });
+
+      setCertificationUi((prev) => onCertificationCompleted(prev, receipt));
+      setCertificationNotice(
+        `Inventory commitment ${commitmentHex.slice(0, 10)}… confirmed in on-chain inventoryCommitments set.`,
+      );
+      setContractState((prev) => ({
+        ...prev,
+        inspectedState: session.publicState,
+      }));
+    } catch (err: unknown) {
+      if (!isMounted.current) return;
+      const errorCode =
+        err instanceof ContractSessionError
+          ? err.code
+          : (err as { code?: string } | null)?.code;
+
+      if (errorCode !== 'CONTRACT_NOT_FOUND' && errorCode !== 'INDEXER_QUERY_FAILED') {
+        setCertificationUi((prev) =>
+          onCertificationFailed(prev, mapCertificationInspectionError(err)),
+        );
+      }
+      // else: still lagging, stay in finalized-indexing
+    }
+  };
+
+  // ── CV-009: Export encrypted certified snapshot envelope ──────────────────
+  const handleExportCertifiedSnapshot = async () => {
+    if (
+      !certificationUi.importedRequest ||
+      !snapshotSaltRef.current ||
+      !certificationCommitmentRef.current ||
+      !certificationUi.certificationTxId
+    ) {
+      return;
+    }
+
+    const val = validatePasswordConfirmation(certSnapshotPassphrase, certSnapshotConfirmPassphrase);
+    if (!val.valid) {
+      setCertificationNotice(val.error);
+      return;
+    }
+
+    if (hasPasswordWhitespaceWarning(certSnapshotPassphrase) && !ackWhitespaceCertSnapshot) {
+      setCertificationNotice('Please acknowledge the leading or trailing whitespace warning before exporting snapshot.');
+      return;
+    }
+
+    const pkg = certificationUi.importedRequest;
+    const snapshotSaltHex = bytesToHex(snapshotSaltRef.current);
+
+    try {
+      const snapshot = buildCertifiedSnapshotPackage({
+        contractAddress: pkg.contractAddress,
+        memberCredential: pkg.memberCredential,
+        product: pkg.product,
+        version: pkg.version,
+        snapshotSalt: snapshotSaltHex,
+        commitment: certificationCommitmentRef.current,
+        txId: certificationUi.certificationTxId,
+      });
+
+      const envelope = await encryptToEnvelope(snapshot, certSnapshotPassphrase);
+
+      // Pre-download validation: verify envelope decrypts with exact passphrase in memory
+      const restored = await decryptAndValidateEnvelope(
+        envelope,
+        certSnapshotPassphrase,
+        validateCertifiedSnapshotPackage,
+      );
+      if (restored.schema !== 'commonveil.certified-snapshot/v1') {
+        throw new Error('Encrypted envelope self-test failed');
+      }
+
+      triggerBlobDownload(
+        JSON.stringify(envelope, null, 2),
+        `commonveil-certified-snapshot-${pkg.memberCredential.slice(0, 10)}.enc.json`,
+      );
+      setCertSnapshotPassphrase('');
+      setCertSnapshotConfirmPassphrase('');
+      setAckWhitespaceCertSnapshot(false);
+      setCertificationNotice('Certified snapshot envelope downloaded. Share it privately with the Member.');
+    } catch {
+      setCertificationNotice('Certified snapshot export failed. Check passphrase and try again.');
+    }
+  };
+
+  // ── CV-009: Download public certification receipt ─────────────────────────
+  const handleDownloadCertificationReceipt = () => {
+    if (!certificationUi.receipt) return;
+    try {
+      triggerBlobDownload(
+        JSON.stringify(certificationUi.receipt, null, 2),
+        `commonveil-certification-receipt-${certificationUi.receipt.commitment.slice(0, 10)}.json`,
+      );
+    } catch {
+      setCertificationNotice('Could not create valid certification receipt.');
+    }
+  };
+
   return (
     <main className="role-workspace-main" aria-busy={walletConnecting || isBusy}>
       <nav className="role-workspace-nav">
@@ -2880,6 +3351,304 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
                           </button>
                         </div>
                       )}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </article>
+          )}
+
+          {/* Certifier Inventory Review & Certification Workflow Section (Step 04) */}
+          {role === 'certifier' && (
+            <article className="workspace-card certifier-certification-card">
+              <div className="card-header">
+                <span className="card-step">04</span>
+                <h2>Review Inventory & Certify via Midnight</h2>
+              </div>
+              <p className="card-caption">
+                Import and review restricted Member certification request packages, verify they target this exact contract, verify active admission, and invoke <code>certifyInventory</code> on-chain via 1AM.
+              </p>
+
+              {/* Status Header */}
+              <div className="registrar-status-row" aria-live="polite">
+                <div>
+                  <span className="field-caption">Attached Contract</span>
+                  <strong>
+                    {contractState.attachedAddress
+                      ? shortenAddress(contractState.attachedAddress)
+                      : 'None (Required)'}
+                  </strong>
+                </div>
+                <div>
+                  <span className="field-caption">Certification Stage</span>
+                  <strong className={`verification-badge ${certificationUi.stage === 'certified' ? 'verified' : 'unverified'}`}>
+                    {certificationUi.stage === 'certified'
+                      ? 'Certified'
+                      : certificationUi.stage === 'confirming'
+                        ? 'Reviewing request'
+                        : certificationUi.stage === 'requesting-wallet'
+                          ? '1AM Approval'
+                          : certificationUi.stage === 'submitting'
+                            ? 'Proving & Submitting'
+                            : certificationUi.stage === 'finalized-indexing'
+                              ? 'Finalized (Indexing)'
+                              : certificationUi.stage === 'failed'
+                                ? 'Failed'
+                                : 'Idle'}
+                  </strong>
+                </div>
+              </div>
+
+              {certificationNotice && (
+                <div className="safe-notice-banner" role="status">
+                  <p>{certificationNotice}</p>
+                </div>
+              )}
+
+              {certificationUi.errorMessage && (
+                <div className="safe-error-banner" role="alert">
+                  <strong>Certification Error</strong>
+                  <p>{certificationUi.errorMessage}</p>
+                </div>
+              )}
+
+              {/* Import Request Box */}
+              {(certificationUi.stage === 'idle' ||
+                certificationUi.stage === 'failed') && (
+                <div className="admission-import-box">
+                  <label htmlFor="certification-request-file-input">
+                    Import Certification Request Package (.json)
+                  </label>
+                  <p className="form-hint-text">
+                    Package must contain a valid <code>commonveil.certification-request/v1</code> schema with genuine <code>live-host-scan</code> provenance targeting the attached contract address.
+                  </p>
+                  <input
+                    ref={certificationRequestInputRef}
+                    id="certification-request-file-input"
+                    type="file"
+                    accept=".json,application/json"
+                    disabled={isCertifying}
+                    onChange={handleCertificationRequestFileSelect}
+                  />
+
+                  {(!wallet ||
+                    !contractState.attachedAddress ||
+                    !certifierUi.hasSecret ||
+                    certifierUi.verificationStatus !== 'verified') && (
+                    <p className="form-hint-text warning-text">
+                      Requires a connected 1AM wallet on Preprod, an attached contract, and an active verified Certifier secret before certifying inventory requests.
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {/* Review / Confirmation Box */}
+              {certificationUi.stage === 'confirming' && certificationUi.importedRequest && (
+                <div className="admission-confirmation-box" role="dialog" aria-labelledby="cert-confirm-heading">
+                  <h3 id="cert-confirm-heading">Confirm Inventory Certification</h3>
+                  <div className="admission-review-details">
+                    <p>
+                      <strong>Target Contract:</strong>{' '}
+                      <code>{shortenAddress(certificationUi.importedRequest.contractAddress)}</code>
+                    </p>
+                    <p>
+                      <strong>Member Credential:</strong>{' '}
+                      <code title={certificationUi.importedRequest.memberCredential}>
+                        {shortenAddress(certificationUi.importedRequest.memberCredential)}
+                      </code>
+                    </p>
+                    <p>
+                      <strong>Product & Version:</strong>{' '}
+                      <code>{certificationUi.importedRequest.product} @ {certificationUi.importedRequest.rawVersion}</code>
+                    </p>
+                    <p>
+                      <strong>Measurement Digest:</strong>{' '}
+                      <code title={certificationUi.importedRequest.measurementDigest}>
+                        {shortenAddress(certificationUi.importedRequest.measurementDigest)}
+                      </code>
+                    </p>
+                    <p>
+                      <strong>Observed At:</strong> {certificationUi.importedRequest.observedAt}
+                    </p>
+                    <p className="card-caption">
+                      This action will invoke the genuine <code>certifyInventory</code> circuit. DUST transaction fees will be paid by your connected 1AM wallet.
+                    </p>
+                  </div>
+
+                  {certifierCertificationPrereqs.length > 0 && (
+                    <div className="form-hint-text warning-text" style={{ marginBottom: '12px' }}>
+                      Prerequisites not met: {certifierCertificationPrereqs.join(', ')}
+                    </div>
+                  )}
+
+                  <div className="button-row">
+                    <button
+                      type="button"
+                      className="action-button primary"
+                      disabled={!canCertify}
+                      onClick={handleInitiateCertification}
+                      aria-label="Confirm inventory certification and submit transaction via 1AM"
+                    >
+                      Confirm and Certify via 1AM
+                    </button>
+                    <button
+                      type="button"
+                      className="action-button secondary"
+                      disabled={isCertifying}
+                      onClick={resetCertificationState}
+                      aria-label="Cancel certification review"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* In-Flight States */}
+              {certificationUi.stage === 'requesting-wallet' && (
+                <div className="status-callout warning">
+                  <span className="status-indicator warning">Preparing 1AM Transaction</span>
+                  <p>Preparing zero-knowledge proof and transaction. Review 1AM when the approval request appears.</p>
+                </div>
+              )}
+
+              {certificationUi.stage === 'submitting' && (
+                <div className="status-callout notice">
+                  <span className="status-indicator notice">Submitting Certification</span>
+                  <p>Generating proof and broadcasting <code>certifyInventory</code> transaction to Midnight Preprod...</p>
+                </div>
+              )}
+
+              {/* Indexer Lag / Waiting with manual retry that never resubmits */}
+              {certificationUi.stage === 'finalized-indexing' && (
+                <div className="status-callout notice indexer-lag-box">
+                  <span className="status-indicator notice">Finalized On-Chain</span>
+                  <p>
+                    The certification transaction was finalized on Midnight Preprod, but the public indexer has not yet indexed the updated <code>inventoryCommitments</code> set.
+                  </p>
+                  <p className="card-caption">
+                    Click below to retry on-chain confirmation without resubmitting any transaction.
+                  </p>
+                  <button
+                    type="button"
+                    className="action-button primary"
+                    onClick={handleRetryCommitmentVerification}
+                    aria-label="Retry indexer confirmation without resubmitting transaction"
+                  >
+                    Retry Indexer Confirmation
+                  </button>
+                </div>
+              )}
+
+              {/* Certified Success State, Receipt & Snapshot Envelope Export */}
+              {certificationUi.stage === 'certified' && certificationUi.receipt && (
+                <div className="admission-success-box">
+                  <span className="status-indicator success">Inventory Certified</span>
+                  <p>
+                    Inventory commitment{' '}
+                    <code>{shortenAddress(certificationUi.receipt.commitment)}</code> has been confirmed in the contract commitments set.
+                  </p>
+                  <dl className="receipt-details-list">
+                    <dt>Contract Address</dt>
+                    <dd><code>{shortenAddress(certificationUi.receipt.contractAddress)}</code></dd>
+                    <dt>Member Credential</dt>
+                    <dd><code>{shortenAddress(certificationUi.receipt.memberCredential)}</code></dd>
+                    {certificationUi.receipt.certificationTxId && (
+                      <>
+                        <dt>Transaction ID</dt>
+                        <dd><code>{shortenAddress(certificationUi.receipt.certificationTxId)}</code></dd>
+                      </>
+                    )}
+                    <dt>Certified At</dt>
+                    <dd>{certificationUi.receipt.certifiedAt}</dd>
+                  </dl>
+
+                  <div className="button-row" style={{ marginBottom: '16px' }}>
+                    <button
+                      type="button"
+                      className="action-button primary"
+                      onClick={handleDownloadCertificationReceipt}
+                      aria-label="Download public certification receipt JSON"
+                    >
+                      Download Certification Receipt (.json)
+                    </button>
+                  </div>
+
+                  {/* Certified Snapshot Envelope Export (Private to Member) */}
+                  <div className="backup-creation-box" style={{ marginTop: '16px', borderTop: '1px solid var(--border-color, #333)', paddingTop: '16px' }}>
+                    <h3>Export Certified Snapshot Envelope</h3>
+                    <p className="form-hint-text">
+                      Encrypts the member product, version, snapshot salt, commitment, and transaction ID using AES-256-GCM + PBKDF2 (600,000 iterations). Provide a shared passphrase (min 12 chars) to deliver privately to the Member.
+                    </p>
+
+                    <div className="input-field-group">
+                      <label htmlFor="cert-snapshot-passphrase">Snapshot Passphrase (min 12 chars)</label>
+                      <input
+                        id="cert-snapshot-passphrase"
+                        type={certSnapshotShowPassphrase ? 'text' : 'password'}
+                        value={certSnapshotPassphrase}
+                        placeholder="Passphrase to encrypt snapshot..."
+                        onChange={(e) => setCertSnapshotPassphrase(e.target.value)}
+                      />
+                    </div>
+
+                    <div className="input-field-group">
+                      <label htmlFor="cert-snapshot-confirm-passphrase">Confirm Snapshot Passphrase</label>
+                      <input
+                        id="cert-snapshot-confirm-passphrase"
+                        type={certSnapshotShowPassphrase ? 'text' : 'password'}
+                        value={certSnapshotConfirmPassphrase}
+                        placeholder="Confirm passphrase..."
+                        onChange={(e) => setCertSnapshotConfirmPassphrase(e.target.value)}
+                      />
+                    </div>
+
+                    <div className="checkbox-row" style={{ marginBottom: '8px' }}>
+                      <label>
+                        <input
+                          type="checkbox"
+                          checked={certSnapshotShowPassphrase}
+                          onChange={(e) => setCertSnapshotShowPassphrase(e.target.checked)}
+                        />
+                        Show passphrase
+                      </label>
+                    </div>
+
+                    {hasPasswordWhitespaceWarning(certSnapshotPassphrase) && (
+                      <div className="warning-notice-box" style={{ marginBottom: '8px' }}>
+                        <p>Warning: Passphrase contains leading or trailing whitespace.</p>
+                        <label>
+                          <input
+                            type="checkbox"
+                            checked={ackWhitespaceCertSnapshot}
+                            onChange={(e) => setAckWhitespaceCertSnapshot(e.target.checked)}
+                          />
+                          I acknowledge leading/trailing whitespace is intentional
+                        </label>
+                      </div>
+                    )}
+
+                    <div className="button-row">
+                      <button
+                        type="button"
+                        className="action-button primary"
+                        disabled={
+                          !validatePasswordConfirmation(certSnapshotPassphrase, certSnapshotConfirmPassphrase).valid ||
+                          (hasPasswordWhitespaceWarning(certSnapshotPassphrase) && !ackWhitespaceCertSnapshot)
+                        }
+                        onClick={handleExportCertifiedSnapshot}
+                        aria-label="Export encrypted certified snapshot envelope"
+                      >
+                        Export Encrypted Snapshot (.enc.json)
+                      </button>
+                      <button
+                        type="button"
+                        className="action-button secondary"
+                        onClick={resetCertificationState}
+                        aria-label="Certify another inventory report"
+                      >
+                        Certify Another Request
+                      </button>
                     </div>
                   </div>
                 </div>
@@ -4190,7 +4959,7 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
           {/* Public State Panel */}
           <article className="workspace-card public-state-card">
             <div className="card-header">
-              <span className="card-step">{role === 'registrar' ? '06' : role === 'member' ? '05' : '04'}</span>
+              <span className="card-step">{role === 'registrar' ? '06' : '05'}</span>
               <h2>Public Contract State</h2>
             </div>
             <p className="privacy-guarantee-notice">

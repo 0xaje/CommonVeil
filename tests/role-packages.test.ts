@@ -14,7 +14,11 @@ import {
   validateCertifierKeyPackage,
   validateMemberAdmissionPackage,
   validateCertificationRequestPackage,
+  buildCertifiedSnapshotPackage,
   validateCertifiedSnapshotPackage,
+  validateInventoryCertificationReceipt,
+  buildInventoryCertificationReceipt,
+  INVENTORY_CERTIFICATION_RECEIPT_SCHEMA,
   validateEncryptedEnvelope,
   buildCertificationRequestFromInventoryReport,
   encryptToEnvelope,
@@ -233,6 +237,7 @@ test('5. Inventory report consistency: reject mismatch, not-detected, or empty r
 test('6. Version integer safety validation', () => {
   const base = {
     schema: CERTIFIED_SNAPSHOT_SCHEMA,
+    network: 'preprod' as const,
     contractAddress: SAMPLE_CONTRACT,
     memberCredential: SAMPLE_HEX_32,
     product: 'pkg:generic/xz-utils',
@@ -322,6 +327,7 @@ test('9. Measurement-digest mismatch rejection', async () => {
 test('10. Certified snapshot validation', () => {
   const pkg = {
     schema: CERTIFIED_SNAPSHOT_SCHEMA,
+    network: 'preprod' as const,
     contractAddress: SAMPLE_CONTRACT,
     memberCredential: SAMPLE_HEX_32,
     product: 'pkg:generic/xz-utils',
@@ -334,8 +340,21 @@ test('10. Certified snapshot validation', () => {
 
   const validated = validateCertifiedSnapshotPackage(pkg);
   assert.equal(validated.schema, CERTIFIED_SNAPSHOT_SCHEMA);
+  assert.equal(validated.network, 'preprod');
   assert.equal(validated.snapshotSalt, SAMPLE_HEX_32_B);
   assert.equal(validated.version.patch, 1);
+
+  // Unknown field is rejected (strict boundary, not whitelisted)
+  assert.throws(
+    () => validateCertifiedSnapshotPackage({ ...pkg, extraAttackerField: 'injected' }),
+    /authorized top-level fields/,
+  );
+
+  // Invalid network rejected
+  assert.throws(
+    () => validateCertifiedSnapshotPackage({ ...pkg, network: 'mainnet' }),
+    /authorized top-level fields|Invalid network/,
+  );
 
   assert.throws(
     () => validateCertifiedSnapshotPackage({ ...pkg, txId: '' }),
@@ -419,10 +438,12 @@ test('13. Passphrase policy enforces minimum 12 Unicode characters', async () =>
   assert.deepEqual(decrypted, payload);
 });
 
-// 14. Safe decryption API: validates schema and filters out extra fields
+// 14. Safe decryption API: validates schema and strictly rejects extra fields
 test('14. Safe decryption API decryptAndValidateEnvelope', async () => {
-  const validSnapshot: any = {
+  // Valid snapshot (all 10 required fields, no extras)
+  const validSnapshot = {
     schema: CERTIFIED_SNAPSHOT_SCHEMA,
+    network: 'preprod' as const,
     contractAddress: SAMPLE_CONTRACT,
     memberCredential: SAMPLE_HEX_32,
     product: 'pkg:generic/xz-utils',
@@ -431,11 +452,9 @@ test('14. Safe decryption API decryptAndValidateEnvelope', async () => {
     commitment: 'cc'.repeat(32),
     txId: '00162a6cea69226e4731b519f76ca71e14e011eca434cfe2a08b88dda51f02f66b',
     createdAt: FIXED_NOW.toISOString(),
-    extraAttackerSecret: 'injected-leak', // Extra unwhitelisted field
   };
 
   const envelope = await encryptToEnvelope(validSnapshot, VALID_PASSPHRASE);
-
   const validated = await decryptAndValidateEnvelope(
     envelope,
     VALID_PASSPHRASE,
@@ -443,8 +462,17 @@ test('14. Safe decryption API decryptAndValidateEnvelope', async () => {
   );
 
   assert.equal(validated.schema, CERTIFIED_SNAPSHOT_SCHEMA);
+  assert.equal(validated.network, 'preprod');
   assert.equal(validated.memberCredential, SAMPLE_HEX_32);
-  assert.equal('extraAttackerSecret' in validated, false, 'Validator whitelist must exclude extra fields');
+
+  // Snapshot with an extra attacker-injected field must be REJECTED
+  // (strict boundary enforcement — not silently whitelisted)
+  const snapshotWithExtra = { ...validSnapshot, extraAttackerSecret: 'injected-leak' };
+  const extraEnv = await encryptToEnvelope(snapshotWithExtra, VALID_PASSPHRASE);
+  await assert.rejects(
+    () => decryptAndValidateEnvelope(extraEnv, VALID_PASSPHRASE, validateCertifiedSnapshotPackage),
+    /authorized top-level fields/,
+  );
 
   // Wrong schema in decrypted data is rejected by validator
   const wrongSchemaPayload = { ...validSnapshot, schema: 'commonveil.wrong/v1' };
@@ -1275,3 +1303,107 @@ test('39. buildCertificationRequestPackage strictly rejects reports with non-liv
     /commonveil\.certification-request\/v1 accepts genuine live-host-scan provenance only/,
   );
 });
+
+// 40. Inventory certification receipt construction and validation
+test('40. Inventory certification receipt construction, validation, and field strictness', () => {
+  const receipt = buildInventoryCertificationReceipt({
+    contractAddress: SAMPLE_CONTRACT,
+    certifierKey: SAMPLE_HEX_32,
+    memberCredential: SAMPLE_HEX_32_B,
+    commitment: 'cc'.repeat(32),
+    certificationTxId: '00162a6cea69226e4731b519f76ca71e14e011eca434cfe2a08b88dda51f02f66b',
+    now: FIXED_NOW,
+  });
+
+  assert.equal(receipt.schema, INVENTORY_CERTIFICATION_RECEIPT_SCHEMA);
+  assert.equal(receipt.network, 'preprod');
+  assert.equal(receipt.contractAddress, SAMPLE_CONTRACT);
+  assert.equal(receipt.certifierKey, SAMPLE_HEX_32);
+  assert.equal(receipt.memberCredential, SAMPLE_HEX_32_B);
+  assert.equal(receipt.commitment, 'cc'.repeat(32));
+  assert.equal(receipt.status, 'finalized');
+  assert.equal(receipt.certifiedAt, FIXED_NOW.toISOString());
+
+  const validated = validateInventoryCertificationReceipt(receipt);
+  assert.deepEqual(validated, receipt);
+
+  // Strict boundary: extra field is rejected
+  assert.throws(
+    () => validateInventoryCertificationReceipt({ ...receipt, injectedAttackerProp: 'leak' }),
+    /unauthorized top-level fields/,
+  );
+
+  // Status must be finalized
+  assert.throws(
+    () => validateInventoryCertificationReceipt({ ...receipt, status: 'pending' as any }),
+    /status must be 'finalized'/,
+  );
+});
+
+// 41. Certified snapshot construction, encryption envelope round-trip, and strict validation
+test('41. Certified snapshot construction, encryption envelope round-trip, and strict validation', async () => {
+  const snapshot = buildCertifiedSnapshotPackage({
+    contractAddress: SAMPLE_CONTRACT,
+    memberCredential: SAMPLE_HEX_32,
+    product: 'pkg:generic/xz-utils',
+    version: { major: 5, minor: 6, patch: 1 },
+    snapshotSalt: SAMPLE_HEX_32_B,
+    commitment: 'cc'.repeat(32),
+    txId: '00162a6cea69226e4731b519f76ca71e14e011eca434cfe2a08b88dda51f02f66b',
+    now: FIXED_NOW,
+  });
+
+  assert.equal(snapshot.schema, CERTIFIED_SNAPSHOT_SCHEMA);
+  assert.equal(snapshot.network, 'preprod');
+  assert.equal(snapshot.version.major, 5);
+  assert.equal(snapshot.version.minor, 6);
+  assert.equal(snapshot.version.patch, 1);
+  assert.equal(Object.keys(snapshot).length, 10);
+
+  // Encrypt to envelope with 600,000 iterations
+  const envelope = await encryptToEnvelope(snapshot, VALID_PASSPHRASE, { now: FIXED_NOW });
+  assert.equal(envelope.iterations, 600_000);
+
+  // Decrypt and validate with strict validator
+  const restored = await decryptAndValidateEnvelope(
+    envelope,
+    VALID_PASSPHRASE,
+    validateCertifiedSnapshotPackage,
+  );
+  assert.deepEqual(restored, snapshot);
+
+  // Tampering with ciphertext fails decryption
+  const tampered = { ...envelope, ciphertext: '00'.repeat(envelope.ciphertext.length / 2) };
+  await assert.rejects(
+    () => decryptAndValidateEnvelope(tampered, VALID_PASSPHRASE, validateCertifiedSnapshotPackage),
+    /tampered ciphertext\/metadata/,
+  );
+});
+
+// 42. Exclusion of private and sensitive material from receipt and snapshot
+test('42. Exclusion of private secrets from receipt and snapshot packages', () => {
+  const receipt = buildInventoryCertificationReceipt({
+    contractAddress: SAMPLE_CONTRACT,
+    certifierKey: SAMPLE_HEX_32,
+    memberCredential: SAMPLE_HEX_32_B,
+    commitment: 'cc'.repeat(32),
+    certificationTxId: '00162a6cea69226e4731b519f76ca71e14e011eca434cfe2a08b88dda51f02f66b',
+  });
+  assertNoSensitiveFields(receipt);
+  assert.equal('certifierSecret' in receipt, false);
+  assert.equal('memberSecret' in receipt, false);
+
+  const snapshot = buildCertifiedSnapshotPackage({
+    contractAddress: SAMPLE_CONTRACT,
+    memberCredential: SAMPLE_HEX_32,
+    product: 'pkg:generic/xz-utils',
+    version: { major: 5, minor: 6, patch: 1 },
+    snapshotSalt: SAMPLE_HEX_32_B,
+    commitment: 'cc'.repeat(32),
+    txId: '00162a6cea69226e4731b519f76ca71e14e011eca434cfe2a08b88dda51f02f66b',
+  });
+  assert.equal('certifierSecret' in snapshot, false);
+  assert.equal('memberSecret' in snapshot, false);
+  assert.equal('privateKey' in snapshot, false);
+});
+

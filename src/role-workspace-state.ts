@@ -26,6 +26,12 @@ import {
   validateLiveInventoryReport,
   buildCertificationRequestPackage,
   assertNoSensitiveFields,
+  CERTIFIED_SNAPSHOT_SCHEMA,
+  INVENTORY_CERTIFICATION_RECEIPT_SCHEMA,
+  type InventoryCertificationReceipt,
+  buildInventoryCertificationReceipt,
+  type VersionTuple,
+  productDigest,
 } from './role-packages';
 
 export type RoleType = 'registrar' | 'certifier' | 'member';
@@ -2138,4 +2144,289 @@ export function mapInventoryReportError(error: unknown): string {
   }
 
   return 'The inventory report could not be validated. Check the file and try again.';
+}
+
+// ============================================================================
+// CV-009: Certifier Certification Workflow State & Reducers
+// ============================================================================
+
+export { productDigest, CERTIFIED_SNAPSHOT_SCHEMA, INVENTORY_CERTIFICATION_RECEIPT_SCHEMA };
+export type { VersionTuple, InventoryCertificationReceipt };
+export { buildInventoryCertificationReceipt };
+
+export type CertifierCertificationStage =
+  | 'idle'
+  | 'reviewing'
+  | 'confirming'
+  | 'requesting-wallet'
+  | 'submitting'
+  | 'finalized-indexing'
+  | 'certified'
+  | 'failed'
+  | 'cancelled';
+
+export interface CertifierCertificationUiState {
+  readonly stage: CertifierCertificationStage;
+  /** The imported and validated certification request package */
+  readonly importedRequest: CertificationRequestPackage | null;
+  /**
+   * Genuine transaction ID preserved across indexer lag.
+   * Never null once a real finalized txId was captured.
+   */
+  readonly certificationTxId: string | null;
+  /** Public certification receipt generated after tx confirmation */
+  readonly receipt: InventoryCertificationReceipt | null;
+  readonly errorMessage: string | null;
+}
+
+export const INITIAL_CERTIFIER_CERTIFICATION_UI_STATE: CertifierCertificationUiState = {
+  stage: 'idle',
+  importedRequest: null,
+  certificationTxId: null,
+  receipt: null,
+  errorMessage: null,
+};
+
+/**
+ * Checks all Certifier authority prerequisites for the certifyInventory workflow.
+ * Returns an array of unmet prerequisite descriptions (empty array = all satisfied).
+ */
+export function checkCertifierCertificationPrerequisites(params: {
+  readonly isConnected: boolean;
+  readonly attachedContractAddress: string | null;
+  readonly hasCertifierSecret: boolean;
+  readonly certifierBackupRecoveryStatus: string;
+  readonly certifierVerificationStatus: string;
+  readonly importedRequest: CertificationRequestPackage | null;
+  readonly isMemberAdmitted: boolean | null;
+  readonly isProofProviderConfigured: boolean;
+  readonly isOperationPending: boolean;
+  readonly policyActive: boolean;
+}): string[] {
+  const missing: string[] = [];
+  if (!params.isConnected) {
+    missing.push('1AM wallet must be connected on Midnight Preprod.');
+  }
+  if (!params.attachedContractAddress) {
+    missing.push('A verified CommonVeil contract must be attached.');
+  }
+  if (!params.hasCertifierSecret) {
+    missing.push('Active Certifier secret must be loaded in volatile session memory.');
+  }
+  if (params.certifierBackupRecoveryStatus !== 'recovery-tested') {
+    missing.push("Certifier encrypted backup must be recovery-tested (status 'recovery-tested').");
+  }
+  if (params.certifierVerificationStatus !== 'verified') {
+    missing.push('Certifier secret must match the on-chain certifier key (verified).');
+  }
+  if (!params.importedRequest) {
+    missing.push('A valid commonveil.certification-request/v1 package must be imported.');
+  }
+  if (params.importedRequest && params.attachedContractAddress) {
+    if (params.importedRequest.contractAddress.toLowerCase().trim() !== params.attachedContractAddress.toLowerCase().trim()) {
+      missing.push('Imported request contract address does not match the attached contract.');
+    }
+  }
+  if (params.isMemberAdmitted === false) {
+    missing.push('Member credential is not yet admitted in the public ledger memberCredentials set.');
+  }
+  if (!params.isProofProviderConfigured) {
+    missing.push('Local proof provider (prover service) must be reachable and configured.');
+  }
+  if (params.isOperationPending) {
+    missing.push('Another certification operation is currently in progress.');
+  }
+  if (params.policyActive) {
+    missing.push('Inventory certification window is closed: policyActive is true on-chain.');
+  }
+  return missing;
+}
+
+/**
+ * Returns true when all prerequisites are met and certification can be initiated.
+ */
+export function canInitiateCertification(params: {
+  readonly isConnected: boolean;
+  readonly attachedContractAddress: string | null;
+  readonly hasCertifierSecret: boolean;
+  readonly certifierBackupRecoveryStatus: string;
+  readonly certifierVerificationStatus: string;
+  readonly importedRequest: CertificationRequestPackage | null;
+  readonly isMemberAdmitted: boolean | null;
+  readonly isProofProviderConfigured: boolean;
+  readonly isOperationPending: boolean;
+  readonly policyActive: boolean;
+}): boolean {
+  return checkCertifierCertificationPrerequisites(params).length === 0;
+}
+
+export function onCertificationRequestImported(
+  prevState: CertifierCertificationUiState,
+  pkg: CertificationRequestPackage,
+  attachedContractAddress: string | null,
+  certifierVerificationStatus?: string,
+): CertifierCertificationUiState {
+  if (!attachedContractAddress) {
+    return {
+      ...prevState, importedRequest: null, certificationTxId: null, receipt: null,
+      errorMessage: 'Attach to a verified CommonVeil contract before importing a certification request.',
+      stage: 'failed',
+    };
+  }
+  if (certifierVerificationStatus && certifierVerificationStatus !== 'verified') {
+    return {
+      ...prevState, importedRequest: null, certificationTxId: null, receipt: null,
+      errorMessage: 'Active Certifier secret must be verified against the attached contract before importing a certification request.',
+      stage: 'failed',
+    };
+  }
+  if (pkg.contractAddress.toLowerCase().trim() !== attachedContractAddress.toLowerCase().trim()) {
+    return {
+      ...prevState, importedRequest: null, certificationTxId: null, receipt: null,
+      errorMessage: 'Certification request contract address does not match the attached contract.',
+      stage: 'failed',
+    };
+  }
+  return { stage: 'reviewing', importedRequest: pkg, certificationTxId: null, receipt: null, errorMessage: null };
+}
+
+export function onCertificationConfirmationOpen(
+  prevState: CertifierCertificationUiState,
+): CertifierCertificationUiState {
+  if (prevState.stage !== 'reviewing') return prevState;
+  return { ...prevState, stage: 'confirming', errorMessage: null };
+}
+
+export function onCertificationConfirmationDismissed(
+  prevState: CertifierCertificationUiState,
+): CertifierCertificationUiState {
+  return { ...prevState, stage: 'reviewing', errorMessage: null };
+}
+
+export function onCertificationWalletRequest(
+  prevState: CertifierCertificationUiState,
+): CertifierCertificationUiState {
+  if (prevState.stage === 'requesting-wallet' || prevState.stage === 'submitting') return prevState;
+  return { ...prevState, stage: 'requesting-wallet', errorMessage: null };
+}
+
+export function onCertificationSubmitting(
+  prevState: CertifierCertificationUiState,
+): CertifierCertificationUiState {
+  return { ...prevState, stage: 'submitting', errorMessage: null };
+}
+
+/**
+ * Enters finalized-indexing while preserving any captured genuine certificationTxId.
+ * Never replaces an already-captured genuine txId with null.
+ */
+export function onCertificationFinalizedIndexing(
+  prevState: CertifierCertificationUiState,
+  txId?: string | null,
+): CertifierCertificationUiState {
+  const resolvedTxId = typeof txId === 'string' && txId.trim() !== '' ? txId : prevState.certificationTxId;
+  return { ...prevState, stage: 'finalized-indexing', certificationTxId: resolvedTxId, errorMessage: null };
+}
+
+export function onCertificationCompleted(
+  prevState: CertifierCertificationUiState,
+  receipt: InventoryCertificationReceipt,
+): CertifierCertificationUiState {
+  return {
+    stage: 'certified',
+    importedRequest: prevState.importedRequest,
+    certificationTxId: receipt.certificationTxId ?? prevState.certificationTxId,
+    receipt,
+    errorMessage: null,
+  };
+}
+
+export function onCertificationFailed(
+  prevState: CertifierCertificationUiState,
+  errorMessage: string,
+  isCancelled: boolean = false,
+): CertifierCertificationUiState {
+  return { ...prevState, stage: isCancelled ? 'cancelled' : 'failed', errorMessage };
+}
+
+export function onCertificationReset(
+  _prevState?: CertifierCertificationUiState,
+): CertifierCertificationUiState {
+  return INITIAL_CERTIFIER_CERTIFICATION_UI_STATE;
+}
+
+export const CERTIFICATION_VERIFICATION_ERROR_MESSAGES = {
+  INCOMPATIBLE_CONTRACT: 'The contract at this address does not expose a compatible CommonVeil ledger.',
+  CERTIFIER_KEY_MISMATCH: 'On-chain certifier key does not match the active certifier secret.',
+  MEMBER_NOT_ADMITTED: 'Member credential is not admitted in the on-chain memberCredentials set.',
+  ALREADY_COMMITTED: 'This inventory commitment is already recorded in the on-chain inventoryCommitments set.',
+  GENERIC_VERIFICATION_FAILURE: 'Certification verification failed. Check network status and try again.',
+} as const;
+
+/**
+ * Sanitizes errors encountered during post-certification ledger inspection.
+ */
+export function mapCertificationInspectionError(error: unknown): string {
+  if (error instanceof ContractSessionError) {
+    if (error.code === 'INCOMPATIBLE_CONTRACT') {
+      return CERTIFICATION_VERIFICATION_ERROR_MESSAGES.INCOMPATIBLE_CONTRACT;
+    }
+    return CONTRACT_SESSION_ERROR_MESSAGES[error.code] ?? CERTIFICATION_VERIFICATION_ERROR_MESSAGES.GENERIC_VERIFICATION_FAILURE;
+  }
+  const raw = (error instanceof Error ? error.message : typeof error === 'string' ? error : '').toLowerCase();
+  if (raw.includes('certifier') && (raw.includes('mismatch') || raw.includes('key') || raw.includes('secret'))) {
+    return CERTIFICATION_VERIFICATION_ERROR_MESSAGES.CERTIFIER_KEY_MISMATCH;
+  }
+  if (raw.includes('member') && (raw.includes('not admitted') || raw.includes('not found'))) {
+    return CERTIFICATION_VERIFICATION_ERROR_MESSAGES.MEMBER_NOT_ADMITTED;
+  }
+  if (raw.includes('incompatible') || raw.includes('ledger') || raw.includes('decode')) {
+    return CERTIFICATION_VERIFICATION_ERROR_MESSAGES.INCOMPATIBLE_CONTRACT;
+  }
+  return CERTIFICATION_VERIFICATION_ERROR_MESSAGES.GENERIC_VERIFICATION_FAILURE;
+}
+
+/**
+ * Sanitizes errors from the certifyInventory circuit submission.
+ * Never leaks raw endpoints, GraphQL errors, stack traces, or connector internals.
+ */
+export function mapCertificationError(error: unknown): string {
+  if (!error) return 'Inventory certification transaction could not be completed. Check wallet and try again.';
+  const raw = (
+    error instanceof Error ? error.message
+    : typeof error === 'string' ? error
+    : typeof (error as any)?.message === 'string' ? (error as any).message
+    : ''
+  ).toLowerCase();
+  if (raw.includes('cancel') || raw.includes('reject') || raw.includes('denied') || raw.includes('declined') || raw.includes('user aborted')) {
+    return 'Inventory certification transaction was cancelled in 1AM.';
+  }
+  if (raw.includes('already committed') || raw.includes('snapshot already committed') || raw.includes('already certified')) {
+    return 'This inventory snapshot has already been committed on-chain.';
+  }
+  if (raw.includes('not admitted') || raw.includes('member credential not')) {
+    return 'Member credential is not admitted in the on-chain memberCredentials set.';
+  }
+  if (raw.includes('certifier') && (raw.includes('not authorized') || raw.includes('authorized certifier'))) {
+    return 'Certifier secret does not match the on-chain authorized certifier key.';
+  }
+  if (raw.includes('policy') || raw.includes('window') || raw.includes('policyactive')) {
+    return 'Inventory certification window is closed: policy is already active on-chain.';
+  }
+  if (raw.includes('dust') || raw.includes('balance') || raw.includes('insufficient funds')) {
+    return 'Insufficient DUST or balance in connected 1AM wallet to cover transaction fees.';
+  }
+  if (raw.includes('proof') || raw.includes('prover') || raw.includes('proving')) {
+    return 'ZK proof generation failed. Ensure your local proof server is reachable and responsive.';
+  }
+  if (raw.includes('indexer') || raw.includes('lookup')) {
+    return 'Certification transaction finalized on-chain, but indexer synchronization is delayed. Use retry confirmation.';
+  }
+  if (raw.includes('timeout') || raw.includes('deadline')) {
+    return 'Transaction submission timed out. Check network status and wallet activity.';
+  }
+  if (raw.includes('network') || raw.includes('preprod') || raw.includes('connection')) {
+    return 'Network communication failure during certification. Check Midnight Preprod connectivity.';
+  }
+  return 'The certification transaction could not be completed. Check the network connection and try again.';
 }

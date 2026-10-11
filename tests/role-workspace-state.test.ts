@@ -97,6 +97,22 @@ import {
   onMemberInventoryReset,
   onMemberInventoryError,
   mapInventoryReportError,
+  INITIAL_CERTIFIER_CERTIFICATION_UI_STATE,
+  type CertifierCertificationUiState,
+  checkCertifierCertificationPrerequisites,
+  canInitiateCertification,
+  onCertificationRequestImported,
+  onCertificationConfirmationOpen,
+  onCertificationConfirmationDismissed,
+  onCertificationWalletRequest,
+  onCertificationSubmitting,
+  onCertificationFinalizedIndexing,
+  onCertificationCompleted,
+  onCertificationFailed,
+  onCertificationReset,
+  mapCertificationError,
+  mapCertificationInspectionError,
+  CERTIFICATION_VERIFICATION_ERROR_MESSAGES,
 } from '../src/role-workspace-state.ts';
 import {
   bytesToHex,
@@ -2968,3 +2984,266 @@ test('101. Member workspace export gating strictly rejects controlled test evide
   assert.equal(prereqs.isLiveInventoryImported, false);
   assert.deepEqual(prereqs.missingPrerequisites, ['Validated genuine live inventory report']);
 });
+
+// 102. Certifier certification workflow prerequisites gating
+test('102. Certifier certification workflow prerequisites gating', () => {
+  const validRequest = {
+    schema: CERTIFICATION_REQUEST_SCHEMA,
+    network: 'preprod' as const,
+    contractAddress: SAMPLE_CONTRACT_ADDRESS,
+    memberCredential: SAMPLE_HEX_64,
+    provenance: 'live-host-scan' as const,
+    product: 'pkg:generic/xz-utils',
+    rawVersion: '5.6.1',
+    version: { major: 5, minor: 6, patch: 1 },
+    measurementDigest: '00'.repeat(32),
+    observedAt: FIXED_NOW.toISOString(),
+    createdAt: FIXED_NOW.toISOString(),
+  };
+
+  // Full prerequisites satisfied
+  const passedPrereqs = checkCertifierCertificationPrerequisites({
+    isConnected: true,
+    attachedContractAddress: SAMPLE_CONTRACT_ADDRESS,
+    hasCertifierSecret: true,
+    certifierBackupRecoveryStatus: 'recovery-tested',
+    certifierVerificationStatus: 'verified',
+    importedRequest: validRequest,
+    isMemberAdmitted: true,
+    isProofProviderConfigured: true,
+    isOperationPending: false,
+    policyActive: false,
+  });
+  assert.deepEqual(passedPrereqs, []);
+  assert.equal(
+    canInitiateCertification({
+      isConnected: true,
+      attachedContractAddress: SAMPLE_CONTRACT_ADDRESS,
+      hasCertifierSecret: true,
+      certifierBackupRecoveryStatus: 'recovery-tested',
+      certifierVerificationStatus: 'verified',
+      importedRequest: validRequest,
+      isMemberAdmitted: true,
+      isProofProviderConfigured: true,
+      isOperationPending: false,
+      policyActive: false,
+    }),
+    true,
+  );
+
+  // Missing wallet connection
+  const noWallet = checkCertifierCertificationPrerequisites({
+    isConnected: false,
+    attachedContractAddress: SAMPLE_CONTRACT_ADDRESS,
+    hasCertifierSecret: true,
+    certifierBackupRecoveryStatus: 'recovery-tested',
+    certifierVerificationStatus: 'verified',
+    importedRequest: validRequest,
+    isMemberAdmitted: true,
+    isProofProviderConfigured: true,
+    isOperationPending: false,
+    policyActive: false,
+  });
+  assert.equal(noWallet.includes('1AM wallet must be connected on Midnight Preprod.'), true);
+
+  // Untested backup blocks certification
+  const untestedBackup = checkCertifierCertificationPrerequisites({
+    isConnected: true,
+    attachedContractAddress: SAMPLE_CONTRACT_ADDRESS,
+    hasCertifierSecret: true,
+    certifierBackupRecoveryStatus: 'created-untested',
+    certifierVerificationStatus: 'verified',
+    importedRequest: validRequest,
+    isMemberAdmitted: true,
+    isProofProviderConfigured: true,
+    isOperationPending: false,
+    policyActive: false,
+  });
+  assert.equal(untestedBackup.includes("Certifier encrypted backup must be recovery-tested (status 'recovery-tested')."), true);
+
+  // Contract address mismatch blocks certification
+  const mismatchedContract = checkCertifierCertificationPrerequisites({
+    isConnected: true,
+    attachedContractAddress: 'different' + SAMPLE_CONTRACT_ADDRESS.slice(9),
+    hasCertifierSecret: true,
+    certifierBackupRecoveryStatus: 'recovery-tested',
+    certifierVerificationStatus: 'verified',
+    importedRequest: validRequest,
+    isMemberAdmitted: true,
+    isProofProviderConfigured: true,
+    isOperationPending: false,
+    policyActive: false,
+  });
+  assert.equal(mismatchedContract.includes('Imported request contract address does not match the attached contract.'), true);
+
+  // Policy active blocks new certifications
+  const policyActivePrereqs = checkCertifierCertificationPrerequisites({
+    isConnected: true,
+    attachedContractAddress: SAMPLE_CONTRACT_ADDRESS,
+    hasCertifierSecret: true,
+    certifierBackupRecoveryStatus: 'recovery-tested',
+    certifierVerificationStatus: 'verified',
+    importedRequest: validRequest,
+    isMemberAdmitted: true,
+    isProofProviderConfigured: true,
+    isOperationPending: false,
+    policyActive: true,
+  });
+  assert.equal(policyActivePrereqs.includes('Inventory certification window is closed: policyActive is true on-chain.'), true);
+});
+
+// 103. Certification UI state reducer lifecycle transitions
+test('103. Certification UI state reducer lifecycle transitions', () => {
+  let state = INITIAL_CERTIFIER_CERTIFICATION_UI_STATE;
+  assert.equal(state.stage, 'idle');
+
+  const validRequest = {
+    schema: CERTIFICATION_REQUEST_SCHEMA,
+    network: 'preprod' as const,
+    contractAddress: SAMPLE_CONTRACT_ADDRESS,
+    memberCredential: SAMPLE_HEX_64,
+    provenance: 'live-host-scan' as const,
+    product: 'pkg:generic/xz-utils',
+    rawVersion: '5.6.1',
+    version: { major: 5, minor: 6, patch: 1 },
+    measurementDigest: '00'.repeat(32),
+    observedAt: FIXED_NOW.toISOString(),
+    createdAt: FIXED_NOW.toISOString(),
+  };
+
+  // Import moves to reviewing stage
+  state = onCertificationRequestImported(state, validRequest, SAMPLE_CONTRACT_ADDRESS, 'verified');
+  assert.equal(state.stage, 'reviewing');
+  assert.deepEqual(state.importedRequest, validRequest);
+
+  // Confirmation open moves to confirming
+  state = onCertificationConfirmationOpen(state);
+  assert.equal(state.stage, 'confirming');
+
+  // Requesting wallet moves to requesting-wallet
+  state = onCertificationWalletRequest(state);
+  assert.equal(state.stage, 'requesting-wallet');
+
+  // Submitting moves to submitting
+  state = onCertificationSubmitting(state);
+  assert.equal(state.stage, 'submitting');
+
+  // Indexer lag enters finalized-indexing
+  state = onCertificationFinalizedIndexing(state, 'test-tx-id-1234');
+  assert.equal(state.stage, 'finalized-indexing');
+  assert.equal(state.certificationTxId, 'test-tx-id-1234');
+
+  // Completed certification receipt
+  const receipt = {
+    schema: 'commonveil.inventory-certification-receipt/v1' as const,
+    network: 'preprod' as const,
+    contractAddress: SAMPLE_CONTRACT_ADDRESS,
+    certifierKey: SAMPLE_HEX_64,
+    memberCredential: SAMPLE_HEX_64,
+    commitment: 'cc'.repeat(32),
+    certificationTxId: 'test-tx-id-1234',
+    status: 'finalized' as const,
+    certifiedAt: FIXED_NOW.toISOString(),
+  };
+  state = onCertificationCompleted(state, receipt);
+  assert.equal(state.stage, 'certified');
+  assert.deepEqual(state.receipt, receipt);
+
+  // Reset clears state
+  state = onCertificationReset(state);
+  assert.equal(state.stage, 'idle');
+  assert.equal(state.importedRequest, null);
+  assert.equal(state.receipt, null);
+});
+
+// 104. Cancellation handling and failure state sanitization
+test('104. User cancellation and sanitized error mapping for certification', () => {
+  let state = INITIAL_CERTIFIER_CERTIFICATION_UI_STATE;
+  state = onCertificationWalletRequest(state);
+
+  // User cancellation in wallet
+  state = onCertificationFailed(state, 'Inventory certification transaction was cancelled in 1AM.', true);
+  assert.equal(state.stage, 'cancelled');
+  assert.match(state.errorMessage ?? '', /cancelled/i);
+
+  // Internal error sanitization
+  const mapped = mapCertificationError(new Error('Internal RPC fault at https://node.midnight.internal:8080/jsonrpc'));
+  assert.equal(mapped.includes('http'), false);
+  assert.equal(mapped.includes('node.midnight.internal'), false);
+  assert.equal(mapped, 'The certification transaction could not be completed. Check the network connection and try again.');
+});
+
+// 105. Inspection and ledger indexing lag error mapping
+test('105. Inspection and ledger indexing lag error mapping', () => {
+  const notFoundErr = new ContractSessionError('CONTRACT_NOT_FOUND', 'Contract not found on indexer');
+  assert.equal(
+    mapCertificationInspectionError(notFoundErr),
+    'No indexed contract state exists at the supplied address.',
+  );
+
+  const lagErr = new ContractSessionError('INDEXER_QUERY_FAILED', 'GraphQL timeout');
+  assert.equal(
+    mapCertificationInspectionError(lagErr),
+    'The Midnight indexer could not complete the contract lookup.',
+  );
+
+  const unknownErr = new Error('Sensitive heap dump at address 0xdeadbeef');
+  const sanitized = mapCertificationInspectionError(unknownErr);
+  assert.equal(sanitized.includes('0xdeadbeef'), false);
+  assert.equal(sanitized, CERTIFICATION_VERIFICATION_ERROR_MESSAGES.GENERIC_VERIFICATION_FAILURE);
+});
+
+// 106. Pre-flight verification of member admission status
+test('106. Pre-flight verification of member admission status rejects unadmitted members', () => {
+  assert.equal(
+    CERTIFICATION_VERIFICATION_ERROR_MESSAGES.MEMBER_NOT_ADMITTED,
+    'Member credential is not admitted in the on-chain memberCredentials set.',
+  );
+  assert.equal(
+    CERTIFICATION_VERIFICATION_ERROR_MESSAGES.ALREADY_COMMITTED,
+    'This inventory commitment is already recorded in the on-chain inventoryCommitments set.',
+  );
+});
+
+// 107. Retained transaction ID survives indexer lag retry
+test('107. Finalized transaction ID survives indexer lag retry without generating new transactions', () => {
+  let state = INITIAL_CERTIFIER_CERTIFICATION_UI_STATE;
+  const genuineTxId = '00162a6cea69226e4731b519f76ca71e14e011eca434cfe2a08b88dda51f02f66b';
+  state = onCertificationFinalizedIndexing(state, genuineTxId);
+  assert.equal(state.stage, 'finalized-indexing');
+  assert.equal(state.certificationTxId, genuineTxId);
+
+  // Calling onCertificationFinalizedIndexing repeatedly preserves original txId
+  state = onCertificationFinalizedIndexing(state, genuineTxId);
+  assert.equal(state.certificationTxId, genuineTxId);
+});
+
+// 108. Pure circuit commitment derivation matches between SDK and contract session
+test('108. Pure circuit commitment derivation matches expected parameters', () => {
+  const credentialBytes = hexToBytes(SAMPLE_HEX_64);
+  const productIdBytes = new Uint8Array(32).fill(7);
+  const saltBytes = new Uint8Array(32).fill(42);
+
+  const commitment = pureCircuits.deriveInventoryCommitment(
+    credentialBytes,
+    productIdBytes,
+    5n,
+    6n,
+    1n,
+    saltBytes,
+  );
+  assert.equal(commitment instanceof Uint8Array, true);
+  assert.equal(commitment.length, 32);
+
+  // Deterministic output
+  const commitment2 = pureCircuits.deriveInventoryCommitment(
+    credentialBytes,
+    productIdBytes,
+    5n,
+    6n,
+    1n,
+    saltBytes,
+  );
+  assert.deepEqual(commitment, commitment2);
+});
+

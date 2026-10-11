@@ -21,6 +21,7 @@ export const MEMBER_ADMISSION_SCHEMA = 'commonveil.member-admission/v1' as const
 export const CERTIFICATION_REQUEST_SCHEMA = 'commonveil.certification-request/v1' as const;
 export const CERTIFIED_SNAPSHOT_SCHEMA = 'commonveil.certified-snapshot/v1' as const;
 export const ENCRYPTED_ENVELOPE_SCHEMA = 'commonveil.encrypted-envelope/v1' as const;
+export const INVENTORY_CERTIFICATION_RECEIPT_SCHEMA = 'commonveil.inventory-certification-receipt/v1' as const;
 
 export const INVENTORY_REPORT_SCHEMA = 'commonveil.inventory/v1' as const;
 
@@ -61,6 +62,7 @@ export interface CertificationRequestPackage {
 
 export interface CertifiedSnapshotPackage {
   readonly schema: typeof CERTIFIED_SNAPSHOT_SCHEMA;
+  readonly network: 'preprod';
   readonly contractAddress: string;
   readonly memberCredential: string; // 32 bytes hex (64 chars)
   readonly product: string;
@@ -69,6 +71,18 @@ export interface CertifiedSnapshotPackage {
   readonly commitment: string;       // 32 bytes hex (64 chars)
   readonly txId: string;             // finalized transaction identifier hex
   readonly createdAt: string;
+}
+
+export interface InventoryCertificationReceipt {
+  readonly schema: typeof INVENTORY_CERTIFICATION_RECEIPT_SCHEMA;
+  readonly network: 'preprod';
+  readonly contractAddress: string;
+  readonly certifierKey: string;      // 32 bytes hex (64 chars) — on-chain public key
+  readonly memberCredential: string;  // 32 bytes hex (64 chars)
+  readonly commitment: string;        // 32 bytes hex (64 chars)
+  readonly certificationTxId: string | null; // genuine tx id if captured; null on indexer lag
+  readonly certifiedAt: string;       // ISO timestamp
+  readonly status: 'finalized';
 }
 
 export interface EncryptedEnvelope {
@@ -204,6 +218,16 @@ export async function computeMeasurementDigest(product: string, normalizedVersio
   const encoded = new TextEncoder().encode(measurement);
   const hashBuffer = await crypto.subtle.digest('SHA-256', encoded);
   return bytesToHex(new Uint8Array(hashBuffer));
+}
+
+/**
+ * Derives the 32-byte ProductId from a product label using
+ * SHA-256("commonveil:product:v1:" + label).
+ * Matches the LegacyDemo.tsx definition exactly.
+ */
+export async function productDigest(label: string): Promise<Uint8Array> {
+  const input = new TextEncoder().encode(`commonveil:product:v1:${label}`);
+  return new Uint8Array(await crypto.subtle.digest('SHA-256', input));
 }
 
 export async function buildCertificationRequestFromInventoryReport(
@@ -549,11 +573,35 @@ export async function validateCertificationRequestPackage(pkg: unknown): Promise
   };
 }
 
+export const CERTIFIED_SNAPSHOT_REQUIRED_FIELDS = [
+  'schema',
+  'network',
+  'contractAddress',
+  'memberCredential',
+  'product',
+  'version',
+  'snapshotSalt',
+  'commitment',
+  'txId',
+  'createdAt',
+] as const;
+
 export function validateCertifiedSnapshotPackage(pkg: unknown): CertifiedSnapshotPackage {
-  if (!pkg || typeof pkg !== 'object') throw new Error('Package must be an object');
+  if (!pkg || typeof pkg !== 'object' || Array.isArray(pkg)) throw new Error('Package must be an object');
   const p = pkg as Record<string, unknown>;
+
+  // Strict field boundary: reject every unknown additional field
+  const allowedSet = new Set<string>(CERTIFIED_SNAPSHOT_REQUIRED_FIELDS);
+  const extraKeys = Object.keys(p).filter((k) => !allowedSet.has(k));
+  if (extraKeys.length > 0) {
+    throw new Error(`Certified snapshot contains unauthorized top-level fields: ${extraKeys.join(', ')}`);
+  }
+
   if (p.schema !== CERTIFIED_SNAPSHOT_SCHEMA) {
     throw new Error(`Invalid schema: expected '${CERTIFIED_SNAPSHOT_SCHEMA}', received '${String(p.schema)}'`);
+  }
+  if (p.network !== 'preprod') {
+    throw new Error("Invalid network: expected 'preprod'");
   }
   const contractAddress = validateContractAddress(p.contractAddress);
   if (!isHex(p.memberCredential, 32)) {
@@ -580,6 +628,7 @@ export function validateCertifiedSnapshotPackage(pkg: unknown): CertifiedSnapsho
 
   return {
     schema: CERTIFIED_SNAPSHOT_SCHEMA,
+    network: 'preprod',
     contractAddress,
     memberCredential: (p.memberCredential as string).toLowerCase(),
     product: p.product.trim(),
@@ -593,6 +642,147 @@ export function validateCertifiedSnapshotPackage(pkg: unknown): CertifiedSnapsho
     txId: (p.txId as string).toLowerCase(),
     createdAt: p.createdAt,
   };
+}
+
+export function buildCertifiedSnapshotPackage(params: {
+  contractAddress: string;
+  memberCredential: string; // 32-byte hex
+  product: string;
+  version: VersionTuple;
+  snapshotSalt: string;     // 32-byte hex — volatile memory only, never stored in plaintext
+  commitment: string;       // 32-byte hex
+  txId: string;
+  now?: Date;
+}): CertifiedSnapshotPackage {
+  const contractAddress = validateContractAddress(params.contractAddress);
+  if (!isHex(params.memberCredential, 32)) {
+    throw new Error('memberCredential must be 32-byte hex (64 chars)');
+  }
+  if (typeof params.product !== 'string' || params.product.trim().length === 0) {
+    throw new Error('product must be a non-empty trimmed string');
+  }
+  if (!isValidVersionTuple(params.version)) {
+    throw new Error('version must be a valid VersionTuple with safe uint32 integers');
+  }
+  if (!isHex(params.snapshotSalt, 32)) {
+    throw new Error('snapshotSalt must be 32-byte hex (64 chars)');
+  }
+  if (!isHex(params.commitment, 32)) {
+    throw new Error('commitment must be 32-byte hex (64 chars)');
+  }
+  if (typeof params.txId !== 'string' || !isHex(params.txId) || params.txId.length < 16) {
+    throw new Error('txId must be a valid hex transaction identifier');
+  }
+  const now = params.now ?? new Date();
+  return {
+    schema: CERTIFIED_SNAPSHOT_SCHEMA,
+    network: 'preprod',
+    contractAddress,
+    memberCredential: params.memberCredential.toLowerCase(),
+    product: params.product.trim(),
+    version: {
+      major: params.version.major,
+      minor: params.version.minor,
+      patch: params.version.patch,
+    },
+    snapshotSalt: params.snapshotSalt.toLowerCase(),
+    commitment: params.commitment.toLowerCase(),
+    txId: params.txId.toLowerCase(),
+    createdAt: now.toISOString(),
+  };
+}
+
+export const INVENTORY_CERTIFICATION_RECEIPT_REQUIRED_FIELDS = [
+  'schema',
+  'network',
+  'contractAddress',
+  'certifierKey',
+  'memberCredential',
+  'commitment',
+  'certificationTxId',
+  'certifiedAt',
+  'status',
+] as const;
+
+export function validateInventoryCertificationReceipt(receipt: unknown): InventoryCertificationReceipt {
+  if (!receipt || typeof receipt !== 'object' || Array.isArray(receipt)) {
+    throw new Error('Certification receipt must be an object');
+  }
+  const r = receipt as Record<string, unknown>;
+
+  // Strict field boundary: reject every unknown additional field
+  const allowedSet = new Set<string>(INVENTORY_CERTIFICATION_RECEIPT_REQUIRED_FIELDS);
+  const extraKeys = Object.keys(r).filter((k) => !allowedSet.has(k));
+  if (extraKeys.length > 0) {
+    throw new Error(`Certification receipt contains unauthorized top-level fields: ${extraKeys.join(', ')}`);
+  }
+
+  if (r.schema !== INVENTORY_CERTIFICATION_RECEIPT_SCHEMA) {
+    throw new Error(`Invalid schema: expected '${INVENTORY_CERTIFICATION_RECEIPT_SCHEMA}', received '${String(r.schema)}'`);
+  }
+  if (r.network !== 'preprod') {
+    throw new Error("Invalid network: expected 'preprod'");
+  }
+  if (typeof r.contractAddress !== 'string' || !r.contractAddress.trim()) {
+    throw new Error('contractAddress must be a non-empty string');
+  }
+  if (!isHex(r.certifierKey, 32)) {
+    throw new Error('certifierKey must be 32-byte hex (64 chars)');
+  }
+  if (!isHex(r.memberCredential, 32)) {
+    throw new Error('memberCredential must be 32-byte hex (64 chars)');
+  }
+  if (!isHex(r.commitment, 32)) {
+    throw new Error('commitment must be 32-byte hex (64 chars)');
+  }
+  // certificationTxId may be null if indexer lag prevented capture
+  if (r.certificationTxId !== null) {
+    if (typeof r.certificationTxId !== 'string' || !isHex(r.certificationTxId) || r.certificationTxId.length < 16) {
+      throw new Error('certificationTxId must be a valid hex string or null');
+    }
+  }
+  if (!isValidIsoTimestamp(r.certifiedAt)) {
+    throw new Error('certifiedAt must be a valid ISO-8601 UTC timestamp');
+  }
+  if (r.status !== 'finalized') {
+    throw new Error("status must be 'finalized'");
+  }
+  return {
+    schema: INVENTORY_CERTIFICATION_RECEIPT_SCHEMA,
+    network: 'preprod',
+    contractAddress: (r.contractAddress as string).trim(),
+    certifierKey: (r.certifierKey as string).toLowerCase(),
+    memberCredential: (r.memberCredential as string).toLowerCase(),
+    commitment: (r.commitment as string).toLowerCase(),
+    certificationTxId: r.certificationTxId ? (r.certificationTxId as string).toLowerCase() : null,
+    certifiedAt: r.certifiedAt as string,
+    status: 'finalized',
+  };
+}
+
+export function buildInventoryCertificationReceipt(params: {
+  contractAddress: string;
+  certifierKey: string;      // 32-byte hex on-chain key
+  memberCredential: string;  // 32-byte hex
+  commitment: string;        // 32-byte hex
+  certificationTxId?: string | null;
+  now?: Date;
+}): InventoryCertificationReceipt {
+  if (!isHex(params.certifierKey, 32)) throw new Error('certifierKey must be 32-byte hex (64 chars)');
+  if (!isHex(params.memberCredential, 32)) throw new Error('memberCredential must be 32-byte hex (64 chars)');
+  if (!isHex(params.commitment, 32)) throw new Error('commitment must be 32-byte hex (64 chars)');
+  const now = params.now ?? new Date();
+  return validateInventoryCertificationReceipt({
+    schema: INVENTORY_CERTIFICATION_RECEIPT_SCHEMA,
+    network: 'preprod',
+    contractAddress: params.contractAddress.trim(),
+    certifierKey: params.certifierKey.toLowerCase(),
+    memberCredential: params.memberCredential.toLowerCase(),
+    commitment: params.commitment.toLowerCase(),
+    certificationTxId: params.certificationTxId ? params.certificationTxId.toLowerCase() : null,
+    certifiedAt: now.toISOString(),
+    status: 'finalized',
+  });
 }
 
 export function validateEncryptedEnvelope(envelope: unknown): EncryptedEnvelope {

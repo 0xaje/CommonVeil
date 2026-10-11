@@ -38,10 +38,16 @@ export interface CommonVeilPublicState {
 export interface CommonVeilContractSession {
   readonly publicState: CommonVeilPublicState;
   /**
-   * Internal narrow helper to verify if a member credential is admitted
+   * Narrow helper to verify if a member credential is admitted
    * in the attached contract's memberCredentials set.
    */
   readonly hasMemberCredential: (memberCredentialBytes: Uint8Array) => boolean;
+  /**
+   * Narrow helper to verify if an inventory commitment is recorded
+   * in the attached contract's inventoryCommitments set.
+   * Used by the Certifier workflow to detect duplicate certification.
+   */
+  readonly hasInventoryCommitment: (commitmentBytes: Uint8Array) => boolean;
 }
 
 export type ContractSessionErrorCode =
@@ -188,6 +194,10 @@ export async function queryCommonVeilContract(
     hasMemberCredential: (memberCredentialBytes: Uint8Array): boolean => {
       requireExactly32Bytes(memberCredentialBytes, 'memberCredential');
       return ledger.memberCredentials.member(memberCredentialBytes);
+    },
+    hasInventoryCommitment: (commitmentBytes: Uint8Array): boolean => {
+      requireExactly32Bytes(commitmentBytes, 'inventoryCommitment');
+      return ledger.inventoryCommitments.member(commitmentBytes);
     },
   };
 }
