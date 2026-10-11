@@ -18,6 +18,14 @@ import {
   MEMBER_ADMISSION_SCHEMA,
   type MemberAdmissionPackage,
   validateMemberAdmissionPackage,
+  INVENTORY_REPORT_SCHEMA,
+  CERTIFICATION_REQUEST_SCHEMA,
+  type CertificationRequestPackage,
+  validateCertificationRequestPackage,
+  type ValidatedLiveInventoryReport,
+  validateLiveInventoryReport,
+  buildCertificationRequestPackage,
+  assertNoSensitiveFields,
 } from './role-packages';
 
 export type RoleType = 'registrar' | 'certifier' | 'member';
@@ -1881,4 +1889,250 @@ export function mapAdmissionError(error: unknown): string {
   }
 
   return 'The member admission transaction could not be completed. Check the network connection and try again.';
+}
+
+// ============================================================================
+// Member Live Inventory Import & Certification Request Export Pure Helpers
+// ============================================================================
+
+export interface MemberInventoryUiState {
+  readonly selectedFileName: string | null;
+  readonly selectedFileSize: number | null;
+  readonly importedReport: ValidatedLiveInventoryReport | null;
+  readonly certificationRequest: CertificationRequestPackage | null;
+  readonly errorMessage: string | null;
+  readonly noticeMessage: string | null;
+}
+
+export const INITIAL_MEMBER_INVENTORY_UI_STATE: MemberInventoryUiState = {
+  selectedFileName: null,
+  selectedFileSize: null,
+  importedReport: null,
+  certificationRequest: null,
+  errorMessage: null,
+  noticeMessage: null,
+};
+
+/**
+ * Pure helper checking if Member live-inventory certification request export can be initiated.
+ * Requires all of:
+ * - Connected 1AM wallet on Midnight Preprod
+ * - Attached compatible CommonVeil contract
+ * - Active Member secret and salt in volatile memory
+ * - Locally derived Member credential
+ * - Member backup status is recovery-tested
+ * - Validated live inventory report imported
+ */
+export function canExportCertificationRequest(params: {
+  readonly isConnected: boolean;
+  readonly attachedContractAddress: string | null;
+  readonly hasSecret: boolean;
+  readonly hasSalt?: boolean;
+  readonly memberCredentialHex: string | null;
+  readonly backupRecoveryStatus: BackupRecoveryStatus;
+  readonly importedInventory: ValidatedLiveInventoryReport | null;
+}): boolean {
+  return (
+    params.isConnected &&
+    typeof params.attachedContractAddress === 'string' &&
+    params.attachedContractAddress.trim().length > 0 &&
+    params.hasSecret &&
+    params.hasSalt !== false &&
+    typeof params.memberCredentialHex === 'string' &&
+    isHex(params.memberCredentialHex, 32) &&
+    params.backupRecoveryStatus === 'recovery-tested' &&
+    params.importedInventory !== null
+  );
+}
+
+export interface CertificationRequestPrerequisites {
+  readonly isWalletConnected: boolean;
+  readonly isContractAttached: boolean;
+  readonly isMemberIdentityActive: boolean;
+  readonly isBackupRecoveryTested: boolean;
+  readonly isLiveInventoryImported: boolean;
+  readonly canExport: boolean;
+  readonly missingPrerequisites: readonly string[];
+}
+
+export function checkCertificationRequestPrerequisites(params: {
+  readonly isConnected: boolean;
+  readonly attachedContractAddress: string | null;
+  readonly hasSecret: boolean;
+  readonly hasSalt?: boolean;
+  readonly memberCredentialHex: string | null;
+  readonly backupRecoveryStatus: BackupRecoveryStatus;
+  readonly importedInventory: ValidatedLiveInventoryReport | null;
+}): CertificationRequestPrerequisites {
+  const isWalletConnected = params.isConnected;
+  const isContractAttached =
+    typeof params.attachedContractAddress === 'string' &&
+    params.attachedContractAddress.trim().length > 0;
+  const isMemberIdentityActive =
+    params.hasSecret &&
+    params.hasSalt !== false &&
+    typeof params.memberCredentialHex === 'string' &&
+    isHex(params.memberCredentialHex, 32);
+  const isBackupRecoveryTested = params.backupRecoveryStatus === 'recovery-tested';
+  const isLiveInventoryImported = params.importedInventory !== null;
+
+  const missing: string[] = [];
+  if (!isWalletConnected) missing.push('Connected 1AM wallet on Preprod');
+  if (!isContractAttached) missing.push('Attached compatible CommonVeil contract');
+  if (!isMemberIdentityActive) missing.push('Active Member secret and salt in session memory');
+  if (!isBackupRecoveryTested) missing.push('Recovery-tested Member encrypted backup');
+  if (!isLiveInventoryImported) missing.push('Validated genuine live inventory report');
+
+  return {
+    isWalletConnected,
+    isContractAttached,
+    isMemberIdentityActive,
+    isBackupRecoveryTested,
+    isLiveInventoryImported,
+    canExport: missing.length === 0,
+    missingPrerequisites: missing,
+  };
+}
+
+/**
+ * Pure state reducer when member inventory is reset due to:
+ * - contract change
+ * - wallet disconnect
+ * - session lock
+ * - member identity replacement
+ * - role change/unmount
+ */
+export function onMemberInventoryReset(
+  _prevState?: MemberInventoryUiState,
+): MemberInventoryUiState {
+  return INITIAL_MEMBER_INVENTORY_UI_STATE;
+}
+
+/**
+ * Pure state reducer when a valid live inventory report is imported.
+ */
+export function onMemberInventoryImported(
+  prevState: MemberInventoryUiState,
+  params: {
+    readonly fileName: string;
+    readonly fileSize: number;
+    readonly report: ValidatedLiveInventoryReport;
+    readonly certificationRequest: CertificationRequestPackage;
+  },
+): MemberInventoryUiState {
+  return {
+    ...prevState,
+    selectedFileName: params.fileName,
+    selectedFileSize: params.fileSize,
+    importedReport: params.report,
+    certificationRequest: params.certificationRequest,
+    errorMessage: null,
+    noticeMessage: 'Live inventory report successfully validated and bound to attached contract and member credential.',
+  };
+}
+
+/**
+ * Pure state reducer when member inventory import or validation fails.
+ * Invalidates imported report and certification request.
+ */
+export function onMemberInventoryError(
+  prevState: MemberInventoryUiState,
+  errorMessage: string,
+): MemberInventoryUiState {
+  return {
+    ...prevState,
+    importedReport: null,
+    certificationRequest: null,
+    errorMessage,
+    noticeMessage: null,
+  };
+}
+
+/**
+ * Pure sanitizer for inventory report and certification request errors.
+ * Never leaks raw file paths, internal exception details, stack traces, or cryptographic material.
+ */
+export function mapInventoryReportError(error: unknown): string {
+  if (!error) {
+    return 'The inventory report could not be validated. Check the file and try again.';
+  }
+
+  const raw = (
+    error instanceof Error
+      ? error.message
+      : typeof error === 'string'
+        ? error
+        : typeof (error as any)?.message === 'string'
+          ? (error as any).message
+          : ''
+  ).toLowerCase();
+
+  if (
+    raw.includes('secret') ||
+    raw.includes('salt') ||
+    raw.includes('passphrase') ||
+    raw.includes('password') ||
+    raw.includes('seed') ||
+    raw.includes('privatekey') ||
+    raw.includes('private_key') ||
+    raw.includes('forbidden sensitive') ||
+    raw.includes('sensitive property') ||
+    raw.includes('sensitive data')
+  ) {
+    return 'The selected inventory report contains forbidden sensitive or private data and was rejected.';
+  }
+
+  if (raw.includes('syntaxerror') || raw.includes('unexpected token') || (raw.includes('json') && !raw.includes('.json'))) {
+    return 'The selected file is not valid JSON.';
+  }
+
+  if (raw.includes('read') || raw.includes('file')) {
+    return 'Could not read the selected inventory file.';
+  }
+
+  if (raw.includes('invalid inventory schema') || raw.includes('commonveil.inventory/v1')) {
+    return "Invalid inventory report schema: expected 'commonveil.inventory/v1'.";
+  }
+
+  if (raw.includes('provenance') || raw.includes('live-host-scan')) {
+    return "Invalid inventory provenance: only genuine 'live-host-scan' reports from 'npm run scan' are accepted.";
+  }
+
+  if (raw.includes('status') || raw.includes('detected')) {
+    return "Inventory report status must be 'detected'. Scans where no affected package was detected cannot generate a certification request.";
+  }
+
+  if (raw.includes('product')) {
+    return 'Inventory report must specify a valid non-empty product identifier.';
+  }
+
+  if (raw.includes('rawversion') || raw.includes('missing version') || raw.includes('tuple integers')) {
+    return 'Inventory report version information is invalid or missing.';
+  }
+
+  if (raw.includes('normalized version mismatch')) {
+    return 'Inventory report normalized version does not match the major.minor.patch version tuple.';
+  }
+
+  if (raw.includes('measurementdigest') || raw.includes('digest mismatch')) {
+    return 'Inventory report measurement digest is invalid or does not match product and version.';
+  }
+
+  if (raw.includes('observedat')) {
+    return 'Inventory report observation timestamp is invalid or missing.';
+  }
+
+  if (raw.includes('contract') || raw.includes('attach')) {
+    return 'Attach to a compatible CommonVeil contract before exporting a certification request.';
+  }
+
+  if (raw.includes('credential') || raw.includes('identity')) {
+    return 'Active Member identity in session memory is required.';
+  }
+
+  if (raw.includes('backup') || raw.includes('recovery')) {
+    return 'Member encrypted backup must be recovery-tested before exporting a certification request.';
+  }
+
+  return 'The inventory report could not be validated. Check the file and try again.';
 }

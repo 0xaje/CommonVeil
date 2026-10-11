@@ -46,6 +46,7 @@ export interface MemberAdmissionPackage {
 
 export interface CertificationRequestPackage {
   readonly schema: typeof CERTIFICATION_REQUEST_SCHEMA;
+  readonly network: 'preprod';
   readonly contractAddress: string;
   readonly memberCredential: string; // 32 bytes hex (64 chars)
   readonly provenance: SupportedProvenance;
@@ -270,6 +271,7 @@ export async function buildCertificationRequestFromInventoryReport(
 
   return {
     schema: CERTIFICATION_REQUEST_SCHEMA,
+    network: 'preprod',
     contractAddress,
     memberCredential: options.memberCredential.toLowerCase(),
     provenance: inventoryReport.provenance,
@@ -286,11 +288,173 @@ export async function buildCertificationRequestFromInventoryReport(
   };
 }
 
+export interface ValidatedLiveInventoryReport {
+  readonly schema: typeof INVENTORY_REPORT_SCHEMA;
+  readonly provenance: 'live-host-scan';
+  readonly status: 'detected';
+  readonly product: string;
+  readonly rawVersion: string;
+  readonly version: VersionTuple;
+  readonly normalizedVersion: string;
+  readonly measurementDigest: string;
+  readonly observedAt: string;
+}
+
+export const FORBIDDEN_SENSITIVE_PATTERNS = [
+  'secret',
+  'salt',
+  'passphrase',
+  'password',
+  'seed',
+  'privatekey',
+  'private_key',
+  'privkey',
+  'backup',
+  'walletseed',
+  'wallet_seed',
+] as const;
+
+export function assertNoSensitiveFields(obj: unknown, path: string = ''): void {
+  if (!obj || typeof obj !== 'object') return;
+  for (const [key, value] of Object.entries(obj)) {
+    const lowerKey = key.toLowerCase();
+    for (const pattern of FORBIDDEN_SENSITIVE_PATTERNS) {
+      if (lowerKey.includes(pattern)) {
+        throw new Error(`Inventory report contains forbidden sensitive property '${path ? `${path}.${key}` : key}'.`);
+      }
+    }
+    if (typeof value === 'string') {
+      const lowerVal = value.toLowerCase();
+      for (const phrase of ['wallet seed', 'private key', 'backup password', 'secret salt']) {
+        if (lowerVal.includes(phrase)) {
+          throw new Error(`Inventory report contains forbidden sensitive data in '${path ? `${path}.${key}` : key}'.`);
+        }
+      }
+    }
+    if (value && typeof value === 'object') {
+      assertNoSensitiveFields(value, path ? `${path}.${key}` : key);
+    }
+  }
+}
+
+export async function validateLiveInventoryReport(report: unknown): Promise<ValidatedLiveInventoryReport> {
+  if (!report || typeof report !== 'object' || Array.isArray(report)) {
+    throw new Error('Inventory report must be a JSON object.');
+  }
+
+  assertNoSensitiveFields(report);
+
+  const r = report as Record<string, unknown>;
+
+  if (r.schema !== INVENTORY_REPORT_SCHEMA) {
+    throw new Error(`Invalid inventory schema: expected '${INVENTORY_REPORT_SCHEMA}', received '${String(r.schema)}'.`);
+  }
+
+  if (r.provenance !== 'live-host-scan') {
+    throw new Error(`Invalid inventory provenance: expected 'live-host-scan', received '${String(r.provenance)}'.`);
+  }
+
+  if (r.status !== 'detected') {
+    throw new Error(`Inventory report status must be 'detected', received '${String(r.status)}'.`);
+  }
+
+  if (typeof r.product !== 'string' || r.product.trim().length === 0) {
+    throw new Error('Inventory report product must be a non-empty string.');
+  }
+  const product = r.product.trim();
+
+  if (!r.version || typeof r.version !== 'object' || Array.isArray(r.version)) {
+    throw new Error('Inventory report missing version object.');
+  }
+  const v = r.version as Record<string, unknown>;
+  if (typeof v.raw !== 'string' || v.raw.trim().length === 0) {
+    throw new Error('Inventory report rawVersion must be a non-empty string.');
+  }
+  if (typeof v.normalized !== 'string' || v.normalized.trim().length === 0) {
+    throw new Error('Inventory report normalized version must be a non-empty string.');
+  }
+  if (!isValidVersionTuple(v)) {
+    throw new Error('Inventory report version tuple integers must be safe non-negative integers.');
+  }
+
+  const derivedTupleString = `${v.major}.${v.minor}.${v.patch}`;
+  if (v.normalized !== derivedTupleString) {
+    throw new Error(
+      `Inventory report normalized version mismatch: normalized '${v.normalized}' != derived tuple '${derivedTupleString}'.`
+    );
+  }
+
+  if (!r.measurementDigest || !isHex(r.measurementDigest, 32)) {
+    throw new Error('Inventory report measurementDigest must be a 32-byte hex string (64 characters).');
+  }
+
+  const expectedDigest = await computeMeasurementDigest(product, derivedTupleString);
+  if ((r.measurementDigest as string).toLowerCase() !== expectedDigest.toLowerCase()) {
+    throw new Error(
+      `Inventory report measurementDigest mismatch: expected '${expectedDigest}', got '${String(r.measurementDigest)}'.`
+    );
+  }
+
+  if (!isValidIsoTimestamp(r.observedAt)) {
+    throw new Error('Inventory report observedAt must be a valid ISO-8601 UTC timestamp.');
+  }
+
+  return {
+    schema: INVENTORY_REPORT_SCHEMA,
+    provenance: 'live-host-scan',
+    status: 'detected',
+    product,
+    rawVersion: v.raw,
+    version: {
+      major: v.major,
+      minor: v.minor,
+      patch: v.patch,
+    },
+    normalizedVersion: derivedTupleString,
+    measurementDigest: (r.measurementDigest as string).toLowerCase(),
+    observedAt: r.observedAt,
+  };
+}
+
+export function buildCertificationRequestPackage(params: {
+  inventoryReport: ValidatedLiveInventoryReport;
+  contractAddress: string;
+  memberCredentialHex: string;
+  now?: Date;
+}): CertificationRequestPackage {
+  const contractAddress = validateContractAddress(params.contractAddress);
+  if (!isHex(params.memberCredentialHex, 32)) {
+    throw new Error('memberCredential must be a 32-byte hex string (64 characters).');
+  }
+  const now = params.now ?? new Date();
+
+  return {
+    schema: CERTIFICATION_REQUEST_SCHEMA,
+    network: 'preprod',
+    contractAddress,
+    memberCredential: params.memberCredentialHex.trim().toLowerCase(),
+    provenance: 'live-host-scan',
+    product: params.inventoryReport.product,
+    rawVersion: params.inventoryReport.rawVersion,
+    version: {
+      major: params.inventoryReport.version.major,
+      minor: params.inventoryReport.version.minor,
+      patch: params.inventoryReport.version.patch,
+    },
+    measurementDigest: params.inventoryReport.measurementDigest.toLowerCase(),
+    observedAt: params.inventoryReport.observedAt,
+    createdAt: now.toISOString(),
+  };
+}
+
 export async function validateCertificationRequestPackage(pkg: unknown): Promise<CertificationRequestPackage> {
   if (!pkg || typeof pkg !== 'object') throw new Error('Package must be an object');
   const p = pkg as Record<string, unknown>;
   if (p.schema !== CERTIFICATION_REQUEST_SCHEMA) {
     throw new Error(`Invalid schema: expected '${CERTIFICATION_REQUEST_SCHEMA}', received '${String(p.schema)}'`);
+  }
+  if (p.network !== undefined && p.network !== 'preprod') {
+    throw new Error("Invalid network: expected 'preprod'");
   }
   const contractAddress = validateContractAddress(p.contractAddress);
   if (!isHex(p.memberCredential, 32)) {
@@ -326,6 +490,7 @@ export async function validateCertificationRequestPackage(pkg: unknown): Promise
 
   return {
     schema: CERTIFICATION_REQUEST_SCHEMA,
+    network: 'preprod',
     contractAddress,
     memberCredential: (p.memberCredential as string).toLowerCase(),
     provenance: p.provenance,

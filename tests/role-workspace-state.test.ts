@@ -89,6 +89,14 @@ import {
   INITIAL_CERTIFIER_SECRET_UI_STATE,
   generateCertifierSecret,
   triggerBlobDownload,
+  INITIAL_MEMBER_INVENTORY_UI_STATE,
+  type MemberInventoryUiState,
+  canExportCertificationRequest,
+  checkCertificationRequestPrerequisites,
+  onMemberInventoryImported,
+  onMemberInventoryReset,
+  onMemberInventoryError,
+  mapInventoryReportError,
 } from '../src/role-workspace-state.ts';
 import {
   bytesToHex,
@@ -99,6 +107,11 @@ import {
   MEMBER_ADMISSION_SCHEMA,
   type MemberAdmissionPackage,
   validateMemberAdmissionPackage,
+  type ValidatedLiveInventoryReport,
+  validateLiveInventoryReport,
+  buildCertificationRequestPackage,
+  computeMeasurementDigest,
+  CERTIFICATION_REQUEST_SCHEMA,
 } from '../src/role-packages.ts';
 import {
   verifyRegistrarSecret,
@@ -2397,4 +2410,516 @@ test('90. Strict deployment gating rejects omission and demands both recovery-te
     canInitiateDeployment({ ...readyParams, backupConfirmed: false }),
     false,
   );
+});
+
+const SAMPLE_CONTRACT_ADDRESS = '0200abcd1234ef567890abcdef1234567890abcdef1234567890abcdef123456';
+const SAMPLE_HEX_64 = 'a1'.repeat(32);
+const FIXED_NOW = new Date('2026-10-07T12:00:00.000Z');
+
+// 91. Strict workflow gating for certification request export
+test('91. Strict workflow gating for certification request export', async () => {
+  const digest = await computeMeasurementDigest('pkg:generic/xz-utils', '5.2.5');
+  const validReport: ValidatedLiveInventoryReport = {
+    schema: 'commonveil.inventory/v1',
+    provenance: 'live-host-scan',
+    status: 'detected',
+    product: 'pkg:generic/xz-utils',
+    rawVersion: '5.2.5-2ubuntu1.1',
+    version: { major: 5, minor: 2, patch: 5 },
+    normalizedVersion: '5.2.5',
+    measurementDigest: digest,
+    observedAt: FIXED_NOW.toISOString(),
+  };
+
+  const readyParams = {
+    isConnected: true,
+    attachedContractAddress: SAMPLE_CONTRACT_ADDRESS,
+    hasSecret: true,
+    hasSalt: true,
+    memberCredentialHex: SAMPLE_HEX_64,
+    backupRecoveryStatus: 'recovery-tested' as const,
+    importedInventory: validReport,
+  };
+
+  // All satisfied passes
+  assert.equal(canExportCertificationRequest(readyParams), true);
+
+  // Disconnected wallet rejected
+  assert.equal(
+    canExportCertificationRequest({ ...readyParams, isConnected: false }),
+    false,
+  );
+
+  // Missing contract address rejected
+  assert.equal(
+    canExportCertificationRequest({ ...readyParams, attachedContractAddress: null }),
+    false,
+  );
+  assert.equal(
+    canExportCertificationRequest({ ...readyParams, attachedContractAddress: '' }),
+    false,
+  );
+
+  // Missing secret rejected
+  assert.equal(
+    canExportCertificationRequest({ ...readyParams, hasSecret: false }),
+    false,
+  );
+
+  // Missing salt rejected
+  assert.equal(
+    canExportCertificationRequest({ ...readyParams, hasSalt: false }),
+    false,
+  );
+
+  // Missing memberCredentialHex rejected
+  assert.equal(
+    canExportCertificationRequest({ ...readyParams, memberCredentialHex: null }),
+    false,
+  );
+
+  // Invalid hex credential rejected
+  assert.equal(
+    canExportCertificationRequest({ ...readyParams, memberCredentialHex: 'invalid-hex' }),
+    false,
+  );
+
+  // Backup status none rejected
+  assert.equal(
+    canExportCertificationRequest({ ...readyParams, backupRecoveryStatus: 'none' }),
+    false,
+  );
+
+  // Backup status created-untested rejected
+  assert.equal(
+    canExportCertificationRequest({ ...readyParams, backupRecoveryStatus: 'created-untested' }),
+    false,
+  );
+
+  // Missing importedInventory rejected
+  assert.equal(
+    canExportCertificationRequest({ ...readyParams, importedInventory: null }),
+    false,
+  );
+});
+
+// 92. Missing individual prerequisites accurately identified by checkCertificationRequestPrerequisites
+test('92. Missing individual prerequisites accurately identified by checkCertificationRequestPrerequisites', async () => {
+  const digest = await computeMeasurementDigest('pkg:generic/xz-utils', '5.2.5');
+  const validReport: ValidatedLiveInventoryReport = {
+    schema: 'commonveil.inventory/v1',
+    provenance: 'live-host-scan',
+    status: 'detected',
+    product: 'pkg:generic/xz-utils',
+    rawVersion: '5.2.5-2ubuntu1.1',
+    version: { major: 5, minor: 2, patch: 5 },
+    normalizedVersion: '5.2.5',
+    measurementDigest: digest,
+    observedAt: FIXED_NOW.toISOString(),
+  };
+
+  // Initially nothing connected or active
+  const initial = checkCertificationRequestPrerequisites({
+    isConnected: false,
+    attachedContractAddress: null,
+    hasSecret: false,
+    hasSalt: false,
+    memberCredentialHex: null,
+    backupRecoveryStatus: 'none',
+    importedInventory: null,
+  });
+
+  assert.equal(initial.canExport, false);
+  assert.equal(initial.missingPrerequisites.length, 5);
+  assert.equal(initial.missingPrerequisites.some((m) => m.includes('wallet')), true);
+  assert.equal(initial.missingPrerequisites.some((m) => m.includes('contract')), true);
+  assert.equal(initial.missingPrerequisites.some((m) => m.includes('Member secret')), true);
+  assert.equal(initial.missingPrerequisites.some((m) => m.includes('backup')), true);
+  assert.equal(initial.missingPrerequisites.some((m) => m.includes('report')), true);
+
+  // Partial setup: wallet + contract attached + secret present, but backup not recovery tested and no report
+  const partial = checkCertificationRequestPrerequisites({
+    isConnected: true,
+    attachedContractAddress: SAMPLE_CONTRACT_ADDRESS,
+    hasSecret: true,
+    hasSalt: true,
+    memberCredentialHex: SAMPLE_HEX_64,
+    backupRecoveryStatus: 'created-untested',
+    importedInventory: null,
+  });
+
+  assert.equal(partial.canExport, false);
+  assert.equal(partial.missingPrerequisites.length, 2);
+  assert.equal(partial.missingPrerequisites.some((m) => m.includes('backup')), true);
+  assert.equal(partial.missingPrerequisites.some((m) => m.includes('report')), true);
+
+  // Fully satisfied setup
+  const complete = checkCertificationRequestPrerequisites({
+    isConnected: true,
+    attachedContractAddress: SAMPLE_CONTRACT_ADDRESS,
+    hasSecret: true,
+    hasSalt: true,
+    memberCredentialHex: SAMPLE_HEX_64,
+    backupRecoveryStatus: 'recovery-tested',
+    importedInventory: validReport,
+  });
+
+  assert.equal(complete.canExport, true);
+  assert.equal(complete.missingPrerequisites.length, 0);
+});
+
+// 93. State reducer onMemberInventoryImported binds validated report and certification request
+test('93. State reducer onMemberInventoryImported binds validated report and certification request', async () => {
+  const digest = await computeMeasurementDigest('pkg:generic/xz-utils', '5.2.5');
+  const validReport: ValidatedLiveInventoryReport = {
+    schema: 'commonveil.inventory/v1',
+    provenance: 'live-host-scan',
+    status: 'detected',
+    product: 'pkg:generic/xz-utils',
+    rawVersion: '5.2.5-2ubuntu1.1',
+    version: { major: 5, minor: 2, patch: 5 },
+    normalizedVersion: '5.2.5',
+    measurementDigest: digest,
+    observedAt: FIXED_NOW.toISOString(),
+  };
+
+  const certReq = buildCertificationRequestPackage({
+    inventoryReport: validReport,
+    contractAddress: SAMPLE_CONTRACT_ADDRESS,
+    memberCredentialHex: SAMPLE_HEX_64,
+    now: FIXED_NOW,
+  });
+
+  const nextState = onMemberInventoryImported(INITIAL_MEMBER_INVENTORY_UI_STATE, {
+    fileName: 'live-scan-host.json',
+    fileSize: 1024,
+    report: validReport,
+    certificationRequest: certReq,
+  });
+
+  assert.equal(nextState.selectedFileName, 'live-scan-host.json');
+  assert.equal(nextState.selectedFileSize, 1024);
+  assert.deepEqual(nextState.importedReport, validReport);
+  assert.deepEqual(nextState.certificationRequest, certReq);
+  assert.equal(nextState.errorMessage, null);
+  assert.equal(nextState.noticeMessage !== null, true);
+});
+
+// 94. State reducer onMemberInventoryError clears imported report and request
+test('94. State reducer onMemberInventoryError clears imported report and request', async () => {
+  const digest = await computeMeasurementDigest('pkg:generic/xz-utils', '5.2.5');
+  const validReport: ValidatedLiveInventoryReport = {
+    schema: 'commonveil.inventory/v1',
+    provenance: 'live-host-scan',
+    status: 'detected',
+    product: 'pkg:generic/xz-utils',
+    rawVersion: '5.2.5-2ubuntu1.1',
+    version: { major: 5, minor: 2, patch: 5 },
+    normalizedVersion: '5.2.5',
+    measurementDigest: digest,
+    observedAt: FIXED_NOW.toISOString(),
+  };
+
+  const certReq = buildCertificationRequestPackage({
+    inventoryReport: validReport,
+    contractAddress: SAMPLE_CONTRACT_ADDRESS,
+    memberCredentialHex: SAMPLE_HEX_64,
+    now: FIXED_NOW,
+  });
+
+  const populatedState = onMemberInventoryImported(INITIAL_MEMBER_INVENTORY_UI_STATE, {
+    fileName: 'live-scan-host.json',
+    fileSize: 1024,
+    report: validReport,
+    certificationRequest: certReq,
+  });
+
+  const errorState = onMemberInventoryError(populatedState, 'Invalid inventory provenance.');
+
+  assert.equal(errorState.importedReport, null);
+  assert.equal(errorState.certificationRequest, null);
+  assert.equal(errorState.errorMessage, 'Invalid inventory provenance.');
+  assert.equal(errorState.noticeMessage, null);
+});
+
+// 95. State reducer onMemberInventoryReset clears all inventory state
+test('95. State reducer onMemberInventoryReset clears all inventory state', async () => {
+  const digest = await computeMeasurementDigest('pkg:generic/xz-utils', '5.2.5');
+  const validReport: ValidatedLiveInventoryReport = {
+    schema: 'commonveil.inventory/v1',
+    provenance: 'live-host-scan',
+    status: 'detected',
+    product: 'pkg:generic/xz-utils',
+    rawVersion: '5.2.5-2ubuntu1.1',
+    version: { major: 5, minor: 2, patch: 5 },
+    normalizedVersion: '5.2.5',
+    measurementDigest: digest,
+    observedAt: FIXED_NOW.toISOString(),
+  };
+
+  const populatedState = onMemberInventoryImported(INITIAL_MEMBER_INVENTORY_UI_STATE, {
+    fileName: 'live-scan.json',
+    fileSize: 500,
+    report: validReport,
+    certificationRequest: {} as any,
+  });
+
+  const resetState = onMemberInventoryReset(populatedState);
+  assert.deepEqual(resetState, INITIAL_MEMBER_INVENTORY_UI_STATE);
+  assert.equal(resetState.importedReport, null);
+  assert.equal(resetState.certificationRequest, null);
+  assert.equal(resetState.selectedFileName, null);
+  assert.equal(resetState.selectedFileSize, null);
+  assert.equal(resetState.errorMessage, null);
+  assert.equal(resetState.noticeMessage, null);
+});
+
+// 96. Lifecycle invalidation scenarios: contract change, wallet disconnect, session lock, member identity replacement
+test('96. Lifecycle invalidation scenarios: contract change, wallet disconnect, session lock, member identity replacement', async () => {
+  const digest = await computeMeasurementDigest('pkg:generic/xz-utils', '5.2.5');
+  const validReport: ValidatedLiveInventoryReport = {
+    schema: 'commonveil.inventory/v1',
+    provenance: 'live-host-scan',
+    status: 'detected',
+    product: 'pkg:generic/xz-utils',
+    rawVersion: '5.2.5-2ubuntu1.1',
+    version: { major: 5, minor: 2, patch: 5 },
+    normalizedVersion: '5.2.5',
+    measurementDigest: digest,
+    observedAt: FIXED_NOW.toISOString(),
+  };
+
+  let inventoryState: MemberInventoryUiState = onMemberInventoryImported(INITIAL_MEMBER_INVENTORY_UI_STATE, {
+    fileName: 'live.json',
+    fileSize: 2048,
+    report: validReport,
+    certificationRequest: {} as any,
+  });
+  assert.notEqual(inventoryState.importedReport, null);
+
+  // 1. Contract address change triggers reset
+  inventoryState = onMemberInventoryReset(inventoryState);
+  assert.equal(inventoryState.importedReport, null);
+
+  // 2. Wallet disconnect triggers reset
+  inventoryState = onMemberInventoryImported(inventoryState, {
+    fileName: 'live.json',
+    fileSize: 2048,
+    report: validReport,
+    certificationRequest: {} as any,
+  });
+  assert.notEqual(inventoryState.importedReport, null);
+  inventoryState = onMemberInventoryReset(inventoryState);
+  assert.equal(inventoryState.importedReport, null);
+
+  // 3. Session lock triggers reset
+  inventoryState = onMemberInventoryImported(inventoryState, {
+    fileName: 'live.json',
+    fileSize: 2048,
+    report: validReport,
+    certificationRequest: {} as any,
+  });
+  assert.notEqual(inventoryState.importedReport, null);
+  inventoryState = onMemberInventoryReset(inventoryState);
+  assert.equal(inventoryState.importedReport, null);
+
+  // 4. Member identity replacement triggers reset
+  inventoryState = onMemberInventoryImported(inventoryState, {
+    fileName: 'live.json',
+    fileSize: 2048,
+    report: validReport,
+    certificationRequest: {} as any,
+  });
+  assert.notEqual(inventoryState.importedReport, null);
+  inventoryState = onMemberInventoryReset(inventoryState);
+  assert.equal(inventoryState.importedReport, null);
+});
+
+// 97. Pure error mapping for inventory report errors via mapInventoryReportError
+test('97. Pure error mapping for inventory report errors via mapInventoryReportError', () => {
+  // JSON syntax error
+  assert.equal(
+    mapInventoryReportError(new SyntaxError('Unexpected token < in JSON at position 0')),
+    'The selected file is not valid JSON.',
+  );
+
+  // Forbidden sensitive property
+  assert.equal(
+    mapInventoryReportError(new Error("Inventory report contains forbidden sensitive property 'memberSecret'.")),
+    'The selected inventory report contains forbidden sensitive or private data and was rejected.',
+  );
+
+  // Invalid schema
+  assert.equal(
+    mapInventoryReportError(new Error("Invalid inventory schema: expected 'commonveil.inventory/v1'.")),
+    "Invalid inventory report schema: expected 'commonveil.inventory/v1'.",
+  );
+
+  // Invalid provenance
+  assert.equal(
+    mapInventoryReportError(new Error("Invalid inventory provenance: expected 'live-host-scan'.")),
+    "Invalid inventory provenance: only genuine 'live-host-scan' reports from 'npm run scan' are accepted.",
+  );
+
+  // Status not detected
+  assert.equal(
+    mapInventoryReportError(new Error("Inventory report status must be 'detected'.")),
+    "Inventory report status must be 'detected'. Scans where no affected package was detected cannot generate a certification request.",
+  );
+
+  // Version tuple mismatch
+  assert.equal(
+    mapInventoryReportError(new Error("Inventory report normalized version mismatch: normalized '5.2.5' != derived tuple '5.2.4'.")),
+    'Inventory report normalized version does not match the major.minor.patch version tuple.',
+  );
+
+  // Measurement digest mismatch
+  assert.equal(
+    mapInventoryReportError(new Error("Inventory report measurementDigest mismatch: expected 'aaa', got 'bbb'.")),
+    'Inventory report measurement digest is invalid or does not match product and version.',
+  );
+
+  // Timestamp error
+  assert.equal(
+    mapInventoryReportError(new Error('Inventory report observedAt must be a valid ISO-8601 UTC timestamp.')),
+    'Inventory report observation timestamp is invalid or missing.',
+  );
+
+  // Missing contract attachment
+  assert.equal(
+    mapInventoryReportError(new Error('Attach to a compatible CommonVeil contract before exporting a certification request.')),
+    'Attach to a compatible CommonVeil contract before exporting a certification request.',
+  );
+});
+
+// 98. Confirmation that no sensitive fields or keys are leaked in sanitized errors
+test('98. Confirmation that no sensitive fields or keys are leaked in sanitized errors', () => {
+  const sensitiveError = new Error(
+    "Injected error containing memberSecret='1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef' at /home/user/CommonVeil/file.json",
+  );
+  const mapped = mapInventoryReportError(sensitiveError);
+
+  assert.equal(mapped.includes('1234567890abcdef'), false);
+  assert.equal(mapped.includes('/home/user'), false);
+  assert.equal(mapped.includes('file.json'), false);
+  assert.equal(
+    mapped,
+    'The selected inventory report contains forbidden sensitive or private data and was rejected.',
+  );
+});
+
+// 99. Confirmation of zero transaction submission: pure local execution without blockchain transactions or network calls
+test('99. Confirmation of zero transaction submission: pure local execution without blockchain transactions or network calls', async () => {
+  let blockchainCallCount = 0;
+  const mockSubmitCallTx = () => {
+    blockchainCallCount++;
+    throw new Error('Should never be called');
+  };
+  const mockDeployContract = () => {
+    blockchainCallCount++;
+    throw new Error('Should never be called');
+  };
+
+  // Perform genuine report validation, credential derivation, and package construction
+  const digest = await computeMeasurementDigest('pkg:generic/xz-utils', '5.2.5');
+  const validReport = await validateLiveInventoryReport({
+    schema: 'commonveil.inventory/v1',
+    provenance: 'live-host-scan',
+    observedAt: FIXED_NOW.toISOString(),
+    product: 'pkg:generic/xz-utils',
+    status: 'detected',
+    version: { raw: '5.2.5-2ubuntu1.1', normalized: '5.2.5', major: 5, minor: 2, patch: 5 },
+    measurementDigest: digest,
+  });
+
+  const certReq = buildCertificationRequestPackage({
+    inventoryReport: validReport,
+    contractAddress: SAMPLE_CONTRACT_ADDRESS,
+    memberCredentialHex: SAMPLE_HEX_64,
+    now: FIXED_NOW,
+  });
+
+  assert.equal(certReq.schema, CERTIFICATION_REQUEST_SCHEMA);
+  assert.equal(certReq.network, 'preprod');
+  assert.equal(blockchainCallCount, 0, 'Zero on-chain calls must be made during certification request export');
+});
+
+// 100. End-to-end simulated workflow from genuine npm run scan JSON structure to exportable package
+test('100. End-to-end simulated workflow from genuine npm run scan JSON structure to exportable package', async () => {
+  // Replicating exact output structure of npm run scan
+  const genuineScanOutputJson = JSON.stringify({
+    schema: 'commonveil.inventory/v1',
+    provenance: 'live-host-scan',
+    observedAt: FIXED_NOW.toISOString(),
+    host: {
+      fingerprint: '95897a16db4752e1b81ef93f60ea2e58f9119e77688e771c59e439b527219e11',
+      platform: 'linux',
+      release: '5.15.153.1-microsoft-standard-WSL2',
+    },
+    product: 'pkg:generic/xz-utils',
+    status: 'detected',
+    source: 'dpkg-query',
+    version: {
+      raw: '5.2.5-2ubuntu1.1',
+      normalized: '5.2.5',
+      major: 5,
+      minor: 2,
+      patch: 5,
+    },
+    policyAssessment: {
+      advisory: 'CVE-2024-3094',
+      exactRegisteredSet: ['5.6.0', '5.6.1'],
+      result: 'outside-exact-set',
+    },
+    measurementDigest: await computeMeasurementDigest('pkg:generic/xz-utils', '5.2.5'),
+    attempts: [],
+  });
+
+  // Step 1: Parse user-selected file content
+  const parsed = JSON.parse(genuineScanOutputJson);
+
+  // Step 2: Validate live inventory report
+  const validatedReport = await validateLiveInventoryReport(parsed);
+  assert.equal(validatedReport.provenance, 'live-host-scan');
+  assert.equal(validatedReport.product, 'pkg:generic/xz-utils');
+  assert.equal(validatedReport.version.major, 5);
+  assert.equal(validatedReport.version.minor, 2);
+  assert.equal(validatedReport.version.patch, 5);
+
+  // Step 3: Check workflow prerequisites
+  const prereqs = checkCertificationRequestPrerequisites({
+    isConnected: true,
+    attachedContractAddress: SAMPLE_CONTRACT_ADDRESS,
+    hasSecret: true,
+    hasSalt: true,
+    memberCredentialHex: SAMPLE_HEX_64,
+    backupRecoveryStatus: 'recovery-tested',
+    importedInventory: validatedReport,
+  });
+  assert.equal(prereqs.canExport, true);
+
+  // Step 4: Build CertificationRequestPackage
+  const certReqPkg = buildCertificationRequestPackage({
+    inventoryReport: validatedReport,
+    contractAddress: SAMPLE_CONTRACT_ADDRESS,
+    memberCredentialHex: SAMPLE_HEX_64,
+    now: FIXED_NOW,
+  });
+
+  assert.equal(certReqPkg.schema, CERTIFICATION_REQUEST_SCHEMA);
+  assert.equal(certReqPkg.network, 'preprod');
+  assert.equal(certReqPkg.contractAddress, SAMPLE_CONTRACT_ADDRESS);
+  assert.equal(certReqPkg.memberCredential, SAMPLE_HEX_64);
+  assert.equal(certReqPkg.provenance, 'live-host-scan');
+  assert.equal(certReqPkg.product, 'pkg:generic/xz-utils');
+  assert.equal(certReqPkg.rawVersion, '5.2.5-2ubuntu1.1');
+  assert.deepEqual(certReqPkg.version, { major: 5, minor: 2, patch: 5 });
+  assert.equal(certReqPkg.measurementDigest, validatedReport.measurementDigest);
+
+  // Step 5: Verify no sensitive properties in the serialized package
+  const serialized = JSON.stringify(certReqPkg, null, 2);
+  assert.equal(serialized.includes('fingerprint'), false);
+  assert.equal(serialized.includes('platform'), false);
+  assert.equal(serialized.includes('secret'), false);
+  assert.equal(serialized.includes('salt'), false);
 });

@@ -22,6 +22,10 @@ import {
   decryptAndValidateEnvelope,
   computeMeasurementDigest,
   hexToBytes,
+  INVENTORY_REPORT_SCHEMA,
+  validateLiveInventoryReport,
+  buildCertificationRequestPackage,
+  assertNoSensitiveFields,
 } from '../src/role-packages.ts';
 
 const SAMPLE_HEX_32 = 'a1'.repeat(32);
@@ -588,5 +592,353 @@ test('22. Multibyte Unicode: enforces UTF-8 byte length rather than JavaScript s
   await assert.rejects(
     () => encryptToEnvelope(unicodePayload, VALID_PASSPHRASE),
     /exceeds maximum permitted plaintext limit/,
+  );
+});
+
+// 23. Genuine live inventory report from scan validates strictly
+test('23. Genuine live inventory report from scan validates strictly', async () => {
+  const digest = await computeMeasurementDigest('pkg:generic/xz-utils', '5.2.5');
+  const genuineReport = {
+    schema: 'commonveil.inventory/v1',
+    provenance: 'live-host-scan',
+    observedAt: FIXED_NOW.toISOString(),
+    host: {
+      fingerprint: '95897a16db4752e1b81ef93f60ea2e58f9119e77688e771c59e439b527219e11',
+      platform: 'linux',
+      release: '5.15.153.1-microsoft-standard-WSL2',
+    },
+    product: 'pkg:generic/xz-utils',
+    status: 'detected',
+    source: 'dpkg-query',
+    version: {
+      raw: '5.2.5-2ubuntu1.1',
+      normalized: '5.2.5',
+      major: 5,
+      minor: 2,
+      patch: 5,
+    },
+    policyAssessment: {
+      advisory: 'CVE-2024-3094',
+      exactRegisteredSet: ['5.6.0', '5.6.1'],
+      result: 'outside-exact-set',
+    },
+    measurementDigest: digest,
+    attempts: [],
+  };
+
+  const validated = await validateLiveInventoryReport(genuineReport);
+  assert.equal(validated.schema, 'commonveil.inventory/v1');
+  assert.equal(validated.provenance, 'live-host-scan');
+  assert.equal(validated.status, 'detected');
+  assert.equal(validated.product, 'pkg:generic/xz-utils');
+  assert.equal(validated.rawVersion, '5.2.5-2ubuntu1.1');
+  assert.equal(validated.normalizedVersion, '5.2.5');
+  assert.deepEqual(validated.version, { major: 5, minor: 2, patch: 5 });
+  assert.equal(validated.measurementDigest, digest);
+  assert.equal(validated.observedAt, FIXED_NOW.toISOString());
+  // Ensures host fingerprint and internal extra fields were stripped from the validated report
+  assert.equal('host' in validated, false);
+  assert.equal('policyAssessment' in validated, false);
+});
+
+// 24. Live inventory report with altered measurementDigest is rejected
+test('24. Live inventory report with altered measurementDigest is rejected', async () => {
+  const tamperedDigest = 'ff'.repeat(32);
+  const report = {
+    schema: 'commonveil.inventory/v1',
+    provenance: 'live-host-scan',
+    observedAt: FIXED_NOW.toISOString(),
+    product: 'pkg:generic/xz-utils',
+    status: 'detected',
+    version: {
+      raw: '5.2.5-2ubuntu1.1',
+      normalized: '5.2.5',
+      major: 5,
+      minor: 2,
+      patch: 5,
+    },
+    measurementDigest: tamperedDigest,
+  };
+
+  await assert.rejects(
+    () => validateLiveInventoryReport(report),
+    /Inventory report measurementDigest mismatch/,
+  );
+});
+
+// 25. Non-live provenance strictly rejected in live validator
+test('25. Non-live provenance (controlled-test-vector, fake, or custom) strictly rejected in live validator', async () => {
+  const digest = await computeMeasurementDigest('pkg:generic/xz-utils', '5.6.1');
+  const base = {
+    schema: 'commonveil.inventory/v1',
+    observedAt: FIXED_NOW.toISOString(),
+    product: 'pkg:generic/xz-utils',
+    status: 'detected',
+    version: {
+      raw: '5.6.1',
+      normalized: '5.6.1',
+      major: 5,
+      minor: 6,
+      patch: 1,
+    },
+    measurementDigest: digest,
+  };
+
+  // controlled-test-vector must be rejected by live inventory validator
+  await assert.rejects(
+    () => validateLiveInventoryReport({ ...base, provenance: 'controlled-test-vector' }),
+    /Invalid inventory provenance: expected 'live-host-scan'/,
+  );
+
+  // arbitrary or fabricated provenance rejected
+  await assert.rejects(
+    () => validateLiveInventoryReport({ ...base, provenance: 'fabricated-test-data' }),
+    /Invalid inventory provenance: expected 'live-host-scan'/,
+  );
+});
+
+// 26. Inventory report status not 'detected' is rejected
+test('26. Inventory report status not detected is rejected', async () => {
+  const notDetectedReport = {
+    schema: 'commonveil.inventory/v1',
+    provenance: 'live-host-scan',
+    observedAt: FIXED_NOW.toISOString(),
+    product: 'pkg:generic/xz-utils',
+    status: 'not-detected',
+  };
+
+  await assert.rejects(
+    () => validateLiveInventoryReport(notDetectedReport),
+    /Inventory report status must be 'detected'/,
+  );
+});
+
+// 27. Malformed versions are rejected
+test('27. Malformed versions (missing raw, negative, fraction, unsafe integer, normalized mismatch) are rejected', async () => {
+  const digest = await computeMeasurementDigest('pkg:generic/xz-utils', '5.2.5');
+  const base = {
+    schema: 'commonveil.inventory/v1',
+    provenance: 'live-host-scan',
+    observedAt: FIXED_NOW.toISOString(),
+    product: 'pkg:generic/xz-utils',
+    status: 'detected',
+    measurementDigest: digest,
+  };
+
+  // Missing rawVersion
+  await assert.rejects(
+    () => validateLiveInventoryReport({ ...base, version: { raw: '', normalized: '5.2.5', major: 5, minor: 2, patch: 5 } }),
+    /rawVersion must be a non-empty string/,
+  );
+
+  // Negative integer
+  await assert.rejects(
+    () => validateLiveInventoryReport({ ...base, version: { raw: '5.2.5', normalized: '5.2.5', major: -5, minor: 2, patch: 5 } }),
+    /version tuple integers must be safe non-negative integers/,
+  );
+
+  // Floating point fraction
+  await assert.rejects(
+    () => validateLiveInventoryReport({ ...base, version: { raw: '5.2.5', normalized: '5.2.5', major: 5, minor: 2.5, patch: 5 } }),
+    /version tuple integers must be safe non-negative integers/,
+  );
+
+  // Exceeding UINT32_MAX
+  await assert.rejects(
+    () => validateLiveInventoryReport({ ...base, version: { raw: '5.2.5', normalized: '5.2.5', major: 4_294_967_296, minor: 2, patch: 5 } }),
+    /version tuple integers must be safe non-negative integers/,
+  );
+
+  // Normalized mismatch: normalized '5.2.5' vs tuple 5.2.4
+  await assert.rejects(
+    () => validateLiveInventoryReport({ ...base, version: { raw: '5.2.5', normalized: '5.2.5', major: 5, minor: 2, patch: 4 } }),
+    /normalized version mismatch/,
+  );
+});
+
+// 28. Forbidden sensitive fields in live inventory report are rejected
+test('28. Forbidden sensitive fields in live inventory report are rejected (root, nested, or values)', async () => {
+  const digest = await computeMeasurementDigest('pkg:generic/xz-utils', '5.2.5');
+  const base = {
+    schema: 'commonveil.inventory/v1',
+    provenance: 'live-host-scan',
+    observedAt: FIXED_NOW.toISOString(),
+    product: 'pkg:generic/xz-utils',
+    status: 'detected',
+    version: { raw: '5.2.5', normalized: '5.2.5', major: 5, minor: 2, patch: 5 },
+    measurementDigest: digest,
+  };
+
+  // Rejects memberSecret
+  await assert.rejects(
+    () => validateLiveInventoryReport({ ...base, memberSecret: 'ee'.repeat(32) }),
+    /forbidden sensitive property 'memberSecret'/,
+  );
+
+  // Rejects salt
+  await assert.rejects(
+    () => validateLiveInventoryReport({ ...base, salt: 'ee'.repeat(32) }),
+    /forbidden sensitive property 'salt'/,
+  );
+
+  // Rejects nested privateKey
+  await assert.rejects(
+    () => validateLiveInventoryReport({ ...base, host: { privateKey: 'injected-key' } }),
+    /forbidden sensitive property 'host.privateKey'/,
+  );
+
+  // Rejects passphrase or password
+  await assert.rejects(
+    () => validateLiveInventoryReport({ ...base, backupPassword: 'Password12345!' }),
+    /forbidden sensitive property 'backupPassword'/,
+  );
+
+  // Rejects wallet seed
+  await assert.rejects(
+    () => validateLiveInventoryReport({ ...base, walletSeed: 'twelve words mnemonic seed phrase' }),
+    /forbidden sensitive property 'walletSeed'/,
+  );
+});
+
+// 29. Invalid observedAt timestamp is rejected
+test('29. Invalid observedAt timestamp is rejected', async () => {
+  const digest = await computeMeasurementDigest('pkg:generic/xz-utils', '5.2.5');
+  const base = {
+    schema: 'commonveil.inventory/v1',
+    provenance: 'live-host-scan',
+    observedAt: 'not-a-timestamp',
+    product: 'pkg:generic/xz-utils',
+    status: 'detected',
+    version: { raw: '5.2.5', normalized: '5.2.5', major: 5, minor: 2, patch: 5 },
+    measurementDigest: digest,
+  };
+
+  await assert.rejects(
+    () => validateLiveInventoryReport(base),
+    /observedAt must be a valid ISO-8601 UTC timestamp/,
+  );
+});
+
+// 30. Certification request package construction contains exactly the 10 required fields and network: preprod
+test('30. Certification request package construction contains exactly the 10 required fields and network: preprod', async () => {
+  const digest = await computeMeasurementDigest('pkg:generic/xz-utils', '5.2.5');
+  const validatedReport = await validateLiveInventoryReport({
+    schema: 'commonveil.inventory/v1',
+    provenance: 'live-host-scan',
+    observedAt: FIXED_NOW.toISOString(),
+    product: 'pkg:generic/xz-utils',
+    status: 'detected',
+    version: { raw: '5.2.5-2ubuntu1.1', normalized: '5.2.5', major: 5, minor: 2, patch: 5 },
+    measurementDigest: digest,
+  });
+
+  const certReq = buildCertificationRequestPackage({
+    inventoryReport: validatedReport,
+    contractAddress: SAMPLE_CONTRACT,
+    memberCredentialHex: SAMPLE_HEX_32,
+    now: FIXED_NOW,
+  });
+
+  const expectedKeys = [
+    'contractAddress',
+    'createdAt',
+    'measurementDigest',
+    'memberCredential',
+    'network',
+    'observedAt',
+    'product',
+    'provenance',
+    'rawVersion',
+    'schema',
+    'version',
+  ].sort();
+
+  assert.deepEqual(Object.keys(certReq).sort(), expectedKeys);
+  assert.equal(certReq.schema, CERTIFICATION_REQUEST_SCHEMA);
+  assert.equal(certReq.network, 'preprod');
+  assert.equal(certReq.contractAddress, SAMPLE_CONTRACT);
+  assert.equal(certReq.memberCredential, SAMPLE_HEX_32);
+  assert.equal(certReq.provenance, 'live-host-scan');
+  assert.equal(certReq.product, 'pkg:generic/xz-utils');
+  assert.equal(certReq.rawVersion, '5.2.5-2ubuntu1.1');
+  assert.deepEqual(certReq.version, { major: 5, minor: 2, patch: 5 });
+  assert.equal(certReq.measurementDigest, digest);
+  assert.equal(certReq.observedAt, FIXED_NOW.toISOString());
+  assert.equal(certReq.createdAt, FIXED_NOW.toISOString());
+});
+
+// 31. Host fingerprint, platform, release, username, and machine data strictly excluded from certification request package
+test('31. Host fingerprint, platform, release, username, and machine data strictly excluded from certification request package', async () => {
+  const digest = await computeMeasurementDigest('pkg:generic/xz-utils', '5.2.5');
+  const genuineReport = {
+    schema: 'commonveil.inventory/v1',
+    provenance: 'live-host-scan',
+    observedAt: FIXED_NOW.toISOString(),
+    host: {
+      fingerprint: '95897a16db4752e1b81ef93f60ea2e58f9119e77688e771c59e439b527219e11',
+      platform: 'linux',
+      release: '5.15.153.1-microsoft-standard-WSL2',
+      hostname: 'my-workstation-node',
+      username: 'corp-user',
+    },
+    product: 'pkg:generic/xz-utils',
+    status: 'detected',
+    source: 'dpkg-query',
+    version: {
+      raw: '5.2.5-2ubuntu1.1',
+      normalized: '5.2.5',
+      major: 5,
+      minor: 2,
+      patch: 5,
+    },
+    measurementDigest: digest,
+  };
+
+  const validatedReport = await validateLiveInventoryReport(genuineReport);
+  const certReq = buildCertificationRequestPackage({
+    inventoryReport: validatedReport,
+    contractAddress: SAMPLE_CONTRACT,
+    memberCredentialHex: SAMPLE_HEX_32,
+    now: FIXED_NOW,
+  });
+
+  const serialized = JSON.stringify(certReq);
+  assert.equal(serialized.includes('fingerprint'), false);
+  assert.equal(serialized.includes('my-workstation-node'), false);
+  assert.equal(serialized.includes('corp-user'), false);
+  assert.equal(serialized.includes('WSL2'), false);
+  assert.equal('host' in certReq, false);
+});
+
+// 32. Certification request package validation verifies network preprod and rejects wrong network or mismatched digest
+test('32. Certification request package validation verifies network preprod and rejects wrong network or mismatched digest', async () => {
+  const digest = await computeMeasurementDigest('pkg:generic/xz-utils', '5.2.5');
+  const validPkg = {
+    schema: CERTIFICATION_REQUEST_SCHEMA,
+    network: 'preprod' as const,
+    contractAddress: SAMPLE_CONTRACT,
+    memberCredential: SAMPLE_HEX_32,
+    provenance: 'live-host-scan' as const,
+    product: 'pkg:generic/xz-utils',
+    rawVersion: '5.2.5-2ubuntu1.1',
+    version: { major: 5, minor: 2, patch: 5 },
+    measurementDigest: digest,
+    observedAt: FIXED_NOW.toISOString(),
+    createdAt: FIXED_NOW.toISOString(),
+  };
+
+  const validated = await validateCertificationRequestPackage(validPkg);
+  assert.equal(validated.network, 'preprod');
+
+  // Wrong network rejected
+  await assert.rejects(
+    () => validateCertificationRequestPackage({ ...validPkg, network: 'mainnet' as any }),
+    /Invalid network: expected 'preprod'/,
+  );
+
+  // Mismatched measurementDigest rejected
+  await assert.rejects(
+    () => validateCertificationRequestPackage({ ...validPkg, measurementDigest: '00'.repeat(32) }),
+    /measurementDigest does not match normalized product\/version measurement/,
   );
 });

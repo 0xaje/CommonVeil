@@ -19,6 +19,11 @@ import {
   MEMBER_ADMISSION_SCHEMA,
   type MemberAdmissionPackage,
   validateMemberAdmissionPackage,
+  type ValidatedLiveInventoryReport,
+  validateLiveInventoryReport,
+  buildCertificationRequestPackage,
+  type CertificationRequestPackage,
+  validateCertificationRequestPackage,
 } from './role-packages';
 import { deployContract, submitCallTx } from '@midnight-ntwrk/midnight-js-contracts';
 import { CompiledCommonVeilContract, CommonVeil } from './contract';
@@ -108,6 +113,14 @@ import {
   canExportMemberAdmissionPackage,
   canExportCertifierKeyPackage,
   triggerBlobDownload,
+  type MemberInventoryUiState,
+  INITIAL_MEMBER_INVENTORY_UI_STATE,
+  canExportCertificationRequest,
+  checkCertificationRequestPrerequisites,
+  onMemberInventoryImported,
+  onMemberInventoryReset,
+  onMemberInventoryError,
+  mapInventoryReportError,
 } from './role-workspace-state';
 import './role-workspace.css';
 
@@ -188,6 +201,19 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
   const [memberNotice, setMemberNotice] = useState<string | null>(null);
   const [memberBackupFileContent, setMemberBackupFileContent] = useState<string | null>(null);
 
+  // Member Live Inventory & Certification Request state
+  const [memberInventoryUi, setMemberInventoryUi] = useState<MemberInventoryUiState>(
+    INITIAL_MEMBER_INVENTORY_UI_STATE,
+  );
+  const memberInventoryInputRef = useRef<HTMLInputElement | null>(null);
+
+  const resetMemberInventory = () => {
+    setMemberInventoryUi((prev) => onMemberInventoryReset(prev));
+    if (memberInventoryInputRef.current) {
+      memberInventoryInputRef.current.value = '';
+    }
+  };
+
   // Registrar Member Admission state
   const [admissionUi, setAdmissionUi] = useState<RegistrarAdmissionUiState>(
     INITIAL_REGISTRAR_ADMISSION_UI_STATE,
@@ -237,6 +263,7 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
       plaintextMemberSecretRef.current = null;
       zeroizeBytes(plaintextMemberSaltRef.current);
       plaintextMemberSaltRef.current = null;
+      resetMemberInventory();
     };
   }, []);
 
@@ -331,6 +358,7 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
     setMemberImportPassphrase('');
     setMemberBackupFileContent(null);
     setMemberError(null);
+    resetMemberInventory();
   };
 
   // Clear secrets when role changes
@@ -473,6 +501,7 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
           errorMessage: null,
         };
       });
+      resetMemberInventory();
 
       // If we already have a secret in memory, verify it against the newly attached public state
       if (plaintextSecretRef.current && session.publicState) {
@@ -484,6 +513,7 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
       }
     } catch (err: unknown) {
       if (!isMounted.current) return;
+      resetMemberInventory();
       setContractState((prev) => {
         if (!isResponseCurrent(prev, currentRequestId, address)) {
           return prev;
@@ -1810,6 +1840,123 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
   };
 
   // ============================================================================
+  // Member Live Inventory & Certification Request Handlers
+  // ============================================================================
+
+  const handleMemberInventoryFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setMemberError(null);
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      if (!isMounted.current) return;
+      try {
+        const text = String(event.target?.result ?? '');
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(text);
+        } catch {
+          throw new Error('The selected file is not valid JSON.');
+        }
+
+        const validatedReport = await validateLiveInventoryReport(parsed);
+
+        // Bind with currently attached contract and member credential if available
+        let certRequest: CertificationRequestPackage | null = null;
+        if (contractState.attachedAddress && memberUi.memberCredentialHex) {
+          certRequest = buildCertificationRequestPackage({
+            inventoryReport: validatedReport,
+            contractAddress: contractState.attachedAddress,
+            memberCredentialHex: memberUi.memberCredentialHex,
+          });
+        }
+
+        if (isMounted.current) {
+          setMemberInventoryUi((prev) =>
+            onMemberInventoryImported(prev, {
+              fileName: file.name,
+              fileSize: file.size,
+              report: validatedReport,
+              certificationRequest: certRequest!,
+            }),
+          );
+        }
+      } catch (err: unknown) {
+        if (isMounted.current) {
+          setMemberInventoryUi((prev) =>
+            onMemberInventoryError(prev, mapInventoryReportError(err)),
+          );
+          if (memberInventoryInputRef.current) {
+            memberInventoryInputRef.current.value = '';
+          }
+        }
+      }
+    };
+
+    reader.onerror = () => {
+      if (isMounted.current) {
+        setMemberInventoryUi((prev) =>
+          onMemberInventoryError(prev, 'Could not read the selected inventory file.'),
+        );
+        if (memberInventoryInputRef.current) {
+          memberInventoryInputRef.current.value = '';
+        }
+      }
+    };
+
+    reader.readAsText(file);
+  };
+
+  const handleExportCertificationRequest = async () => {
+    if (!memberInventoryUi.importedReport) return;
+
+    if (!canExportCertificationRequest({
+      isConnected: !!wallet,
+      attachedContractAddress: contractState.attachedAddress,
+      hasSecret: memberUi.hasSecret,
+      hasSalt: !!plaintextMemberSaltRef.current,
+      memberCredentialHex: memberUi.memberCredentialHex,
+      backupRecoveryStatus: memberUi.backupRecoveryStatus,
+      importedInventory: memberInventoryUi.importedReport,
+    })) {
+      setMemberInventoryUi((prev) =>
+        onMemberInventoryError(
+          prev,
+          'All prerequisites must be satisfied (connected 1AM wallet on Preprod, attached contract, active recovery-tested identity, and validated report) before exporting.',
+        ),
+      );
+      return;
+    }
+
+    try {
+      const certRequestPkg = buildCertificationRequestPackage({
+        inventoryReport: memberInventoryUi.importedReport,
+        contractAddress: contractState.attachedAddress!,
+        memberCredentialHex: memberUi.memberCredentialHex!,
+      });
+
+      const validated = await validateCertificationRequestPackage(certRequestPkg);
+
+      triggerBlobDownload(
+        JSON.stringify(validated, null, 2),
+        `commonveil-certification-request-${validated.memberCredential.slice(0, 10)}.json`,
+      );
+
+      setMemberInventoryUi((prev) => ({
+        ...prev,
+        noticeMessage:
+          'Private Certification Request exported. Send this package to an independent Certifier. Zero blockchain transactions were submitted.',
+        errorMessage: null,
+      }));
+    } catch (err: unknown) {
+      setMemberInventoryUi((prev) =>
+        onMemberInventoryError(prev, mapInventoryReportError(err)),
+      );
+    }
+  };
+
+  // ============================================================================
   // Registrar Admission Workflow Handlers
   // ============================================================================
 
@@ -2139,6 +2286,26 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
   };
 
   const publicState: CommonVeilPublicState | null = contractState.inspectedState;
+
+  const memberCertRequestPrereqs = checkCertificationRequestPrerequisites({
+    isConnected: !!wallet,
+    attachedContractAddress: contractState.attachedAddress,
+    hasSecret: memberUi.hasSecret,
+    hasSalt: !!plaintextMemberSaltRef.current,
+    memberCredentialHex: memberUi.memberCredentialHex,
+    backupRecoveryStatus: memberUi.backupRecoveryStatus,
+    importedInventory: memberInventoryUi.importedReport,
+  });
+
+  const canExportRequest = canExportCertificationRequest({
+    isConnected: !!wallet,
+    attachedContractAddress: contractState.attachedAddress,
+    hasSecret: memberUi.hasSecret,
+    hasSalt: !!plaintextMemberSaltRef.current,
+    memberCredentialHex: memberUi.memberCredentialHex,
+    backupRecoveryStatus: memberUi.backupRecoveryStatus,
+    importedInventory: memberInventoryUi.importedReport,
+  });
 
   return (
     <main className="role-workspace-main" aria-busy={walletConnecting || isBusy}>
@@ -3059,6 +3226,155 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
             </article>
           )}
 
+          {role === 'member' && (
+            <article className="workspace-card member-inventory-card">
+              <div className="card-header">
+                <span className="card-step">04</span>
+                <h2>Import Live Inventory Report</h2>
+              </div>
+              <p className="card-caption">
+                Import a genuine host inventory scan generated via <code>npm run scan</code>. Validates report schema, provenance, version tuple, and measurement digest locally.
+              </p>
+
+              <div className="local-privacy-notice-box" role="note">
+                <strong>Zero Blockchain Transactions</strong>
+                <p>
+                  Importing and exporting are entirely local operations performed in your browser. This step submits zero blockchain transactions to the Midnight network.
+                </p>
+              </div>
+
+              {/* Status Header / Prerequisites */}
+              <div className="prerequisites-warning-box" role="status">
+                <span className="field-caption">Certification Request Prerequisites</span>
+                <ul className="prerequisites-list">
+                  <li className={memberCertRequestPrereqs.isWalletConnected ? 'met' : 'unmet'}>
+                    {memberCertRequestPrereqs.isWalletConnected ? '✔' : '○'} Connected 1AM wallet on Preprod
+                  </li>
+                  <li className={memberCertRequestPrereqs.isContractAttached ? 'met' : 'unmet'}>
+                    {memberCertRequestPrereqs.isContractAttached ? '✔' : '○'} Attached compatible CommonVeil contract
+                  </li>
+                  <li className={memberCertRequestPrereqs.isMemberIdentityActive ? 'met' : 'unmet'}>
+                    {memberCertRequestPrereqs.isMemberIdentityActive ? '✔' : '○'} Active Member secret and salt in session memory
+                  </li>
+                  <li className={memberCertRequestPrereqs.isBackupRecoveryTested ? 'met' : 'unmet'}>
+                    {memberCertRequestPrereqs.isBackupRecoveryTested ? '✔' : '○'} Member backup status is recovery-tested
+                  </li>
+                </ul>
+              </div>
+
+              {memberInventoryUi.noticeMessage && (
+                <div className="safe-notice-banner" role="status">
+                  <p>{memberInventoryUi.noticeMessage}</p>
+                </div>
+              )}
+
+              {memberInventoryUi.errorMessage && (
+                <div className="safe-error-banner" role="alert">
+                  <strong>Inventory Validation Error</strong>
+                  <p>{memberInventoryUi.errorMessage}</p>
+                </div>
+              )}
+
+              <div className="inventory-import-controls">
+                <label htmlFor="member-inventory-file-input">
+                  Select Genuine Inventory JSON File (from <code>npm run scan</code>)
+                </label>
+                <input
+                  id="member-inventory-file-input"
+                  ref={memberInventoryInputRef}
+                  type="file"
+                  accept=".json,application/json"
+                  onChange={handleMemberInventoryFileSelect}
+                  aria-label="Select genuine inventory report JSON file"
+                />
+              </div>
+
+              {memberInventoryUi.importedReport && (
+                <div className="imported-inventory-details">
+                  <div className="inventory-meta-row">
+                    <div>
+                      <span className="field-caption">Selected File</span>
+                      <strong>{memberInventoryUi.selectedFileName ?? 'inventory.json'}</strong>
+                      {memberInventoryUi.selectedFileSize !== null && (
+                        <span className="file-size-tag">({memberInventoryUi.selectedFileSize} bytes)</span>
+                      )}
+                    </div>
+                    <div>
+                      <span className="field-caption">Validated Provenance</span>
+                      <strong className="provenance-badge live-host-scan">
+                        {memberInventoryUi.importedReport.provenance} ✔
+                      </strong>
+                    </div>
+                  </div>
+
+                  <div className="inventory-summary-grid">
+                    <div>
+                      <span className="field-caption">Product</span>
+                      <code>{memberInventoryUi.importedReport.product}</code>
+                    </div>
+                    <div>
+                      <span className="field-caption">Detected Version (Raw)</span>
+                      <code>{memberInventoryUi.importedReport.rawVersion}</code>
+                    </div>
+                    <div>
+                      <span className="field-caption">Normalized Version Tuple</span>
+                      <code>
+                        {memberInventoryUi.importedReport.version.major}.
+                        {memberInventoryUi.importedReport.version.minor}.
+                        {memberInventoryUi.importedReport.version.patch}
+                      </code>
+                    </div>
+                    <div>
+                      <span className="field-caption">Observed Timestamp</span>
+                      <small>{memberInventoryUi.importedReport.observedAt}</small>
+                    </div>
+                  </div>
+
+                  <div className="inventory-digest-box">
+                    <span className="field-caption">Recomputed Measurement Digest (SHA-256)</span>
+                    <code title={memberInventoryUi.importedReport.measurementDigest}>
+                      {memberInventoryUi.importedReport.measurementDigest}
+                    </code>
+                  </div>
+
+                  {contractState.attachedAddress && memberUi.memberCredentialHex && (
+                    <div className="inventory-binding-box">
+                      <div>
+                        <span className="field-caption">Bound Contract</span>
+                        <code title={contractState.attachedAddress}>
+                          {shortenAddress(contractState.attachedAddress)}
+                        </code>
+                      </div>
+                      <div>
+                        <span className="field-caption">Bound Member Credential</span>
+                        <code title={memberUi.memberCredentialHex}>
+                          {shortenAddress(memberUi.memberCredentialHex)}
+                        </code>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="export-request-action-row">
+                    <button
+                      type="button"
+                      className="action-button primary"
+                      onClick={handleExportCertificationRequest}
+                      disabled={!canExportRequest}
+                      aria-label="Export private certification request package JSON"
+                    >
+                      Export Private Certification Request (.json)
+                    </button>
+                    {!canExportRequest && (
+                      <p className="form-hint-text">
+                        Ensure all prerequisites above are fulfilled before exporting the certification request.
+                      </p>
+                    )}
+                  </div>
+                </div>
+              )}
+            </article>
+          )}
+
           {role === 'registrar' && (
             <article className="workspace-card registrar-identity-card">
               <div className="card-header">
@@ -3874,7 +4190,7 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
           {/* Public State Panel */}
           <article className="workspace-card public-state-card">
             <div className="card-header">
-              <span className="card-step">{role === 'registrar' ? '06' : '03'}</span>
+              <span className="card-step">{role === 'registrar' ? '06' : role === 'member' ? '05' : '04'}</span>
               <h2>Public Contract State</h2>
             </div>
             <p className="privacy-guarantee-notice">
