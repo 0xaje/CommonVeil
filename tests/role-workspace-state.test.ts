@@ -132,6 +132,8 @@ import {
   computeMeasurementDigest,
   CERTIFICATION_REQUEST_SCHEMA,
   validateCertifiedSnapshotPackage,
+  buildCertifiedSnapshotPackage,
+  productDigest,
 } from '../src/role-packages.ts';
 import {
   verifyRegistrarSecret,
@@ -3281,8 +3283,8 @@ test('110. Full downloaded-file recovery testing of encrypted snapshot envelope 
     network: 'preprod' as const,
     contractAddress: SAMPLE_HEX_64,
     memberCredential: memberCredHex,
-    product: 'commonveil-node',
-    version: { major: 1, minor: 0, patch: 0 },
+    product: 'pkg:generic/xz-utils',
+    version: { major: 5, minor: 6, patch: 1 },
     snapshotSalt: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
     commitment: genuineCommitment,
     txId: genuineTxId,
@@ -3302,6 +3304,8 @@ test('110. Full downloaded-file recovery testing of encrypted snapshot envelope 
   );
   assert.equal(restored.contractAddress, SAMPLE_HEX_64);
   assert.equal(restored.memberCredential, memberCredHex);
+  assert.equal(restored.product, 'pkg:generic/xz-utils');
+  assert.deepEqual(restored.version, { major: 5, minor: 6, patch: 1 });
   assert.equal(restored.commitment, genuineCommitment);
   assert.equal(restored.txId, genuineTxId);
 
@@ -3343,6 +3347,24 @@ test('110. Full downloaded-file recovery testing of encrypted snapshot envelope 
   );
   assert.notEqual(wrongRestored.contractAddress, SAMPLE_HEX_64);
 
+  const wrongProductSnapshot = { ...snapshotPkg, product: 'pkg:generic/other-product' };
+  const wrongProductEnv = await encryptToEnvelope(wrongProductSnapshot, passphrase);
+  const wrongProductRestored = await decryptAndValidateEnvelope(
+    wrongProductEnv,
+    passphrase,
+    validateCertifiedSnapshotPackage,
+  );
+  assert.notEqual(wrongProductRestored.product, 'pkg:generic/xz-utils');
+
+  const wrongVersionSnapshot = { ...snapshotPkg, version: { major: 5, minor: 6, patch: 0 } };
+  const wrongVersionEnv = await encryptToEnvelope(wrongVersionSnapshot, passphrase);
+  const wrongVersionRestored = await decryptAndValidateEnvelope(
+    wrongVersionEnv,
+    passphrase,
+    validateCertifiedSnapshotPackage,
+  );
+  assert.notDeepEqual(wrongVersionRestored.version, { major: 5, minor: 6, patch: 1 });
+
   const wrongCommitmentSnapshot = { ...snapshotPkg, commitment: '02'.repeat(32) };
   const wrongCommitmentEnv = await encryptToEnvelope(wrongCommitmentSnapshot, passphrase);
   const wrongCommitmentRestored = await decryptAndValidateEnvelope(
@@ -3351,4 +3373,114 @@ test('110. Full downloaded-file recovery testing of encrypted snapshot envelope 
     validateCertifiedSnapshotPackage,
   );
   assert.notEqual(wrongCommitmentRestored.commitment, genuineCommitment);
+});
+
+// 111. Canonical product-to-ProductId derivation and constraint enforcement
+test('111. Canonical product-to-ProductId derivation and constraint enforcement', async () => {
+  const genuinePurl = 'pkg:generic/xz-utils';
+  const genuineProductId = await productDigest(genuinePurl);
+  assert.equal(genuineProductId instanceof Uint8Array, true);
+  assert.equal(genuineProductId.length, 32);
+
+  // Deterministic across repeated calls
+  const genuineProductId2 = await productDigest(genuinePurl);
+  assert.deepEqual(genuineProductId, genuineProductId2);
+
+  // Different product strings derive distinct ProductId values (no collisions)
+  const differentPurl = 'pkg:generic/other-utils';
+  const differentProductId = await productDigest(differentPurl);
+  assert.notDeepEqual(genuineProductId, differentProductId);
+
+  // commonveil-node derives a completely different ProductId and is never substituted
+  const nodeProductId = await productDigest('commonveil-node');
+  assert.notDeepEqual(genuineProductId, nodeProductId);
+
+  // Rejection of empty or whitespace-only product identifiers
+  await assert.rejects(
+    async () => { await productDigest(''); },
+    /empty or whitespace-only/i,
+  );
+  await assert.rejects(
+    async () => { await productDigest('   '); },
+    /empty or whitespace-only/i,
+  );
+
+  // Rejection of leading or trailing whitespace without silent trimming
+  await assert.rejects(
+    async () => { await productDigest(' pkg:generic/xz-utils'); },
+    /leading or trailing whitespace/i,
+  );
+  await assert.rejects(
+    async () => { await productDigest('pkg:generic/xz-utils '); },
+    /leading or trailing whitespace/i,
+  );
+
+  // Rejection of oversized product identifiers (max 256 bytes)
+  const oversizedPurl = 'pkg:generic/' + 'x'.repeat(250);
+  await assert.rejects(
+    async () => { await productDigest(oversizedPurl); },
+    /exceeds maximum length/i,
+  );
+
+  // Rejection of non-string inputs
+  await assert.rejects(
+    async () => { await (productDigest as any)(null); },
+    /must be a string/i,
+  );
+  await assert.rejects(
+    async () => { await (productDigest as any)(123); },
+    /must be a string/i,
+  );
+});
+
+// 112. End-to-end product binding consistency between request, circuit, commitment, and snapshot
+test('112. End-to-end product binding consistency: pkg:generic/xz-utils survives unchanged without substitution', async () => {
+  const genuineProduct = 'pkg:generic/xz-utils';
+  const version = { major: 5, minor: 6, patch: 1 };
+  const memberCredentialBytes = hexToBytes(SAMPLE_HEX_64);
+  const snapshotSaltBytes = new Uint8Array(32).fill(77);
+
+  // 1. Derive canonical ProductId from request product
+  const productIdBytes = await productDigest(genuineProduct);
+
+  // 2. Derive commitment using pure circuits with canonical ProductId
+  const commitmentBytes = pureCircuits.deriveInventoryCommitment(
+    memberCredentialBytes,
+    productIdBytes,
+    BigInt(version.major),
+    BigInt(version.minor),
+    BigInt(version.patch),
+    snapshotSaltBytes,
+  );
+  const commitmentHex = bytesToHex(commitmentBytes);
+
+  // 3. Build certified snapshot package preserving genuine product string
+  const genuineTxId = '00162a6cea69226e4731b519f76ca71e14e011eca434cfe2a08b88dda51f02f66b';
+  const snapshot = buildCertifiedSnapshotPackage({
+    contractAddress: SAMPLE_HEX_64,
+    memberCredential: SAMPLE_HEX_64,
+    product: genuineProduct,
+    version,
+    snapshotSalt: bytesToHex(snapshotSaltBytes),
+    commitment: commitmentHex,
+    txId: genuineTxId,
+  });
+
+  // Verify product is strictly pkg:generic/xz-utils and not commonveil-node
+  assert.equal(snapshot.product, 'pkg:generic/xz-utils');
+  assert.notEqual(snapshot.product, 'commonveil-node');
+
+  // 4. Verify commitment derived from snapshot package matches pure circuit output exactly
+  const reconstructedProductId = await productDigest(snapshot.product);
+  assert.deepEqual(reconstructedProductId, productIdBytes);
+
+  const reconstructedCommitment = pureCircuits.deriveInventoryCommitment(
+    hexToBytes(snapshot.memberCredential),
+    reconstructedProductId,
+    BigInt(snapshot.version.major),
+    BigInt(snapshot.version.minor),
+    BigInt(snapshot.version.patch),
+    hexToBytes(snapshot.snapshotSalt),
+  );
+  assert.equal(bytesToHex(reconstructedCommitment), snapshot.commitment);
 });

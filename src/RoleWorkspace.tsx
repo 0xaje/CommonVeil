@@ -2199,10 +2199,10 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
       }
 
       // Check captured genuine transaction ID from SDK FinalizedTxData
-      const txId: string | null =
-        finalized && finalized.public && typeof finalized.public.txId === 'string'
-          ? finalized.public.txId
-          : null;
+      const txId: string = finalized.public.txId;
+      if (typeof txId !== 'string' || txId.trim() === '') {
+        throw new Error('Finalized transaction data missing transaction ID');
+      }
 
       // Automatically inspect public ledger to verify memberCredentials contains credential
       try {
@@ -2538,10 +2538,11 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
         return;
       }
 
-      const txId: string | null =
-        finalized && finalized.public && typeof finalized.public.txId === 'string'
-          ? finalized.public.txId
-          : null;
+      // Extract genuine transaction ID from SDK FinalizedTxData
+      const txId: string = finalized.public.txId;
+      if (typeof txId !== 'string' || txId.trim() === '') {
+        throw new Error('Finalized transaction data missing transaction ID');
+      }
 
       // Derive commitment exactly using CommonVeil pureCircuits.deriveInventoryCommitment
       const derivedCommitmentBytes = CommonVeil.pureCircuits.deriveInventoryCommitment(
@@ -2851,6 +2852,16 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
       }
       if (restored.memberCredential.toLowerCase().trim() !== pkg.memberCredential.toLowerCase().trim()) {
         throw new Error('Recovery test failed: snapshot member credential does not match active certified member.');
+      }
+      if (restored.product.trim() !== pkg.product.trim()) {
+        throw new Error('Recovery test failed: snapshot product does not match active certified product.');
+      }
+      if (
+        restored.version.major !== pkg.version.major ||
+        restored.version.minor !== pkg.version.minor ||
+        restored.version.patch !== pkg.version.patch
+      ) {
+        throw new Error('Recovery test failed: snapshot version tuple does not match active certified version.');
       }
       if (restored.commitment.toLowerCase().trim() !== expectedCommitment.toLowerCase().trim()) {
         throw new Error('Recovery test failed: snapshot commitment does not match on-chain certified commitment.');
@@ -3814,6 +3825,23 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
                           </button>
                         </div>
                       )}
+
+                      <div className="status-row" style={{ marginTop: '14px', marginBottom: '10px' }}>
+                        <span className="field-caption">Private Handoff Status: </span>
+                        {certificationUi.snapshotRecoveryStatus === 'recovery-tested' ? (
+                          <strong className="recovery-badge recovery-tested" style={{ color: '#4ade80' }}>
+                            Private Handoff Ready ✔ (Envelope Tested & Safe to Deliver)
+                          </strong>
+                        ) : certificationUi.snapshotRecoveryStatus === 'created-untested' ? (
+                          <strong className="recovery-badge created-untested" style={{ color: '#fbbf24' }}>
+                            Snapshot Downloaded (Handoff Blocked: Recovery Verification Pending)
+                          </strong>
+                        ) : (
+                          <strong className="recovery-badge none" style={{ color: '#9ca3af' }}>
+                            On-Chain Finalized (Snapshot Export & Recovery Pending)
+                          </strong>
+                        )}
+                      </div>
 
                       <div className="button-row" style={{ marginTop: '16px' }}>
                         <button

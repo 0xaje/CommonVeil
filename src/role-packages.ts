@@ -221,13 +221,37 @@ export async function computeMeasurementDigest(product: string, normalizedVersio
 }
 
 /**
- * Derives the 32-byte ProductId from a product label using
- * SHA-256("commonveil:product:v1:" + label).
- * Matches the LegacyDemo.tsx definition exactly.
+ * Canonical product identifier to 32-byte ProductId derivation.
+ *
+ * Algorithm:
+ * 1. Validate that `label` is a non-empty string, contains no leading/trailing whitespace,
+ *    and does not exceed 256 bytes in UTF-8 representation.
+ * 2. Prepend domain separator "commonveil:product:v1:".
+ * 3. Deterministically compute SHA-256 digest yielding exactly 32 bytes.
+ *
+ * Collision-resistant and deterministic across all environments without truncation.
+ * Matches existing deployed contract expectations and LegacyDemo convention.
  */
 export async function productDigest(label: string): Promise<Uint8Array> {
-  const input = new TextEncoder().encode(`commonveil:product:v1:${label}`);
-  return new Uint8Array(await crypto.subtle.digest('SHA-256', input));
+  if (typeof label !== 'string') {
+    throw new Error('Product identifier must be a string');
+  }
+  const trimmed = label.trim();
+  if (trimmed.length === 0) {
+    throw new Error('Product identifier must not be empty or whitespace-only');
+  }
+  if (label !== trimmed) {
+    throw new Error('Product identifier must not contain leading or trailing whitespace');
+  }
+  const encodedLabel = new TextEncoder().encode(label);
+  if (encodedLabel.byteLength > 256) {
+    throw new Error(`Product identifier exceeds maximum length of 256 bytes (got ${encodedLabel.byteLength} bytes)`);
+  }
+  const domain = new TextEncoder().encode('commonveil:product:v1:');
+  const buffer = new Uint8Array(domain.length + encodedLabel.length);
+  buffer.set(domain, 0);
+  buffer.set(encodedLabel, domain.length);
+  return new Uint8Array(await crypto.subtle.digest('SHA-256', buffer));
 }
 
 export async function buildCertificationRequestFromInventoryReport(
