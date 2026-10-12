@@ -30,8 +30,15 @@ import {
   INVENTORY_CERTIFICATION_RECEIPT_SCHEMA,
   type InventoryCertificationReceipt,
   buildInventoryCertificationReceipt,
+  AFFECTED_RELEASE_POLICY_SCHEMA,
+  type AffectedReleasePolicyPackage,
+  validateAffectedReleasePolicyPackage,
+  AFFECTED_RELEASE_REGISTRATION_RECEIPT_SCHEMA,
+  type AffectedReleaseRegistrationReceipt,
+  buildAffectedReleaseRegistrationReceipt,
   type VersionTuple,
   productDigest,
+  advisoryDigest,
 } from './role-packages';
 
 export type RoleType = 'registrar' | 'certifier' | 'member';
@@ -2470,4 +2477,249 @@ export function mapCertificationError(error: unknown): string {
     return 'Network communication failure during certification. Check Midnight Preprod connectivity.';
   }
   return 'The certification transaction could not be completed. Check the network connection and try again.';
+}
+
+/**
+ * =============================================================================
+ * CV-010: REGISTRAR AFFECTED-RELEASE REGISTRATION & POLICY ACTIVATION STATE
+ * =============================================================================
+ */
+
+export type RegistrarAffectedReleaseStage =
+  | 'idle'
+  | 'reviewing'
+  | 'confirming'
+  | 'requesting-wallet'
+  | 'submitting'
+  | 'finalized-indexing'
+  | 'registered'
+  | 'failed';
+
+export interface RegistrarAffectedReleaseUiState {
+  readonly stage: RegistrarAffectedReleaseStage;
+  readonly importedPolicy: AffectedReleasePolicyPackage | null;
+  readonly registrationTxId: string | null;
+  readonly receipt: AffectedReleaseRegistrationReceipt | null;
+  readonly errorMessage: string | null;
+}
+
+export const INITIAL_REGISTRAR_AFFECTED_RELEASE_UI_STATE: RegistrarAffectedReleaseUiState = {
+  stage: 'idle',
+  importedPolicy: null,
+  registrationTxId: null,
+  receipt: null,
+  errorMessage: null,
+};
+
+export const AFFECTED_RELEASE_VERIFICATION_ERROR_MESSAGES = {
+  CONTRACT_NOT_FOUND: 'No indexed contract state exists at the supplied address.',
+  RELEASE_NOT_REGISTERED: 'The affected release has not yet been indexed on the Midnight ledger.',
+  NOT_AUTHORIZED_REGISTRAR: 'Only the authorized registrar can register affected releases.',
+  ALREADY_REGISTERED: 'This affected release is already recorded in the on-chain affectedReleases set.',
+  GENERIC_VERIFICATION_FAILURE: 'Failed to verify on-chain registration status due to an internal error.',
+  INCOMPATIBLE_CONTRACT: 'The indexed state is not compatible with this CommonVeil build.',
+} as const;
+
+export function checkRegistrarAffectedReleasePrerequisites(params: {
+  readonly isConnected: boolean;
+  readonly attachedContractAddress: string | null;
+  readonly hasRegistrarSecret: boolean;
+  readonly registrarBackupRecoveryStatus: string;
+  readonly registrarVerificationStatus: string;
+  readonly importedPolicy: AffectedReleasePolicyPackage | null;
+  readonly isReleaseAlreadyRegistered: boolean | null;
+  readonly isProofProviderConfigured: boolean;
+  readonly isOperationPending: boolean;
+}): string[] {
+  const missing: string[] = [];
+  if (!params.isConnected) {
+    missing.push('1AM wallet must be connected on Midnight Preprod.');
+  }
+  if (!params.attachedContractAddress) {
+    missing.push('A verified CommonVeil contract must be attached.');
+  }
+  if (!params.hasRegistrarSecret) {
+    missing.push('Active Registrar secret must be loaded in volatile session memory.');
+  }
+  if (params.registrarBackupRecoveryStatus !== 'recovery-tested') {
+    missing.push("Registrar encrypted backup must be recovery-tested (status 'recovery-tested').");
+  }
+  if (params.registrarVerificationStatus !== 'verified') {
+    missing.push('Registrar secret must match the on-chain registrar key (verified).');
+  }
+  if (!params.importedPolicy) {
+    missing.push('A valid commonveil.affected-release-policy/v1 package must be imported or created.');
+  }
+  if (params.importedPolicy && params.attachedContractAddress) {
+    if (params.importedPolicy.contractAddress.toLowerCase().trim() !== params.attachedContractAddress.toLowerCase().trim()) {
+      missing.push('Policy package contract address does not match the attached contract.');
+    }
+  }
+  if (params.isReleaseAlreadyRegistered === true) {
+    missing.push('This exact release is already registered on-chain in affectedReleases.');
+  }
+  if (!params.isProofProviderConfigured) {
+    missing.push('Local proof provider (prover service) must be reachable and configured.');
+  }
+  if (params.isOperationPending) {
+    missing.push('Another registration operation is currently in progress.');
+  }
+  return missing;
+}
+
+export function canInitiateAffectedReleaseRegistration(params: {
+  readonly isConnected: boolean;
+  readonly attachedContractAddress: string | null;
+  readonly hasRegistrarSecret: boolean;
+  readonly registrarBackupRecoveryStatus: string;
+  readonly registrarVerificationStatus: string;
+  readonly importedPolicy: AffectedReleasePolicyPackage | null;
+  readonly isReleaseAlreadyRegistered: boolean | null;
+  readonly isProofProviderConfigured: boolean;
+  readonly isOperationPending: boolean;
+}): boolean {
+  return checkRegistrarAffectedReleasePrerequisites(params).length === 0;
+}
+
+export function onAffectedReleasePolicyImported(
+  prevState: RegistrarAffectedReleaseUiState,
+  pkg: AffectedReleasePolicyPackage,
+  attachedContractAddress: string | null,
+): RegistrarAffectedReleaseUiState {
+  if (!attachedContractAddress) {
+    return {
+      ...prevState,
+      stage: 'failed',
+      errorMessage: 'Attach and verify a CommonVeil contract before reviewing an affected release policy.',
+    };
+  }
+  if (pkg.contractAddress.toLowerCase().trim() !== attachedContractAddress.toLowerCase().trim()) {
+    return {
+      ...prevState,
+      stage: 'failed',
+      errorMessage: `Policy package targets contract ${pkg.contractAddress}, which does not match active contract ${attachedContractAddress}.`,
+    };
+  }
+  return {
+    ...prevState,
+    stage: 'reviewing',
+    importedPolicy: pkg,
+    registrationTxId: null,
+    receipt: null,
+    errorMessage: null,
+  };
+}
+
+export function onAffectedReleaseConfirmationOpen(
+  prevState: RegistrarAffectedReleaseUiState,
+): RegistrarAffectedReleaseUiState {
+  return { ...prevState, stage: 'confirming', errorMessage: null };
+}
+
+export function onAffectedReleaseConfirmationDismissed(
+  prevState: RegistrarAffectedReleaseUiState,
+): RegistrarAffectedReleaseUiState {
+  return { ...prevState, stage: prevState.importedPolicy ? 'reviewing' : 'idle', errorMessage: null };
+}
+
+export function onAffectedReleaseWalletRequest(
+  prevState: RegistrarAffectedReleaseUiState,
+): RegistrarAffectedReleaseUiState {
+  return { ...prevState, stage: 'requesting-wallet', errorMessage: null };
+}
+
+export function onAffectedReleaseSubmitting(
+  prevState: RegistrarAffectedReleaseUiState,
+): RegistrarAffectedReleaseUiState {
+  return { ...prevState, stage: 'submitting', errorMessage: null };
+}
+
+export function onAffectedReleaseFinalizedIndexing(
+  prevState: RegistrarAffectedReleaseUiState,
+  txId?: string | null,
+): RegistrarAffectedReleaseUiState {
+  const resolvedTxId = typeof txId === 'string' && txId.trim() !== '' ? txId : prevState.registrationTxId;
+  return { ...prevState, stage: 'finalized-indexing', registrationTxId: resolvedTxId, errorMessage: null };
+}
+
+export function onAffectedReleaseCompleted(
+  prevState: RegistrarAffectedReleaseUiState,
+  receipt: AffectedReleaseRegistrationReceipt,
+): RegistrarAffectedReleaseUiState {
+  return {
+    stage: 'registered',
+    importedPolicy: prevState.importedPolicy,
+    registrationTxId: receipt.registrationTxId ?? prevState.registrationTxId,
+    receipt,
+    errorMessage: null,
+  };
+}
+
+export function onAffectedReleaseFailed(
+  prevState: RegistrarAffectedReleaseUiState,
+  errorMessage: string,
+): RegistrarAffectedReleaseUiState {
+  return { ...prevState, stage: 'failed', errorMessage };
+}
+
+export function onAffectedReleaseReset(): RegistrarAffectedReleaseUiState {
+  return { ...INITIAL_REGISTRAR_AFFECTED_RELEASE_UI_STATE };
+}
+
+export function mapAffectedReleaseInspectionError(error: unknown): string {
+  if (!error) return AFFECTED_RELEASE_VERIFICATION_ERROR_MESSAGES.GENERIC_VERIFICATION_FAILURE;
+  const raw = (
+    error instanceof Error ? error.message
+    : typeof error === 'string' ? error
+    : typeof (error as any)?.message === 'string' ? (error as any).message
+    : ''
+  ).toLowerCase();
+  if (raw.includes('contract not found') || raw.includes('no indexed contract')) {
+    return AFFECTED_RELEASE_VERIFICATION_ERROR_MESSAGES.CONTRACT_NOT_FOUND;
+  }
+  if (raw.includes('indexer') || raw.includes('graphql') || raw.includes('query failed') || raw.includes('timeout')) {
+    return 'The Midnight indexer could not complete the contract lookup.';
+  }
+  if (raw.includes('already registered')) {
+    return AFFECTED_RELEASE_VERIFICATION_ERROR_MESSAGES.ALREADY_REGISTERED;
+  }
+  if (raw.includes('incompatible') || raw.includes('ledger') || raw.includes('decode')) {
+    return AFFECTED_RELEASE_VERIFICATION_ERROR_MESSAGES.INCOMPATIBLE_CONTRACT;
+  }
+  return AFFECTED_RELEASE_VERIFICATION_ERROR_MESSAGES.GENERIC_VERIFICATION_FAILURE;
+}
+
+export function mapAffectedReleaseRegistrationError(error: unknown): string {
+  if (!error) return 'Affected release registration transaction could not be completed. Check wallet and try again.';
+  const raw = (
+    error instanceof Error ? error.message
+    : typeof error === 'string' ? error
+    : typeof (error as any)?.message === 'string' ? (error as any).message
+    : ''
+  ).toLowerCase();
+  if (raw.includes('cancel') || raw.includes('reject') || raw.includes('denied') || raw.includes('declined') || raw.includes('user aborted')) {
+    return 'Affected release registration transaction was cancelled in 1AM.';
+  }
+  if (raw.includes('already registered')) {
+    return 'This affected release is already registered on-chain.';
+  }
+  if (raw.includes('registrar') && (raw.includes('only the registrar') || raw.includes('not authorized'))) {
+    return 'Registrar secret does not match the on-chain authorized registrar key.';
+  }
+  if (raw.includes('dust') || raw.includes('balance') || raw.includes('insufficient funds')) {
+    return 'Insufficient DUST or balance in connected 1AM wallet to cover transaction fees.';
+  }
+  if (raw.includes('proof') || raw.includes('prover') || raw.includes('proving')) {
+    return 'ZK proof generation failed. Ensure your local proof server is reachable and responsive.';
+  }
+  if (raw.includes('indexer') || raw.includes('lookup')) {
+    return 'Registration transaction finalized on-chain, but indexer synchronization is delayed. Use retry confirmation.';
+  }
+  if (raw.includes('timeout') || raw.includes('deadline')) {
+    return 'Transaction submission timed out. Check network status and wallet activity.';
+  }
+  if (raw.includes('network') || raw.includes('preprod') || raw.includes('connection')) {
+    return 'Network communication failure during registration. Check Midnight Preprod connectivity.';
+  }
+  return 'The affected release registration transaction could not be completed. Check the network connection and try again.';
 }

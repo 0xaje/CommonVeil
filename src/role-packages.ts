@@ -22,6 +22,8 @@ export const CERTIFICATION_REQUEST_SCHEMA = 'commonveil.certification-request/v1
 export const CERTIFIED_SNAPSHOT_SCHEMA = 'commonveil.certified-snapshot/v1' as const;
 export const ENCRYPTED_ENVELOPE_SCHEMA = 'commonveil.encrypted-envelope/v1' as const;
 export const INVENTORY_CERTIFICATION_RECEIPT_SCHEMA = 'commonveil.inventory-certification-receipt/v1' as const;
+export const AFFECTED_RELEASE_POLICY_SCHEMA = 'commonveil.affected-release-policy/v1' as const;
+export const AFFECTED_RELEASE_REGISTRATION_RECEIPT_SCHEMA = 'commonveil.affected-release-registration-receipt/v1' as const;
 
 export const INVENTORY_REPORT_SCHEMA = 'commonveil.inventory/v1' as const;
 
@@ -82,6 +84,34 @@ export interface InventoryCertificationReceipt {
   readonly commitment: string;        // 32 bytes hex (64 chars)
   readonly certificationTxId: string | null; // genuine tx id if captured; null on indexer lag
   readonly certifiedAt: string;       // ISO timestamp
+  readonly status: 'finalized';
+}
+
+export interface AffectedReleasePolicyPackage {
+  readonly schema: typeof AFFECTED_RELEASE_POLICY_SCHEMA;
+  readonly network: 'preprod';
+  readonly contractAddress: string;
+  readonly advisoryId: string;
+  readonly product: string;
+  readonly version: VersionTuple;
+  readonly sourcePublisher: string;
+  readonly sourceReference: string; // valid https URL
+  readonly sourcePublicationDate: string; // ISO timestamp
+  readonly createdAt: string; // ISO timestamp
+}
+
+export interface AffectedReleaseRegistrationReceipt {
+  readonly schema: typeof AFFECTED_RELEASE_REGISTRATION_RECEIPT_SCHEMA;
+  readonly network: 'preprod';
+  readonly contractAddress: string;
+  readonly advisoryId: string;
+  readonly product: string;
+  readonly version: VersionTuple;
+  readonly sourcePublisher: string;
+  readonly sourceReference: string;
+  readonly registrationTxId: string | null;
+  readonly registeredAt: string;
+  readonly policyActive: boolean;
   readonly status: 'finalized';
 }
 
@@ -248,6 +278,40 @@ export async function productDigest(label: string): Promise<Uint8Array> {
     throw new Error(`Product identifier exceeds maximum length of 256 bytes (got ${encodedLabel.byteLength} bytes)`);
   }
   const domain = new TextEncoder().encode('commonveil:product:v1:');
+  const buffer = new Uint8Array(domain.length + encodedLabel.length);
+  buffer.set(domain, 0);
+  buffer.set(encodedLabel, domain.length);
+  return new Uint8Array(await crypto.subtle.digest('SHA-256', buffer));
+}
+
+/**
+ * Canonical advisory identifier to 32-byte AdvisoryId derivation.
+ *
+ * Algorithm:
+ * 1. Validate that `label` is a non-empty string, contains no leading/trailing whitespace,
+ *    and does not exceed 128 bytes in UTF-8 representation.
+ * 2. Prepend domain separator "commonveil:advisory:v1:".
+ * 3. Deterministically compute SHA-256 digest yielding exactly 32 bytes.
+ *
+ * Collision-resistant and deterministic across all environments.
+ * Matches existing deployed contract expectations and LegacyDemo convention.
+ */
+export async function advisoryDigest(label: string): Promise<Uint8Array> {
+  if (typeof label !== 'string') {
+    throw new Error('Advisory identifier must be a string');
+  }
+  const trimmed = label.trim();
+  if (trimmed.length === 0) {
+    throw new Error('Advisory identifier must not be empty or whitespace-only');
+  }
+  if (label !== trimmed) {
+    throw new Error('Advisory identifier must not contain leading or trailing whitespace');
+  }
+  const encodedLabel = new TextEncoder().encode(label);
+  if (encodedLabel.byteLength > 128) {
+    throw new Error(`Advisory identifier exceeds maximum length of 128 bytes (got ${encodedLabel.byteLength} bytes)`);
+  }
+  const domain = new TextEncoder().encode('commonveil:advisory:v1:');
   const buffer = new Uint8Array(domain.length + encodedLabel.length);
   buffer.set(domain, 0);
   buffer.set(encodedLabel, domain.length);
@@ -805,6 +869,302 @@ export function buildInventoryCertificationReceipt(params: {
     commitment: params.commitment.toLowerCase(),
     certificationTxId: params.certificationTxId ? params.certificationTxId.toLowerCase() : null,
     certifiedAt: now.toISOString(),
+    status: 'finalized',
+  });
+}
+
+export const AFFECTED_RELEASE_POLICY_REQUIRED_FIELDS = [
+  'schema',
+  'network',
+  'contractAddress',
+  'advisoryId',
+  'product',
+  'version',
+  'sourcePublisher',
+  'sourceReference',
+  'sourcePublicationDate',
+  'createdAt',
+] as const;
+
+export function validateHttpsUrl(url: unknown): string {
+  if (typeof url !== 'string' || url.trim().length === 0) {
+    throw new Error('sourceReference must be a non-empty string');
+  }
+  const trimmed = url.trim();
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    throw new Error('sourceReference must be a valid URL');
+  }
+  if (parsed.protocol !== 'https:') {
+    throw new Error(`sourceReference must be an HTTPS URL (received '${parsed.protocol}')`);
+  }
+  return trimmed;
+}
+
+/**
+ * Validates an affected-release policy package according to strict whitelist rules.
+ *
+ * Enforces honesty boundaries:
+ * - Accepts only genuine advisory identifiers and affected versions.
+ * - For CVE-2024-3094, only genuinely affected releases (5.6.0, 5.6.1) are accepted;
+ *   xz-utils 5.2.5 or safe releases cannot be labeled affected.
+ * - Strictly rejects mock/demo/synthetic/controlled test provenance markers.
+ */
+export function validateAffectedReleasePolicyPackage(pkg: unknown): AffectedReleasePolicyPackage {
+  if (!pkg || typeof pkg !== 'object' || Array.isArray(pkg)) {
+    throw new Error('Policy package must be an object');
+  }
+  const p = pkg as Record<string, unknown>;
+
+  const allowedSet = new Set<string>(AFFECTED_RELEASE_POLICY_REQUIRED_FIELDS);
+  const extraKeys = Object.keys(p).filter((k) => !allowedSet.has(k));
+  if (extraKeys.length > 0) {
+    throw new Error(`Affected-release policy contains unauthorized top-level fields: ${extraKeys.join(', ')}`);
+  }
+
+  // Reject sensitive or forbidden keys anywhere in the object
+  const forbiddenPatterns = [
+    'secret',
+    'salt',
+    'password',
+    'passphrase',
+    'privatekey',
+    'seed',
+    'mnemonic',
+    'inventory',
+    'credential',
+    'nullifier',
+    'mock',
+    'demo',
+    'simulated',
+    'synthetic',
+    'controlled-test-vector',
+  ];
+  for (const key of Object.keys(p)) {
+    const lowerKey = key.toLowerCase();
+    for (const pattern of forbiddenPatterns) {
+      if (lowerKey.includes(pattern)) {
+        throw new Error(`Affected-release policy contains forbidden field: ${key}`);
+      }
+    }
+  }
+
+  if (p.schema !== AFFECTED_RELEASE_POLICY_SCHEMA) {
+    throw new Error(`Invalid schema: expected '${AFFECTED_RELEASE_POLICY_SCHEMA}', received '${String(p.schema)}'`);
+  }
+  if (p.network !== 'preprod') {
+    throw new Error("Invalid network: expected 'preprod'");
+  }
+  const contractAddress = validateContractAddress(p.contractAddress);
+
+  if (typeof p.advisoryId !== 'string' || p.advisoryId.trim().length === 0) {
+    throw new Error('advisoryId must be a non-empty string');
+  }
+  const advisoryId = p.advisoryId.trim();
+  if (p.advisoryId !== advisoryId) {
+    throw new Error('advisoryId must not contain leading or trailing whitespace');
+  }
+
+  if (typeof p.product !== 'string' || p.product.trim().length === 0) {
+    throw new Error('product must be a non-empty trimmed string');
+  }
+  const product = p.product.trim();
+  if (p.product !== product) {
+    throw new Error('product must not contain leading or trailing whitespace');
+  }
+
+  if (!isValidVersionTuple(p.version)) {
+    throw new Error('version must be a valid VersionTuple with safe uint32 integers');
+  }
+
+  // Honesty boundary for CVE-2024-3094:
+  // Authoritative evidence documents only 5.6.0 and 5.6.1 as compromised.
+  // 5.2.5 (or any 5.2.x / 5.4.x) is never affected.
+  if (advisoryId.toUpperCase() === 'CVE-2024-3094' && product === 'pkg:generic/xz-utils') {
+    const isGenuinelyAffected =
+      p.version.major === 5 &&
+      p.version.minor === 6 &&
+      (p.version.patch === 0 || p.version.patch === 1);
+    if (!isGenuinelyAffected) {
+      throw new Error(
+        `For CVE-2024-3094 on pkg:generic/xz-utils, only releases 5.6.0 and 5.6.1 are affected. Version ${p.version.major}.${p.version.minor}.${p.version.patch} cannot be registered as affected.`
+      );
+    }
+  }
+
+  if (typeof p.sourcePublisher !== 'string' || p.sourcePublisher.trim().length === 0) {
+    throw new Error('sourcePublisher must be a non-empty string');
+  }
+  const sourcePublisher = p.sourcePublisher.trim();
+
+  const sourceReference = validateHttpsUrl(p.sourceReference);
+
+  if (!isValidIsoTimestamp(p.sourcePublicationDate)) {
+    throw new Error('sourcePublicationDate must be a valid ISO-8601 UTC timestamp');
+  }
+
+  if (!isValidIsoTimestamp(p.createdAt)) {
+    throw new Error('createdAt must be a valid ISO-8601 UTC timestamp');
+  }
+
+  return {
+    schema: AFFECTED_RELEASE_POLICY_SCHEMA,
+    network: 'preprod',
+    contractAddress,
+    advisoryId,
+    product,
+    version: {
+      major: p.version.major,
+      minor: p.version.minor,
+      patch: p.version.patch,
+    },
+    sourcePublisher,
+    sourceReference,
+    sourcePublicationDate: p.sourcePublicationDate,
+    createdAt: p.createdAt,
+  };
+}
+
+export function buildAffectedReleasePolicyPackage(params: {
+  contractAddress: string;
+  advisoryId: string;
+  product: string;
+  version: VersionTuple;
+  sourcePublisher: string;
+  sourceReference: string;
+  sourcePublicationDate: string;
+  now?: Date;
+}): AffectedReleasePolicyPackage {
+  const now = params.now ?? new Date();
+  return validateAffectedReleasePolicyPackage({
+    schema: AFFECTED_RELEASE_POLICY_SCHEMA,
+    network: 'preprod',
+    contractAddress: params.contractAddress,
+    advisoryId: params.advisoryId,
+    product: params.product,
+    version: params.version,
+    sourcePublisher: params.sourcePublisher,
+    sourceReference: params.sourceReference,
+    sourcePublicationDate: params.sourcePublicationDate,
+    createdAt: now.toISOString(),
+  });
+}
+
+export const AFFECTED_RELEASE_REGISTRATION_RECEIPT_REQUIRED_FIELDS = [
+  'schema',
+  'network',
+  'contractAddress',
+  'advisoryId',
+  'product',
+  'version',
+  'sourcePublisher',
+  'sourceReference',
+  'registrationTxId',
+  'registeredAt',
+  'policyActive',
+  'status',
+] as const;
+
+export function validateAffectedReleaseRegistrationReceipt(
+  receipt: unknown,
+): AffectedReleaseRegistrationReceipt {
+  if (!receipt || typeof receipt !== 'object' || Array.isArray(receipt)) {
+    throw new Error('Registration receipt must be an object');
+  }
+  const r = receipt as Record<string, unknown>;
+
+  const allowedSet = new Set<string>(AFFECTED_RELEASE_REGISTRATION_RECEIPT_REQUIRED_FIELDS);
+  const extraKeys = Object.keys(r).filter((k) => !allowedSet.has(k));
+  if (extraKeys.length > 0) {
+    throw new Error(`Registration receipt contains unauthorized top-level fields: ${extraKeys.join(', ')}`);
+  }
+
+  if (r.schema !== AFFECTED_RELEASE_REGISTRATION_RECEIPT_SCHEMA) {
+    throw new Error(`Invalid schema: expected '${AFFECTED_RELEASE_REGISTRATION_RECEIPT_SCHEMA}', received '${String(r.schema)}'`);
+  }
+  if (r.network !== 'preprod') {
+    throw new Error("Invalid network: expected 'preprod'");
+  }
+  const contractAddress = validateContractAddress(r.contractAddress);
+
+  if (typeof r.advisoryId !== 'string' || r.advisoryId.trim().length === 0) {
+    throw new Error('advisoryId must be a non-empty string');
+  }
+  if (typeof r.product !== 'string' || r.product.trim().length === 0) {
+    throw new Error('product must be a non-empty string');
+  }
+  if (!isValidVersionTuple(r.version)) {
+    throw new Error('version must be a valid VersionTuple');
+  }
+  if (typeof r.sourcePublisher !== 'string' || r.sourcePublisher.trim().length === 0) {
+    throw new Error('sourcePublisher must be a non-empty string');
+  }
+  const sourceReference = validateHttpsUrl(r.sourceReference);
+
+  if (r.registrationTxId !== null) {
+    if (typeof r.registrationTxId !== 'string' || !isHex(r.registrationTxId) || r.registrationTxId.length < 16) {
+      throw new Error('registrationTxId must be a valid hex string or null');
+    }
+  }
+
+  if (!isValidIsoTimestamp(r.registeredAt)) {
+    throw new Error('registeredAt must be a valid ISO-8601 UTC timestamp');
+  }
+
+  if (typeof r.policyActive !== 'boolean') {
+    throw new Error('policyActive must be a boolean');
+  }
+
+  if (r.status !== 'finalized') {
+    throw new Error("status must be 'finalized'");
+  }
+
+  return {
+    schema: AFFECTED_RELEASE_REGISTRATION_RECEIPT_SCHEMA,
+    network: 'preprod',
+    contractAddress,
+    advisoryId: (r.advisoryId as string).trim(),
+    product: (r.product as string).trim(),
+    version: {
+      major: r.version.major,
+      minor: r.version.minor,
+      patch: r.version.patch,
+    },
+    sourcePublisher: (r.sourcePublisher as string).trim(),
+    sourceReference,
+    registrationTxId: r.registrationTxId ? (r.registrationTxId as string).toLowerCase() : null,
+    registeredAt: r.registeredAt as string,
+    policyActive: r.policyActive,
+    status: 'finalized',
+  };
+}
+
+export function buildAffectedReleaseRegistrationReceipt(params: {
+  contractAddress: string;
+  advisoryId: string;
+  product: string;
+  version: VersionTuple;
+  sourcePublisher: string;
+  sourceReference: string;
+  registrationTxId?: string | null;
+  policyActive: boolean;
+  now?: Date;
+}): AffectedReleaseRegistrationReceipt {
+  const now = params.now ?? new Date();
+  return validateAffectedReleaseRegistrationReceipt({
+    schema: AFFECTED_RELEASE_REGISTRATION_RECEIPT_SCHEMA,
+    network: 'preprod',
+    contractAddress: params.contractAddress,
+    advisoryId: params.advisoryId,
+    product: params.product,
+    version: params.version,
+    sourcePublisher: params.sourcePublisher,
+    sourceReference: params.sourceReference,
+    registrationTxId: params.registrationTxId ?? null,
+    registeredAt: now.toISOString(),
+    policyActive: params.policyActive,
     status: 'finalized',
   });
 }

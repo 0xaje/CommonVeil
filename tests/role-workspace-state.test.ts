@@ -115,6 +115,22 @@ import {
   mapCertificationError,
   mapCertificationInspectionError,
   CERTIFICATION_VERIFICATION_ERROR_MESSAGES,
+  INITIAL_REGISTRAR_AFFECTED_RELEASE_UI_STATE,
+  type RegistrarAffectedReleaseUiState,
+  checkRegistrarAffectedReleasePrerequisites,
+  canInitiateAffectedReleaseRegistration,
+  onAffectedReleasePolicyImported,
+  onAffectedReleaseConfirmationOpen,
+  onAffectedReleaseConfirmationDismissed,
+  onAffectedReleaseWalletRequest,
+  onAffectedReleaseSubmitting,
+  onAffectedReleaseFinalizedIndexing,
+  onAffectedReleaseCompleted,
+  onAffectedReleaseFailed,
+  onAffectedReleaseReset,
+  mapAffectedReleaseInspectionError,
+  mapAffectedReleaseRegistrationError,
+  AFFECTED_RELEASE_VERIFICATION_ERROR_MESSAGES,
 } from '../src/role-workspace-state.ts';
 import {
   bytesToHex,
@@ -134,6 +150,11 @@ import {
   validateCertifiedSnapshotPackage,
   buildCertifiedSnapshotPackage,
   productDigest,
+  advisoryDigest,
+  buildAffectedReleasePolicyPackage,
+  buildAffectedReleaseRegistrationReceipt,
+  type AffectedReleasePolicyPackage,
+  type AffectedReleaseRegistrationReceipt,
 } from '../src/role-packages.ts';
 import {
   verifyRegistrarSecret,
@@ -3483,4 +3504,302 @@ test('112. End-to-end product binding consistency: pkg:generic/xz-utils survives
     hexToBytes(snapshot.snapshotSalt),
   );
   assert.equal(bytesToHex(reconstructedCommitment), snapshot.commitment);
+});
+
+// 134. CV-010: checkRegistrarAffectedReleasePrerequisites comprehensive gating
+test('134. CV-010: checkRegistrarAffectedReleasePrerequisites comprehensive prerequisite validation', () => {
+  const policyPkg = buildAffectedReleasePolicyPackage({
+    contractAddress: SAMPLE_HEX_64,
+    advisoryId: 'CVE-2024-3094',
+    product: 'pkg:generic/xz-utils',
+    version: { major: 5, minor: 6, patch: 0 },
+    sourcePublisher: 'Red Hat / CISA',
+    sourceReference: 'https://nvd.nist.gov/vuln/detail/CVE-2024-3094',
+    sourcePublicationDate: '2024-03-29T00:00:00.000Z',
+  });
+
+  const validParams = {
+    isConnected: true,
+    attachedContractAddress: SAMPLE_HEX_64,
+    hasRegistrarSecret: true,
+    registrarBackupRecoveryStatus: 'recovery-tested',
+    registrarVerificationStatus: 'verified',
+    importedPolicy: policyPkg,
+    isReleaseAlreadyRegistered: false,
+    isProofProviderConfigured: true,
+    isOperationPending: false,
+  };
+
+  // 1. All valid -> 0 missing prereqs
+  const missing = checkRegistrarAffectedReleasePrerequisites(validParams);
+  assert.equal(missing.length, 0);
+  assert.equal(canInitiateAffectedReleaseRegistration(validParams), true);
+
+  // 2. Disconnected wallet
+  assert.equal(
+    checkRegistrarAffectedReleasePrerequisites({ ...validParams, isConnected: false }).includes(
+      '1AM wallet must be connected on Midnight Preprod.',
+    ),
+    true,
+  );
+
+  // 3. Unverified registrar
+  assert.equal(
+    checkRegistrarAffectedReleasePrerequisites({ ...validParams, registrarVerificationStatus: 'unverified' }).includes(
+      'Registrar secret must match the on-chain registrar key (verified).',
+    ),
+    true,
+  );
+
+  // 4. Backup not recovery-tested
+  assert.equal(
+    checkRegistrarAffectedReleasePrerequisites({ ...validParams, registrarBackupRecoveryStatus: 'exported' }).includes(
+      "Registrar encrypted backup must be recovery-tested (status 'recovery-tested').",
+    ),
+    true,
+  );
+
+  // 5. Contract address mismatch between policy package and attached contract
+  const mismatchedPolicy = { ...policyPkg, contractAddress: '01'.repeat(32) };
+  assert.equal(
+    checkRegistrarAffectedReleasePrerequisites({ ...validParams, importedPolicy: mismatchedPolicy }).includes(
+      'Policy package contract address does not match the attached contract.',
+    ),
+    true,
+  );
+
+  // 6. Already registered on-chain
+  assert.equal(
+    checkRegistrarAffectedReleasePrerequisites({ ...validParams, isReleaseAlreadyRegistered: true }).includes(
+      'This exact release is already registered on-chain in affectedReleases.',
+    ),
+    true,
+  );
+
+  // 7. Prover unconfigured
+  assert.equal(
+    checkRegistrarAffectedReleasePrerequisites({ ...validParams, isProofProviderConfigured: false }).includes(
+      'Local proof provider (prover service) must be reachable and configured.',
+    ),
+    true,
+  );
+
+  // 8. Operation in flight
+  assert.equal(
+    checkRegistrarAffectedReleasePrerequisites({ ...validParams, isOperationPending: true }).includes(
+      'Another registration operation is currently in progress.',
+    ),
+    true,
+  );
+});
+
+// 135. CV-010: onAffectedReleasePolicyImported verifies target contract address
+test('135. CV-010: onAffectedReleasePolicyImported verifies target contract and transitions stage', () => {
+  const policyPkg = buildAffectedReleasePolicyPackage({
+    contractAddress: SAMPLE_HEX_64,
+    advisoryId: 'CVE-2024-3094',
+    product: 'pkg:generic/xz-utils',
+    version: { major: 5, minor: 6, patch: 0 },
+    sourcePublisher: 'Red Hat / CISA',
+    sourceReference: 'https://nvd.nist.gov/vuln/detail/CVE-2024-3094',
+    sourcePublicationDate: '2024-03-29T00:00:00.000Z',
+  });
+
+  const state0 = INITIAL_REGISTRAR_AFFECTED_RELEASE_UI_STATE;
+
+  // Matching contract -> stage 'reviewing'
+  const state1 = onAffectedReleasePolicyImported(state0, policyPkg, SAMPLE_HEX_64);
+  assert.equal(state1.stage, 'reviewing');
+  assert.equal(state1.importedPolicy, policyPkg);
+  assert.equal(state1.errorMessage, null);
+
+  // Mismatched contract -> stage 'failed' with descriptive error
+  const stateMismatch = onAffectedReleasePolicyImported(state0, policyPkg, '02'.repeat(32));
+  assert.equal(stateMismatch.stage, 'failed');
+  assert.match(stateMismatch.errorMessage!, /does not match active contract/);
+
+  // No attached contract -> stage 'failed'
+  const stateNoContract = onAffectedReleasePolicyImported(state0, policyPkg, null);
+  assert.equal(stateNoContract.stage, 'failed');
+  assert.match(stateNoContract.errorMessage!, /Attach and verify a CommonVeil contract/);
+});
+
+// 136. CV-010: Confirmation dialog workflow reducers
+test('136. CV-010: Confirmation dialog lifecycle transitions correctly', () => {
+  const policyPkg = buildAffectedReleasePolicyPackage({
+    contractAddress: SAMPLE_HEX_64,
+    advisoryId: 'CVE-2024-3094',
+    product: 'pkg:generic/xz-utils',
+    version: { major: 5, minor: 6, patch: 0 },
+    sourcePublisher: 'Red Hat / CISA',
+    sourceReference: 'https://nvd.nist.gov/vuln/detail/CVE-2024-3094',
+    sourcePublicationDate: '2024-03-29T00:00:00.000Z',
+  });
+
+  let state = onAffectedReleasePolicyImported(
+    INITIAL_REGISTRAR_AFFECTED_RELEASE_UI_STATE,
+    policyPkg,
+    SAMPLE_HEX_64,
+  );
+  assert.equal(state.stage, 'reviewing');
+
+  // Open confirmation
+  state = onAffectedReleaseConfirmationOpen(state);
+  assert.equal(state.stage, 'confirming');
+
+  // Dismiss confirmation -> returns to reviewing
+  state = onAffectedReleaseConfirmationDismissed(state);
+  assert.equal(state.stage, 'reviewing');
+
+  // Open and proceed to wallet request
+  state = onAffectedReleaseConfirmationOpen(state);
+  state = onAffectedReleaseWalletRequest(state);
+  assert.equal(state.stage, 'requesting-wallet');
+
+  // Proceed to submitting
+  state = onAffectedReleaseSubmitting(state);
+  assert.equal(state.stage, 'submitting');
+});
+
+// 137. CV-010: Indexer lag transition preserves registrationTxId
+test('137. CV-010: Indexer lag transition preserves registrationTxId without resubmitting', () => {
+  const txId = '00162a6cea69226e4731b519f76ca71e14e011eca434cfe2a08b88dda51f02f66b';
+  let state = onAffectedReleaseWalletRequest(INITIAL_REGISTRAR_AFFECTED_RELEASE_UI_STATE);
+  state = onAffectedReleaseSubmitting(state);
+
+  // Transition to finalized-indexing
+  state = onAffectedReleaseFinalizedIndexing(state, txId);
+  assert.equal(state.stage, 'finalized-indexing');
+  assert.equal(state.registrationTxId, txId);
+  assert.equal(state.errorMessage, null);
+
+  // Consecutive finalized-indexing call retains original txId if txId is null/undefined
+  state = onAffectedReleaseFinalizedIndexing(state, null);
+  assert.equal(state.registrationTxId, txId);
+});
+
+// 138. CV-010: Registration completion and receipt attachment
+test('138. CV-010: onAffectedReleaseCompleted transitions to registered stage with receipt', () => {
+  const txId = '00162a6cea69226e4731b519f76ca71e14e011eca434cfe2a08b88dda51f02f66b';
+  const receipt: AffectedReleaseRegistrationReceipt = buildAffectedReleaseRegistrationReceipt({
+    contractAddress: SAMPLE_HEX_64,
+    advisoryId: 'CVE-2024-3094',
+    product: 'pkg:generic/xz-utils',
+    version: { major: 5, minor: 6, patch: 0 },
+    sourcePublisher: 'Red Hat / CISA',
+    sourceReference: 'https://nvd.nist.gov/vuln/detail/CVE-2024-3094',
+    registrationTxId: txId,
+    policyActive: true,
+  });
+
+  const state = onAffectedReleaseCompleted(INITIAL_REGISTRAR_AFFECTED_RELEASE_UI_STATE, receipt);
+  assert.equal(state.stage, 'registered');
+  assert.equal(state.receipt, receipt);
+  assert.equal(state.registrationTxId, txId);
+  assert.equal(state.errorMessage, null);
+
+  // Reset clears state
+  const resetState = onAffectedReleaseReset();
+  assert.deepEqual(resetState, INITIAL_REGISTRAR_AFFECTED_RELEASE_UI_STATE);
+});
+
+// 139. CV-010: Error mapping for registration failure and wallet rejection
+test('139. CV-010: mapAffectedReleaseRegistrationError sanitizes errors accurately', () => {
+  // Cancellation in wallet
+  assert.equal(
+    mapAffectedReleaseRegistrationError(new Error('User rejected the transaction request in 1AM')),
+    'Affected release registration transaction was cancelled in 1AM.',
+  );
+  assert.equal(
+    mapAffectedReleaseRegistrationError('User denied transaction'),
+    'Affected release registration transaction was cancelled in 1AM.',
+  );
+
+  // Duplicate release
+  assert.equal(
+    mapAffectedReleaseRegistrationError(new Error('assert failed: Affected release already registered')),
+    'This affected release is already registered on-chain.',
+  );
+
+  // Non-registrar authority rejection
+  assert.equal(
+    mapAffectedReleaseRegistrationError(new Error('assert failed: Only the registrar can perform this operation')),
+    'Registrar secret does not match the on-chain authorized registrar key.',
+  );
+
+  // Insufficient DUST balance
+  assert.equal(
+    mapAffectedReleaseRegistrationError(new Error('Insufficient balance or dust to cover transaction fees')),
+    'Insufficient DUST or balance in connected 1AM wallet to cover transaction fees.',
+  );
+
+  // Prover failure
+  assert.equal(
+    mapAffectedReleaseRegistrationError(new Error('Prover service connection refused: proof generation failed')),
+    'ZK proof generation failed. Ensure your local proof server is reachable and responsive.',
+  );
+
+  // Fallback generic error
+  assert.equal(
+    mapAffectedReleaseRegistrationError(new Error('unknown low level error')),
+    'The affected release registration transaction could not be completed. Check the network connection and try again.',
+  );
+});
+
+// 140. CV-010: Error mapping for ledger inspection failure
+test('140. CV-010: mapAffectedReleaseInspectionError handles contract not found and indexer timeouts', () => {
+  assert.equal(
+    mapAffectedReleaseInspectionError(new Error('Contract not found at address')),
+    AFFECTED_RELEASE_VERIFICATION_ERROR_MESSAGES.CONTRACT_NOT_FOUND,
+  );
+
+  assert.equal(
+    mapAffectedReleaseInspectionError(new Error('Indexer query timeout')),
+    'The Midnight indexer could not complete the contract lookup.',
+  );
+
+  assert.equal(
+    mapAffectedReleaseInspectionError(new Error('Incompatible ledger state')),
+    AFFECTED_RELEASE_VERIFICATION_ERROR_MESSAGES.INCOMPATIBLE_CONTRACT,
+  );
+});
+
+// 141. CV-010: Pure circuits releaseId derivation matches on-chain hashing
+test('141. CV-010: pureCircuits.deriveReleaseId produces 32-byte hash and matches expected arguments', async () => {
+  const advisoryDigestBytes = await advisoryDigest('CVE-2024-3094');
+  const productDigestBytes = await productDigest('pkg:generic/xz-utils');
+  const major = 5n;
+  const minor = 6n;
+  const patch = 0n;
+
+  const releaseId = pureCircuits.deriveReleaseId(
+    advisoryDigestBytes,
+    productDigestBytes,
+    major,
+    minor,
+    patch,
+  );
+
+  assert.equal(releaseId instanceof Uint8Array, true);
+  assert.equal(releaseId.length, 32);
+
+  // Deterministic
+  const releaseId2 = pureCircuits.deriveReleaseId(
+    advisoryDigestBytes,
+    productDigestBytes,
+    major,
+    minor,
+    patch,
+  );
+  assert.deepEqual(releaseId, releaseId2);
+
+  // Different version tuple produces different releaseId
+  const releaseIdPatch1 = pureCircuits.deriveReleaseId(
+    advisoryDigestBytes,
+    productDigestBytes,
+    major,
+    minor,
+    1n,
+  );
+  assert.notDeepEqual(releaseId, releaseIdPatch1);
 });

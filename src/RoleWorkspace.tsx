@@ -32,6 +32,15 @@ import {
   buildInventoryCertificationReceipt,
   INVENTORY_CERTIFICATION_RECEIPT_SCHEMA,
   productDigest,
+  advisoryDigest,
+  AFFECTED_RELEASE_POLICY_SCHEMA,
+  AFFECTED_RELEASE_REGISTRATION_RECEIPT_SCHEMA,
+  type AffectedReleasePolicyPackage,
+  validateAffectedReleasePolicyPackage,
+  buildAffectedReleasePolicyPackage,
+  type AffectedReleaseRegistrationReceipt,
+  validateAffectedReleaseRegistrationReceipt,
+  buildAffectedReleaseRegistrationReceipt,
 } from './role-packages';
 import { deployContract, submitCallTx } from '@midnight-ntwrk/midnight-js-contracts';
 import { CompiledCommonVeilContract, CommonVeil } from './contract';
@@ -147,6 +156,21 @@ import {
   mapCertificationError,
   mapCertificationInspectionError,
   CERTIFICATION_VERIFICATION_ERROR_MESSAGES,
+  INITIAL_REGISTRAR_AFFECTED_RELEASE_UI_STATE,
+  type RegistrarAffectedReleaseUiState,
+  checkRegistrarAffectedReleasePrerequisites,
+  canInitiateAffectedReleaseRegistration,
+  onAffectedReleasePolicyImported,
+  onAffectedReleaseConfirmationOpen,
+  onAffectedReleaseConfirmationDismissed,
+  onAffectedReleaseWalletRequest,
+  onAffectedReleaseSubmitting,
+  onAffectedReleaseFinalizedIndexing,
+  onAffectedReleaseCompleted,
+  onAffectedReleaseFailed,
+  onAffectedReleaseReset,
+  mapAffectedReleaseInspectionError,
+  mapAffectedReleaseRegistrationError,
 } from './role-workspace-state';
 import './role-workspace.css';
 
@@ -246,6 +270,39 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
   );
   const [admissionNotice, setAdmissionNotice] = useState<string | null>(null);
 
+  // Registrar Affected Release & Policy Activation state (CV-010)
+  const [affectedReleaseUi, setAffectedReleaseUi] = useState<RegistrarAffectedReleaseUiState>(
+    INITIAL_REGISTRAR_AFFECTED_RELEASE_UI_STATE,
+  );
+  const [affectedReleaseNotice, setAffectedReleaseNotice] = useState<string | null>(null);
+  const [policyAdvisoryInput, setPolicyAdvisoryInput] = useState('CVE-2024-3094');
+  const [policyProductInput, setPolicyProductInput] = useState('pkg:generic/xz-utils');
+  const [policyMajorInput, setPolicyMajorInput] = useState('5');
+  const [policyMinorInput, setPolicyMinorInput] = useState('6');
+  const [policyPatchInput, setPolicyPatchInput] = useState('0');
+  const [policyPublisherInput, setPolicyPublisherInput] = useState('Red Hat / CISA');
+  const [policyRefInput, setPolicyRefInput] = useState('https://nvd.nist.gov/vuln/detail/CVE-2024-3094');
+  const [policyPubDateInput, setPolicyPubDateInput] = useState('2024-03-29T00:00:00.000Z');
+  const affectedPolicyInputRef = useRef<HTMLInputElement | null>(null);
+
+  const resetAffectedReleaseState = (preserveReceipt: boolean = false) => {
+    setAffectedReleaseUi((prev) => {
+      if (preserveReceipt && prev.receipt) {
+        return {
+          ...INITIAL_REGISTRAR_AFFECTED_RELEASE_UI_STATE,
+          stage: 'registered',
+          registrationTxId: prev.registrationTxId,
+          receipt: prev.receipt,
+        };
+      }
+      return onAffectedReleaseReset();
+    });
+    setAffectedReleaseNotice(null);
+    if (affectedPolicyInputRef.current) {
+      affectedPolicyInputRef.current.value = '';
+    }
+  };
+
   // Certifier Certification Workflow state (CV-009)
   const [certificationUi, setCertificationUi] = useState<CertifierCertificationUiState>(
     INITIAL_CERTIFIER_CERTIFICATION_UI_STATE,
@@ -315,6 +372,9 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
   const certificationGenerationRef = useRef(0);
   const activeCertificationTokenRef = useRef<number | null>(null);
 
+  const regAffectedGenerationRef = useRef(0);
+  const activeRegAffectedTokenRef = useRef<number | null>(null);
+
   // Zeroize bytes and clear references on unmount or role change
   useEffect(() => {
     isMounted.current = true;
@@ -332,6 +392,8 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
       activeAdmissionTokenRef.current = null;
       certificationGenerationRef.current++;
       activeCertificationTokenRef.current = null;
+      regAffectedGenerationRef.current++;
+      activeRegAffectedTokenRef.current = null;
       zeroizeBytes(plaintextSecretRef.current);
       plaintextSecretRef.current = null;
       zeroizeBytes(plaintextCertifierSecretRef.current);
@@ -361,11 +423,17 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
     admissionUi.stage === 'submitting' ||
     admissionUi.stage === 'finalized-indexing';
 
+  const isRegisteringAffected =
+    affectedReleaseUi.stage === 'requesting-wallet' ||
+    affectedReleaseUi.stage === 'submitting' ||
+    affectedReleaseUi.stage === 'finalized-indexing';
+
   const isBusy =
     contractState.inspectionState === 'inspecting' ||
     contractState.inspectionState === 'attaching' ||
     isDeploying ||
-    isAdmitting;
+    isAdmitting ||
+    isRegisteringAffected;
 
   // Monotonically increasing copy generation tokens to prevent stale callbacks across secret lifecycles
   const copyGenerationRef = useRef(0);
@@ -383,11 +451,14 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
     activeDeployTokenRef.current = null;
     admissionGenerationRef.current++;
     activeAdmissionTokenRef.current = null;
+    regAffectedGenerationRef.current++;
+    activeRegAffectedTokenRef.current = null;
     zeroizeBytes(plaintextSecretRef.current);
     plaintextSecretRef.current = null;
     setRegistrarUi((prev) => onSecretClearedOrLocked(prev, isLocked));
     setDeploymentUi((prev) => onDeploymentReset(prev));
     setAdmissionUi((prev) => onAdmissionReset(prev));
+    resetAffectedReleaseState(false);
     setImportHexInput('');
     setExportPassphrase('');
     setExportConfirmPassphrase('');
@@ -480,6 +551,7 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
     setContractState(INITIAL_WORKSPACE_CONTRACT_STATE);
     setDeploymentUi((prev) => onDeploymentReset(prev));
     setAdmissionUi((prev) => onAdmissionReset(prev));
+    resetAffectedReleaseState(false);
     resetCertificationState();
   };
 
@@ -496,6 +568,8 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
     activeAdmissionTokenRef.current = null;
     certificationGenerationRef.current++;
     activeCertificationTokenRef.current = null;
+    regAffectedGenerationRef.current++;
+    activeRegAffectedTokenRef.current = null;
     clearMemberSecret(false);
     const next = handleAddressInputChange(contractState, e.target.value);
     setContractState(next);
@@ -514,6 +588,7 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
     }));
     setDeploymentUi((prev) => onDeploymentReset(prev));
     setAdmissionUi((prev) => onAdmissionReset(prev));
+    resetAffectedReleaseState(false);
     resetCertificationState();
   };
 
@@ -2900,6 +2975,421 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
     }
   };
 
+  // ── CV-010: Affected Release & Policy Activation Prerequisites ───────────
+  const registrarAffectedReleasePrereqs = checkRegistrarAffectedReleasePrerequisites({
+    isConnected: !!wallet,
+    attachedContractAddress: contractState.attachedAddress,
+    hasRegistrarSecret: registrarUi.hasSecret,
+    registrarBackupRecoveryStatus: registrarUi.backupRecoveryStatus,
+    registrarVerificationStatus: registrarUi.verificationStatus,
+    importedPolicy: affectedReleaseUi.importedPolicy,
+    isReleaseAlreadyRegistered: null,
+    isProofProviderConfigured: !!wallet?.providers,
+    isOperationPending: isRegisteringAffected,
+  });
+
+  const canRegisterAffectedRelease = canInitiateAffectedReleaseRegistration({
+    isConnected: !!wallet,
+    attachedContractAddress: contractState.attachedAddress,
+    hasRegistrarSecret: registrarUi.hasSecret,
+    registrarBackupRecoveryStatus: registrarUi.backupRecoveryStatus,
+    registrarVerificationStatus: registrarUi.verificationStatus,
+    importedPolicy: affectedReleaseUi.importedPolicy,
+    isReleaseAlreadyRegistered: null,
+    isProofProviderConfigured: !!wallet?.providers,
+    isOperationPending: isRegisteringAffected,
+  });
+
+  // ── CV-010: File selection and import of affected release policy package ───
+  const handleAffectedPolicyFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    try {
+      const text = await file.text();
+      const raw = JSON.parse(text);
+      const pkg = validateAffectedReleasePolicyPackage(raw);
+      setAffectedReleaseUi((prev) =>
+        onAffectedReleasePolicyImported(prev, pkg, contractState.attachedAddress),
+      );
+      setAffectedReleaseNotice(null);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setAffectedReleaseUi((prev) =>
+        onAffectedReleaseFailed(prev, `Invalid affected-release policy package: ${msg.slice(0, 140)}`),
+      );
+    }
+  };
+
+  // ── CV-010: Builder export for affected release policy package ─────────────
+  const handleBuildAndExportPolicy = () => {
+    if (!contractState.attachedAddress) {
+      setAffectedReleaseNotice('Please attach a CommonVeil contract before generating an affected release policy package.');
+      return;
+    }
+    const major = parseInt(policyMajorInput.trim(), 10);
+    const minor = parseInt(policyMinorInput.trim(), 10);
+    const patch = parseInt(policyPatchInput.trim(), 10);
+    if (isNaN(major) || isNaN(minor) || isNaN(patch) || major < 0 || minor < 0 || patch < 0) {
+      setAffectedReleaseNotice('Release version must consist of non-negative integers (major, minor, patch).');
+      return;
+    }
+
+    try {
+      const pkg = buildAffectedReleasePolicyPackage({
+        contractAddress: contractState.attachedAddress,
+        advisoryId: policyAdvisoryInput.trim(),
+        product: policyProductInput.trim(),
+        version: { major, minor, patch },
+        sourcePublisher: policyPublisherInput.trim(),
+        sourceReference: policyRefInput.trim(),
+        sourcePublicationDate: policyPubDateInput.trim(),
+      });
+      triggerBlobDownload(
+        JSON.stringify(pkg, null, 2),
+        `commonveil-affected-policy-${pkg.advisoryId.toLowerCase()}-${pkg.version.major}.${pkg.version.minor}.${pkg.version.patch}.json`,
+      );
+      setAffectedReleaseUi((prev) =>
+        onAffectedReleasePolicyImported(prev, pkg, contractState.attachedAddress),
+      );
+      setAffectedReleaseNotice(
+        `Generated and loaded affected-release policy for ${pkg.advisoryId} on ${pkg.product} ${pkg.version.major}.${pkg.version.minor}.${pkg.version.patch}.`,
+      );
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setAffectedReleaseNotice(`Policy creation rejected: ${msg}`);
+    }
+  };
+
+  const handleOpenAffectedReleaseConfirmation = () => {
+    setAffectedReleaseNotice(null);
+    setAffectedReleaseUi((prev) => onAffectedReleaseConfirmationOpen(prev));
+  };
+
+  const handleDismissAffectedReleaseConfirmation = () => {
+    setAffectedReleaseUi((prev) => onAffectedReleaseConfirmationDismissed(prev));
+  };
+
+  // ── CV-010: Initiate registerAffectedRelease on Midnight Preprod ───────────
+  const handleConfirmAndRegisterAffectedRelease = async () => {
+    setAffectedReleaseNotice(null);
+
+    if (
+      !wallet ||
+      !contractState.attachedAddress ||
+      !plaintextSecretRef.current ||
+      !affectedReleaseUi.importedPolicy ||
+      affectedReleaseUi.stage !== 'confirming'
+    ) {
+      return;
+    }
+
+    const attachedAddress = contractState.attachedAddress;
+    const pkg = affectedReleaseUi.importedPolicy;
+    const adminSecretBytes = plaintextSecretRef.current;
+
+    // Check authority against attached contract
+    if (registrarUi.verificationStatus !== 'verified') {
+      setAffectedReleaseUi((prev) =>
+        onAffectedReleaseFailed(
+          prev,
+          'Registrar authority must be verified against the attached contract before registering affected releases.',
+        ),
+      );
+      return;
+    }
+
+    // Verify contract address matches attached contract
+    if (pkg.contractAddress.toLowerCase().trim() !== attachedAddress.toLowerCase().trim()) {
+      setAffectedReleaseUi((prev) =>
+        onAffectedReleaseFailed(
+          prev,
+          'Policy package contract address does not match the attached contract.',
+        ),
+      );
+      return;
+    }
+
+    // Compute advisoryId (32 bytes) and productId (32 bytes)
+    let advisoryIdBytes: Uint8Array;
+    let productIdBytes: Uint8Array;
+    let releaseIdBytes: Uint8Array;
+    try {
+      advisoryIdBytes = await advisoryDigest(pkg.advisoryId);
+      productIdBytes = await productDigest(pkg.product);
+      releaseIdBytes = CommonVeil.pureCircuits.deriveReleaseId(
+        advisoryIdBytes,
+        productIdBytes,
+        BigInt(pkg.version.major),
+        BigInt(pkg.version.minor),
+        BigInt(pkg.version.patch),
+      );
+    } catch (digestErr: unknown) {
+      const msg = digestErr instanceof Error ? digestErr.message : String(digestErr);
+      setAffectedReleaseUi((prev) =>
+        onAffectedReleaseFailed(prev, `Failed to derive release digests: ${msg}`),
+      );
+      return;
+    }
+
+    // Pre-flight check: query whether release is already registered on-chain
+    try {
+      const preflightSession = await queryCommonVeilContract(wallet.providers, attachedAddress);
+      if (preflightSession.hasAffectedRelease(releaseIdBytes)) {
+        setAffectedReleaseUi((prev) =>
+          onAffectedReleaseFailed(
+            prev,
+            'This exact release is already registered on-chain in affectedReleases.',
+          ),
+        );
+        return;
+      }
+    } catch {
+      // Proceed cautiously if indexer is lagging; circuit will assert if duplicate
+    }
+
+    // Capture unique registration generation token
+    const operationToken = ++regAffectedGenerationRef.current;
+    activeRegAffectedTokenRef.current = operationToken;
+
+    const logRegDiagnostic = (stage: string, detail?: { errorClass?: string; errorMessage?: string }) => {
+      if (typeof window !== 'undefined' && (window as unknown as { __COMMONVEIL_DEV__?: boolean }).__COMMONVEIL_DEV__) {
+        console.debug(`[affected-release:${stage}]`, detail ?? '');
+      }
+    };
+
+    logRegDiagnostic('prereqs-validated');
+    setAffectedReleaseUi((prev) => onAffectedReleaseWalletRequest(prev));
+
+    try {
+      setAffectedReleaseUi((prev) => onAffectedReleaseSubmitting(prev));
+
+      logRegDiagnostic('circuit-invoke-start');
+
+      // Call genuine registerAffectedRelease circuit via installed Midnight SDK.
+      // Signature: (context, adminSecret_0, advisoryId_0, productId_0, major_0, minor_0, patch_0)
+      // Vacant witness private state -> omit privateStateId.
+      const finalized = await submitCallTx(
+        wallet.providers,
+        {
+          compiledContract: CompiledCommonVeilContract,
+          contractAddress: attachedAddress,
+          circuitId: 'registerAffectedRelease',
+          args: [
+            adminSecretBytes,
+            advisoryIdBytes,
+            productIdBytes,
+            BigInt(pkg.version.major),
+            BigInt(pkg.version.minor),
+            BigInt(pkg.version.patch),
+          ],
+        },
+      );
+
+      logRegDiagnostic('circuit-finalized');
+
+      if (!isMounted.current || activeRegAffectedTokenRef.current !== operationToken) {
+        return;
+      }
+
+      // Extract genuine transaction ID from SDK FinalizedTxData
+      const txId: string = finalized.public.txId;
+      if (typeof txId !== 'string' || txId.trim() === '') {
+        throw new Error('Finalized transaction data missing transaction ID');
+      }
+
+      // Automatically inspect public ledger to verify affectedReleases and policyActive
+      try {
+        logRegDiagnostic('inspect-ledger-start');
+        const session = await queryCommonVeilContract(wallet.providers, attachedAddress);
+        if (!isMounted.current || activeRegAffectedTokenRef.current !== operationToken) {
+          return;
+        }
+
+        const isRegistered = session.hasAffectedRelease(releaseIdBytes);
+        if (!isRegistered || !session.publicState.policyActive) {
+          logRegDiagnostic('ledger-indexing-lag');
+          // Finalized on-chain, but indexer ledger not yet reflecting it - preserve txId
+          setAffectedReleaseUi((prev) => onAffectedReleaseFinalizedIndexing(prev, txId));
+          return;
+        }
+
+        const receipt: AffectedReleaseRegistrationReceipt = buildAffectedReleaseRegistrationReceipt({
+          contractAddress: attachedAddress,
+          advisoryId: pkg.advisoryId,
+          product: pkg.product,
+          version: pkg.version,
+          sourcePublisher: pkg.sourcePublisher,
+          sourceReference: pkg.sourceReference,
+          registrationTxId: txId,
+          policyActive: true,
+        });
+
+        activeRegAffectedTokenRef.current = null;
+        logRegDiagnostic('registration-confirmed');
+        setAffectedReleaseUi((prev) => onAffectedReleaseCompleted(prev, receipt));
+        setAffectedReleaseNotice(
+          `Affected release ${pkg.product} ${pkg.version.major}.${pkg.version.minor}.${pkg.version.patch} for ${pkg.advisoryId} registered on Midnight Preprod. Policy is now ACTIVE.`,
+        );
+
+        // Update public contract state display
+        setContractState((prev) => ({
+          ...prev,
+          inspectedState: session.publicState,
+        }));
+      } catch (inspectError: unknown) {
+        if (!isMounted.current || activeRegAffectedTokenRef.current !== operationToken) {
+          return;
+        }
+
+        const errorCode =
+          inspectError instanceof ContractSessionError
+            ? inspectError.code
+            : (inspectError as { code?: string } | null)?.code;
+
+        logRegDiagnostic('inspect-ledger-error', {
+          errorClass: inspectError instanceof Error ? inspectError.name : typeof inspectError,
+          errorMessage: inspectError instanceof Error ? inspectError.message : String(inspectError),
+        });
+
+        if (errorCode === 'CONTRACT_NOT_FOUND' || errorCode === 'INDEXER_QUERY_FAILED') {
+          // Indexer query lag after finalization: transition to finalized-indexing preserving genuine txId
+          setAffectedReleaseUi((prev) => onAffectedReleaseFinalizedIndexing(prev, txId));
+        } else {
+          activeRegAffectedTokenRef.current = null;
+          setAffectedReleaseUi((prev) =>
+            onAffectedReleaseFailed(prev, mapAffectedReleaseInspectionError(inspectError)),
+          );
+        }
+      }
+    } catch (regError: unknown) {
+      if (!isMounted.current || activeRegAffectedTokenRef.current !== operationToken) {
+        return;
+      }
+      activeRegAffectedTokenRef.current = null;
+
+      logRegDiagnostic('circuit-invoke-error', {
+        errorClass: regError instanceof Error ? regError.name : typeof regError,
+        errorMessage: regError instanceof Error ? regError.message : String(regError),
+      });
+
+      const raw = (
+        regError instanceof Error
+          ? regError.message
+          : typeof regError === 'string'
+            ? regError
+            : ''
+      ).toLowerCase();
+
+      if (
+        raw.includes('cancel') ||
+        raw.includes('reject') ||
+        raw.includes('denied') ||
+        raw.includes('declined') ||
+        raw.includes('user aborted')
+      ) {
+        setAffectedReleaseUi((prev) =>
+          onAffectedReleaseFailed(prev, 'Affected release registration transaction was cancelled in 1AM.'),
+        );
+      } else {
+        setAffectedReleaseUi((prev) =>
+          onAffectedReleaseFailed(prev, mapAffectedReleaseRegistrationError(regError)),
+        );
+      }
+    }
+  };
+
+  // ── CV-010: Read-only indexer retry for affected release registration ─────
+  const handleRetryAffectedReleaseVerification = async () => {
+    if (
+      !wallet ||
+      !contractState.attachedAddress ||
+      !affectedReleaseUi.importedPolicy ||
+      affectedReleaseUi.stage !== 'finalized-indexing'
+    ) {
+      return;
+    }
+
+    const attachedAddress = contractState.attachedAddress;
+    const pkg = affectedReleaseUi.importedPolicy;
+
+    try {
+      const advisoryIdBytes = await advisoryDigest(pkg.advisoryId);
+      const productIdBytes = await productDigest(pkg.product);
+      const releaseIdBytes = CommonVeil.pureCircuits.deriveReleaseId(
+        advisoryIdBytes,
+        productIdBytes,
+        BigInt(pkg.version.major),
+        BigInt(pkg.version.minor),
+        BigInt(pkg.version.patch),
+      );
+
+      const session = await queryCommonVeilContract(wallet.providers, attachedAddress);
+      if (!isMounted.current) return;
+
+      const isRegistered = session.hasAffectedRelease(releaseIdBytes);
+      if (!isRegistered || !session.publicState.policyActive) {
+        // Still not indexed; keep finalized-indexing without resubmitting transaction
+        setAffectedReleaseNotice('Indexer has not yet reflected the affected release registration. Check again shortly.');
+        return;
+      }
+
+      const receipt = buildAffectedReleaseRegistrationReceipt({
+        contractAddress: attachedAddress,
+        advisoryId: pkg.advisoryId,
+        product: pkg.product,
+        version: pkg.version,
+        sourcePublisher: pkg.sourcePublisher,
+        sourceReference: pkg.sourceReference,
+        registrationTxId: affectedReleaseUi.registrationTxId,
+        policyActive: session.publicState.policyActive,
+      });
+
+      setAffectedReleaseUi((prev) => onAffectedReleaseCompleted(prev, receipt));
+      setAffectedReleaseNotice(
+        `Affected release registration confirmed on-chain in affectedReleases set. Policy is active.`,
+      );
+
+      setContractState((prev) => ({
+        ...prev,
+        inspectedState: session.publicState,
+      }));
+    } catch (inspectError: unknown) {
+      if (!isMounted.current) return;
+      const errorCode =
+        inspectError instanceof ContractSessionError
+          ? inspectError.code
+          : (inspectError as { code?: string } | null)?.code;
+
+      if (errorCode === 'CONTRACT_NOT_FOUND' || errorCode === 'INDEXER_QUERY_FAILED') {
+        // Retry query failed due to lookup/lag; stay in finalized-indexing
+        return;
+      }
+
+      setAffectedReleaseUi((prev) =>
+        onAffectedReleaseFailed(prev, mapAffectedReleaseInspectionError(inspectError)),
+      );
+    }
+  };
+
+  // ── CV-010: Download affected release registration receipt ────────────────
+  const handleDownloadAffectedReleaseReceipt = () => {
+    if (!affectedReleaseUi.receipt) return;
+    try {
+      const validated = validateAffectedReleaseRegistrationReceipt(affectedReleaseUi.receipt);
+      triggerBlobDownload(
+        JSON.stringify(validated, null, 2),
+        `commonveil-affected-release-receipt-${validated.advisoryId.toLowerCase()}-${validated.version.major}.${validated.version.minor}.${validated.version.patch}.json`,
+      );
+    } catch {
+      setAffectedReleaseNotice('Could not create valid affected release registration receipt.');
+    }
+  };
+
+  const handleResetAffectedRelease = () => {
+    resetAffectedReleaseState(false);
+  };
+
   return (
     <main className="role-workspace-main" aria-busy={walletConnecting || isBusy}>
       <nav className="role-workspace-nav">
@@ -5160,10 +5650,412 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
             </article>
           )}
 
+          {/* Registrar Affected Release & Policy Activation Section (Step 06) */}
+          {role === 'registrar' && (
+            <article className="workspace-card registrar-affected-release-card">
+              <div className="card-header">
+                <span className="card-step">06</span>
+                <h2>Register Affected Release & Activate Policy</h2>
+              </div>
+              <p className="card-caption">
+                Record an authoritative security advisory on-chain. Registering an affected release activates the contract policy and permanently closes the pre-policy inventory certification window.
+              </p>
+
+              {/* Explicit Publisher Notice Required by Audit */}
+              <div className="advisory-attribution-banner" role="note">
+                <p>
+                  <strong>Notice:</strong> CommonVeil records the Registrar’s policy decision on-chain. It does not independently authenticate the external advisory publisher.
+                </p>
+              </div>
+
+              {/* Status Header */}
+              <div className="registrar-status-row" aria-live="polite">
+                <div>
+                  <span className="field-caption">Policy Status</span>
+                  <strong className={`verification-badge ${publicState?.policyActive ? 'verified' : 'unverified'}`}>
+                    {publicState?.policyActive ? 'Policy Active' : 'Pre-policy (Open)'}
+                  </strong>
+                </div>
+                <div>
+                  <span className="field-caption">Workflow Stage</span>
+                  <strong className={`verification-badge ${affectedReleaseUi.stage === 'registered' ? 'verified' : 'unverified'}`}>
+                    {affectedReleaseUi.stage === 'registered'
+                      ? 'Registered (Policy Active)'
+                      : affectedReleaseUi.stage === 'reviewing'
+                        ? 'Reviewing Policy'
+                        : affectedReleaseUi.stage === 'confirming'
+                          ? 'Confirmation Required'
+                          : affectedReleaseUi.stage === 'requesting-wallet'
+                            ? '1AM Approval'
+                            : affectedReleaseUi.stage === 'submitting'
+                              ? 'Proving & Submitting'
+                              : affectedReleaseUi.stage === 'finalized-indexing'
+                                ? 'Finalized (Indexing)'
+                                : affectedReleaseUi.stage === 'failed'
+                                  ? 'Failed'
+                                  : 'Idle'}
+                  </strong>
+                </div>
+              </div>
+
+              {affectedReleaseNotice && (
+                <div className="safe-notice-banner" role="status">
+                  <p>{affectedReleaseNotice}</p>
+                </div>
+              )}
+
+              {affectedReleaseUi.errorMessage && (
+                <div className="safe-error-banner" role="alert">
+                  <strong>Policy Error</strong>
+                  <p>{affectedReleaseUi.errorMessage}</p>
+                </div>
+              )}
+
+              {/* Idle / Reviewing / Failed / Cancelled: Package Import & Builder */}
+              {(affectedReleaseUi.stage === 'idle' ||
+                affectedReleaseUi.stage === 'reviewing' ||
+                affectedReleaseUi.stage === 'failed') && (
+                <div className="affected-policy-container">
+                  {/* Option A: Import Existing Policy Package */}
+                  <div className="admission-import-box">
+                    <label htmlFor="affected-release-file-input">
+                      Import Affected-Release Policy (.json)
+                    </label>
+                    <p className="form-hint-text">
+                      Upload a verified <code>commonveil.affected-release-policy/v1</code> package targeting this attached contract.
+                    </p>
+                    <input
+                      id="affected-release-file-input"
+                      type="file"
+                      accept=".json,application/json"
+                      ref={affectedPolicyInputRef}
+                      disabled={isRegisteringAffected}
+                      onChange={handleAffectedPolicyFileSelect}
+                    />
+                  </div>
+
+                  {/* Option B: Policy Package Generator / Builder */}
+                  <div className="policy-builder-box">
+                    <h3>Draft Advisory Policy Package</h3>
+                    <p className="form-hint-text">
+                      Prepare an affected-release policy package for the active contract with full advisory metadata and HTTPS reference.
+                    </p>
+                    <div className="policy-builder-grid">
+                      <div className="form-group">
+                        <label htmlFor="policy-advisory-id">Advisory Identifier</label>
+                        <input
+                          id="policy-advisory-id"
+                          type="text"
+                          value={policyAdvisoryInput}
+                          onChange={(e) => setPolicyAdvisoryInput(e.target.value)}
+                          placeholder="CVE-2024-3094"
+                          disabled={isRegisteringAffected}
+                        />
+                      </div>
+                      <div className="form-group">
+                        <label htmlFor="policy-product">Product Identifier</label>
+                        <input
+                          id="policy-product"
+                          type="text"
+                          value={policyProductInput}
+                          onChange={(e) => setPolicyProductInput(e.target.value)}
+                          placeholder="pkg:generic/xz-utils"
+                          disabled={isRegisteringAffected}
+                        />
+                      </div>
+                      <div className="form-group version-inputs">
+                        <label>Affected Version (Major . Minor . Patch)</label>
+                        <div className="version-tuple-row">
+                          <input
+                            type="number"
+                            min="0"
+                            value={policyMajorInput}
+                            onChange={(e) => setPolicyMajorInput(e.target.value)}
+                            aria-label="Major version"
+                            disabled={isRegisteringAffected}
+                          />
+                          <span>.</span>
+                          <input
+                            type="number"
+                            min="0"
+                            value={policyMinorInput}
+                            onChange={(e) => setPolicyMinorInput(e.target.value)}
+                            aria-label="Minor version"
+                            disabled={isRegisteringAffected}
+                          />
+                          <span>.</span>
+                          <input
+                            type="number"
+                            min="0"
+                            value={policyPatchInput}
+                            onChange={(e) => setPolicyPatchInput(e.target.value)}
+                            aria-label="Patch version"
+                            disabled={isRegisteringAffected}
+                          />
+                        </div>
+                      </div>
+                      <div className="form-group">
+                        <label htmlFor="policy-publisher">Advisory Source / Publisher</label>
+                        <input
+                          id="policy-publisher"
+                          type="text"
+                          value={policyPublisherInput}
+                          onChange={(e) => setPolicyPublisherInput(e.target.value)}
+                          placeholder="Red Hat / CISA"
+                          disabled={isRegisteringAffected}
+                        />
+                      </div>
+                      <div className="form-group">
+                        <label htmlFor="policy-ref">HTTPS Reference URL</label>
+                        <input
+                          id="policy-ref"
+                          type="url"
+                          value={policyRefInput}
+                          onChange={(e) => setPolicyRefInput(e.target.value)}
+                          placeholder="https://nvd.nist.gov/vuln/detail/CVE-2024-3094"
+                          disabled={isRegisteringAffected}
+                        />
+                      </div>
+                      <div className="form-group">
+                        <label htmlFor="policy-pubdate">Source Publication Date (ISO-8601)</label>
+                        <input
+                          id="policy-pubdate"
+                          type="text"
+                          value={policyPubDateInput}
+                          onChange={(e) => setPolicyPubDateInput(e.target.value)}
+                          placeholder="2024-03-29T00:00:00.000Z"
+                          disabled={isRegisteringAffected}
+                        />
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      className="action-button secondary"
+                      onClick={handleBuildAndExportPolicy}
+                      disabled={!contractState.attachedAddress || isRegisteringAffected}
+                      aria-label="Generate and download affected release policy package"
+                    >
+                      Export & Load Policy Package (.json)
+                    </button>
+                  </div>
+
+                  {/* If policy is loaded, show review box with action to open confirmation */}
+                  {affectedReleaseUi.importedPolicy && (
+                    <div className="policy-summary-box">
+                      <h3>Loaded Policy Summary</h3>
+                      <div className="admission-review-details">
+                        <p><strong>Advisory ID:</strong> <code>{affectedReleaseUi.importedPolicy.advisoryId}</code></p>
+                        <p><strong>Product:</strong> <code>{affectedReleaseUi.importedPolicy.product}</code></p>
+                        <p>
+                          <strong>Version:</strong>{' '}
+                          <code>
+                            {affectedReleaseUi.importedPolicy.version.major}.
+                            {affectedReleaseUi.importedPolicy.version.minor}.
+                            {affectedReleaseUi.importedPolicy.version.patch}
+                          </code>
+                        </p>
+                        <p><strong>Publisher:</strong> {affectedReleaseUi.importedPolicy.sourcePublisher}</p>
+                        <p>
+                          <strong>Reference:</strong>{' '}
+                          <a
+                            href={affectedReleaseUi.importedPolicy.sourceReference}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                          >
+                            {affectedReleaseUi.importedPolicy.sourceReference}
+                          </a>
+                        </p>
+                        <p><strong>Target Contract:</strong> <code>{shortenAddress(affectedReleaseUi.importedPolicy.contractAddress)}</code></p>
+                      </div>
+
+                      <div className="button-row">
+                        <button
+                          type="button"
+                          className="action-button primary"
+                          disabled={!canRegisterAffectedRelease}
+                          onClick={handleOpenAffectedReleaseConfirmation}
+                          aria-label="Review and register affected release on-chain"
+                        >
+                          Review & Register on Midnight Preprod
+                        </button>
+                        <button
+                          type="button"
+                          className="action-button secondary"
+                          onClick={handleResetAffectedRelease}
+                          aria-label="Clear loaded policy"
+                        >
+                          Clear Policy
+                        </button>
+                      </div>
+
+                      {registrarAffectedReleasePrereqs.length > 0 && (
+                        <ul className="prereq-missing-list">
+                          {registrarAffectedReleasePrereqs.map((item, idx) => (
+                            <li key={idx}>{item}</li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Confirmation Dialog / State */}
+              {affectedReleaseUi.stage === 'confirming' && affectedReleaseUi.importedPolicy && (
+                <div className="admission-confirmation-box" role="dialog" aria-labelledby="affected-confirm-heading">
+                  <h3 id="affected-confirm-heading">Confirm Affected Release Registration</h3>
+
+                  {/* Prominent policy activation warning */}
+                  <div className="safe-error-banner" role="alert">
+                    <strong>CRITICAL POLICY ACTIVATION NOTICE:</strong>
+                    <p>
+                      Submitting this transaction sets <code>policyActive = true</code> on-chain! This permanently closes the pre-policy inventory certification window for Members. Once active, only the later attest circuit can be used by members.
+                    </p>
+                  </div>
+
+                  <div className="admission-review-details">
+                    <p><strong>Contract:</strong> <code>{shortenAddress(affectedReleaseUi.importedPolicy.contractAddress)}</code></p>
+                    <p><strong>Advisory ID:</strong> <code>{affectedReleaseUi.importedPolicy.advisoryId}</code></p>
+                    <p><strong>Product:</strong> <code>{affectedReleaseUi.importedPolicy.product}</code></p>
+                    <p>
+                      <strong>Version Tuple:</strong>{' '}
+                      <code>
+                        {affectedReleaseUi.importedPolicy.version.major}.
+                        {affectedReleaseUi.importedPolicy.version.minor}.
+                        {affectedReleaseUi.importedPolicy.version.patch}
+                      </code>
+                    </p>
+                    <p><strong>Publisher:</strong> {affectedReleaseUi.importedPolicy.sourcePublisher}</p>
+                    <p><strong>Reference:</strong> {affectedReleaseUi.importedPolicy.sourceReference}</p>
+                    <p><strong>Publication Date:</strong> {affectedReleaseUi.importedPolicy.sourcePublicationDate}</p>
+                  </div>
+
+                  <div className="button-row">
+                    <button
+                      type="button"
+                      className="action-button primary danger-button"
+                      disabled={!canRegisterAffectedRelease}
+                      onClick={handleConfirmAndRegisterAffectedRelease}
+                      aria-label="Confirm registration and submit via 1AM"
+                    >
+                      Confirm Registration & Activate Policy via 1AM
+                    </button>
+                    <button
+                      type="button"
+                      className="action-button secondary"
+                      disabled={isRegisteringAffected}
+                      onClick={handleDismissAffectedReleaseConfirmation}
+                      aria-label="Cancel registration confirmation"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* In-Flight States */}
+              {affectedReleaseUi.stage === 'requesting-wallet' && (
+                <div className="status-callout warning">
+                  <span className="status-indicator warning">Preparing 1AM Transaction</span>
+                  <p>Preparing proof and registration transaction. Approve the transaction in your 1AM wallet window.</p>
+                </div>
+              )}
+
+              {affectedReleaseUi.stage === 'submitting' && (
+                <div className="status-callout notice">
+                  <span className="status-indicator notice">Submitting to Preprod</span>
+                  <p>Generating zero-knowledge proof and registering affected release on Midnight Preprod...</p>
+                </div>
+              )}
+
+              {/* Indexer Lag State */}
+              {affectedReleaseUi.stage === 'finalized-indexing' && (
+                <div className="status-callout notice indexer-lag-box">
+                  <span className="status-indicator notice">Finalized On-Chain</span>
+                  <p>
+                    The registration transaction was finalized on Midnight Preprod, but the public indexer has not yet reflected the updated <code>affectedReleases</code> set or <code>policyActive</code> flag.
+                  </p>
+                  <p className="card-caption">
+                    Click below to retry on-chain confirmation without resubmitting any transaction.
+                  </p>
+                  <button
+                    type="button"
+                    className="action-button primary"
+                    onClick={handleRetryAffectedReleaseVerification}
+                    aria-label="Retry indexer confirmation without resubmitting transaction"
+                  >
+                    Retry Indexer Confirmation
+                  </button>
+                </div>
+              )}
+
+              {/* Registered Success State & Receipt */}
+              {affectedReleaseUi.stage === 'registered' && affectedReleaseUi.receipt && (
+                <div className="admission-success-box">
+                  <span className="status-indicator success">Release Registered & Policy Active</span>
+                  <p>
+                    Affected release{' '}
+                    <code>
+                      {affectedReleaseUi.receipt.product} {affectedReleaseUi.receipt.version.major}.{affectedReleaseUi.receipt.version.minor}.{affectedReleaseUi.receipt.version.patch}
+                    </code>{' '}
+                    is recorded in the on-chain <code>affectedReleases</code> set for advisory{' '}
+                    <code>{affectedReleaseUi.receipt.advisoryId}</code>. Policy is now ACTIVE.
+                  </p>
+                  <dl className="receipt-details-list">
+                    <dt>Contract Address</dt>
+                    <dd><code>{shortenAddress(affectedReleaseUi.receipt.contractAddress)}</code></dd>
+                    <dt>Advisory ID</dt>
+                    <dd><code>{affectedReleaseUi.receipt.advisoryId}</code></dd>
+                    <dt>Product</dt>
+                    <dd><code>{affectedReleaseUi.receipt.product}</code></dd>
+                    <dt>Version</dt>
+                    <dd>
+                      <code>
+                        {affectedReleaseUi.receipt.version.major}.{affectedReleaseUi.receipt.version.minor}.{affectedReleaseUi.receipt.version.patch}
+                      </code>
+                    </dd>
+                    <dt>Source Publisher</dt>
+                    <dd>{affectedReleaseUi.receipt.sourcePublisher}</dd>
+                    <dt>Policy Active</dt>
+                    <dd><strong>Yes (true)</strong></dd>
+                    {affectedReleaseUi.receipt.registrationTxId && (
+                      <>
+                        <dt>Transaction ID</dt>
+                        <dd><code>{shortenAddress(affectedReleaseUi.receipt.registrationTxId)}</code></dd>
+                      </>
+                    )}
+                    <dt>Registered At</dt>
+                    <dd>{affectedReleaseUi.receipt.registeredAt}</dd>
+                  </dl>
+
+                  <div className="button-row">
+                    <button
+                      type="button"
+                      className="action-button primary"
+                      onClick={handleDownloadAffectedReleaseReceipt}
+                      aria-label="Download public affected release registration receipt JSON"
+                    >
+                      Download Registration Receipt (.json)
+                    </button>
+                    <button
+                      type="button"
+                      className="action-button secondary"
+                      onClick={handleResetAffectedRelease}
+                      aria-label="Register another release"
+                    >
+                      Register Another Release
+                    </button>
+                  </div>
+                </div>
+              )}
+            </article>
+          )}
+
           {/* Public State Panel */}
           <article className="workspace-card public-state-card">
             <div className="card-header">
-              <span className="card-step">{role === 'registrar' ? '06' : '05'}</span>
+              <span className="card-step">{role === 'registrar' ? '07' : '05'}</span>
               <h2>Public Contract State</h2>
             </div>
             <p className="privacy-guarantee-notice">

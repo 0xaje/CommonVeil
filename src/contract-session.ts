@@ -48,6 +48,12 @@ export interface CommonVeilContractSession {
    * Used by the Certifier workflow to detect duplicate certification.
    */
   readonly hasInventoryCommitment: (commitmentBytes: Uint8Array) => boolean;
+  /**
+   * Narrow helper to verify if an affected release is recorded
+   * in the attached contract's affectedReleases set.
+   * Used by the Registrar workflow to detect duplicate registration.
+   */
+  readonly hasAffectedRelease: (releaseIdBytes: Uint8Array) => boolean;
 }
 
 export type ContractSessionErrorCode =
@@ -198,6 +204,10 @@ export async function queryCommonVeilContract(
     hasInventoryCommitment: (commitmentBytes: Uint8Array): boolean => {
       requireExactly32Bytes(commitmentBytes, 'inventoryCommitment');
       return ledger.inventoryCommitments.member(commitmentBytes);
+    },
+    hasAffectedRelease: (releaseIdBytes: Uint8Array): boolean => {
+      requireExactly32Bytes(releaseIdBytes, 'releaseId');
+      return ledger.affectedReleases.member(releaseIdBytes);
     },
   };
 }

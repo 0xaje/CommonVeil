@@ -30,6 +30,14 @@ import {
   validateLiveInventoryReport,
   buildCertificationRequestPackage,
   assertNoSensitiveFields,
+  AFFECTED_RELEASE_POLICY_SCHEMA,
+  AFFECTED_RELEASE_REGISTRATION_RECEIPT_SCHEMA,
+  advisoryDigest,
+  validateAffectedReleasePolicyPackage,
+  buildAffectedReleasePolicyPackage,
+  validateAffectedReleaseRegistrationReceipt,
+  buildAffectedReleaseRegistrationReceipt,
+  validateHttpsUrl,
 } from '../src/role-packages.ts';
 
 const SAMPLE_HEX_32 = 'a1'.repeat(32);
@@ -1407,3 +1415,188 @@ test('42. Exclusion of private secrets from receipt and snapshot packages', () =
   assert.equal('privateKey' in snapshot, false);
 });
 
+// 43. CV-010: Valid affected-release policy package round trip & whitelist validation
+test('43. CV-010: Valid affected-release policy package round trip & whitelist validation', () => {
+  const pkg = buildAffectedReleasePolicyPackage({
+    contractAddress: SAMPLE_CONTRACT,
+    advisoryId: 'CVE-2024-3094',
+    product: 'pkg:generic/xz-utils',
+    version: { major: 5, minor: 6, patch: 0 },
+    sourcePublisher: 'Red Hat / CISA',
+    sourceReference: 'https://nvd.nist.gov/vuln/detail/CVE-2024-3094',
+    sourcePublicationDate: '2024-03-29T00:00:00.000Z',
+    now: FIXED_NOW,
+  });
+
+  assert.equal(pkg.schema, AFFECTED_RELEASE_POLICY_SCHEMA);
+  assert.equal(pkg.network, 'preprod');
+  assert.equal(pkg.contractAddress, SAMPLE_CONTRACT);
+  assert.equal(pkg.advisoryId, 'CVE-2024-3094');
+  assert.equal(pkg.product, 'pkg:generic/xz-utils');
+  assert.deepEqual(pkg.version, { major: 5, minor: 6, patch: 0 });
+  assert.equal(pkg.sourcePublisher, 'Red Hat / CISA');
+  assert.equal(pkg.sourceReference, 'https://nvd.nist.gov/vuln/detail/CVE-2024-3094');
+  assert.equal(pkg.sourcePublicationDate, '2024-03-29T00:00:00.000Z');
+  assert.equal(pkg.createdAt, FIXED_NOW.toISOString());
+
+  // Strict whitelist: extra field rejection
+  assert.throws(
+    () => validateAffectedReleasePolicyPackage({ ...pkg, extraField: 'unauthorized' }),
+    /unauthorized top-level fields/,
+  );
+
+  // Sensitive field rejection
+  assert.throws(
+    () => validateAffectedReleasePolicyPackage({ ...pkg, adminSecret: 'leak' }),
+    /unauthorized top-level fields|forbidden field/i,
+  );
+});
+
+// 44. CV-010: HTTPS sourceReference enforcement
+test('44. CV-010: HTTPS sourceReference validation enforces valid HTTPS URLs', () => {
+  assert.equal(
+    validateHttpsUrl('https://example.com/advisory'),
+    'https://example.com/advisory',
+  );
+
+  // Insecure HTTP rejected
+  assert.throws(
+    () => validateHttpsUrl('http://insecure.com/advisory'),
+    /HTTPS URL/,
+  );
+
+  // Non-URL rejected
+  assert.throws(
+    () => validateHttpsUrl('not-a-url'),
+    /valid URL/,
+  );
+
+  // In policy package: http rejected
+  const baseParams = {
+    contractAddress: SAMPLE_CONTRACT,
+    advisoryId: 'GHSA-xxxx',
+    product: 'pkg:generic/test-lib',
+    version: { major: 1, minor: 0, patch: 0 },
+    sourcePublisher: 'GitHub Advisory Database',
+    sourceReference: 'http://insecure.example.com',
+    sourcePublicationDate: '2024-01-01T00:00:00.000Z',
+    now: FIXED_NOW,
+  };
+  assert.throws(
+    () => buildAffectedReleasePolicyPackage(baseParams),
+    /HTTPS URL/,
+  );
+});
+
+// 45. CV-010: Honesty boundary for CVE-2024-3094 on pkg:generic/xz-utils
+test('45. CV-010: Honesty boundary for CVE-2024-3094 rejects 5.2.5 and accepts 5.6.0 & 5.6.1', () => {
+  const baseParams = {
+    contractAddress: SAMPLE_CONTRACT,
+    advisoryId: 'CVE-2024-3094',
+    product: 'pkg:generic/xz-utils',
+    sourcePublisher: 'Red Hat / CISA',
+    sourceReference: 'https://nvd.nist.gov/vuln/detail/CVE-2024-3094',
+    sourcePublicationDate: '2024-03-29T00:00:00.000Z',
+    now: FIXED_NOW,
+  };
+
+  // 5.6.0 is compromised -> accepted
+  const pkg560 = buildAffectedReleasePolicyPackage({
+    ...baseParams,
+    version: { major: 5, minor: 6, patch: 0 },
+  });
+  assert.equal(pkg560.version.patch, 0);
+
+  // 5.6.1 is compromised -> accepted
+  const pkg561 = buildAffectedReleasePolicyPackage({
+    ...baseParams,
+    version: { major: 5, minor: 6, patch: 1 },
+  });
+  assert.equal(pkg561.version.patch, 1);
+
+  // 5.2.5 is safe -> MUST be rejected with clear honesty error
+  assert.throws(
+    () =>
+      buildAffectedReleasePolicyPackage({
+        ...baseParams,
+        version: { major: 5, minor: 2, patch: 5 },
+      }),
+    /only releases 5\.6\.0 and 5\.6\.1 are affected.*cannot be registered as affected/,
+  );
+
+  // 5.4.5 is safe -> MUST be rejected
+  assert.throws(
+    () =>
+      buildAffectedReleasePolicyPackage({
+        ...baseParams,
+        version: { major: 5, minor: 4, patch: 5 },
+      }),
+    /only releases 5\.6\.0 and 5\.6\.1 are affected/,
+  );
+});
+
+// 46. CV-010: advisoryDigest matches SHA-256("commonveil:advisory:v1:" + label)
+test('46. CV-010: advisoryDigest derives canonical 32-byte digest and enforces whitespace bounds', async () => {
+  const digest = await advisoryDigest('CVE-2024-3094');
+  assert.equal(digest instanceof Uint8Array, true);
+  assert.equal(digest.length, 32);
+
+  // Deterministic
+  const digest2 = await advisoryDigest('CVE-2024-3094');
+  assert.deepEqual(digest, digest2);
+
+  // Whitespace rejection
+  await assert.rejects(
+    () => advisoryDigest('  CVE-2024-3094  '),
+    /whitespace/,
+  );
+
+  // Length bound (>128 chars rejected)
+  await assert.rejects(
+    () => advisoryDigest('A'.repeat(129)),
+    /length/,
+  );
+});
+
+// 47. CV-010: Affected-release registration receipt round trip & validation
+test('47. CV-010: Affected-release registration receipt round trip & strict whitelist', () => {
+  const receipt = buildAffectedReleaseRegistrationReceipt({
+    contractAddress: SAMPLE_CONTRACT,
+    advisoryId: 'CVE-2024-3094',
+    product: 'pkg:generic/xz-utils',
+    version: { major: 5, minor: 6, patch: 0 },
+    sourcePublisher: 'Red Hat / CISA',
+    sourceReference: 'https://nvd.nist.gov/vuln/detail/CVE-2024-3094',
+    registrationTxId: '00162a6cea69226e4731b519f76ca71e14e011eca434cfe2a08b88dda51f02f66b',
+    policyActive: true,
+    now: FIXED_NOW,
+  });
+
+  assert.equal(receipt.schema, AFFECTED_RELEASE_REGISTRATION_RECEIPT_SCHEMA);
+  assert.equal(receipt.network, 'preprod');
+  assert.equal(receipt.contractAddress, SAMPLE_CONTRACT);
+  assert.equal(receipt.advisoryId, 'CVE-2024-3094');
+  assert.equal(receipt.product, 'pkg:generic/xz-utils');
+  assert.deepEqual(receipt.version, { major: 5, minor: 6, patch: 0 });
+  assert.equal(receipt.sourcePublisher, 'Red Hat / CISA');
+  assert.equal(receipt.sourceReference, 'https://nvd.nist.gov/vuln/detail/CVE-2024-3094');
+  assert.equal(receipt.registrationTxId, '00162a6cea69226e4731b519f76ca71e14e011eca434cfe2a08b88dda51f02f66b');
+  assert.equal(receipt.registeredAt, FIXED_NOW.toISOString());
+  assert.equal(receipt.policyActive, true);
+  assert.equal(receipt.status, 'finalized');
+
+  const validated = validateAffectedReleaseRegistrationReceipt(receipt);
+  assert.deepEqual(validated, receipt);
+
+  // Unauthorized field rejection
+  assert.throws(
+    () => validateAffectedReleaseRegistrationReceipt({ ...receipt, injectedField: 'bad' }),
+    /unauthorized top-level fields/,
+  );
+
+  // Invalid schema rejection
+  assert.throws(
+    () => validateAffectedReleaseRegistrationReceipt({ ...receipt, schema: 'invalid' }),
+    /Invalid schema/,
+  );
+});

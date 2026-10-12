@@ -1201,6 +1201,98 @@ input:focus-visible {
   padding-top: 6px;
 }
 
+/* CV-010: Affected Release & Policy Activation Styles */
+.advisory-attribution-banner {
+  background: #101e16;
+  border-left: 3px solid #63b3ed;
+  padding: 10px 14px;
+  border-radius: 6px;
+  margin-bottom: 14px;
+  font-size: 0.85rem;
+  color: #a0c4b2;
+}
+
+.advisory-attribution-banner p {
+  margin: 0;
+}
+
+.advisory-attribution-banner strong {
+  color: #e2f8ec;
+}
+
+.affected-policy-container {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin-top: 14px;
+}
+
+.policy-builder-box {
+  background: #08160e;
+  border: 1px solid #1c3526;
+  border-radius: 10px;
+  padding: 18px;
+}
+
+.policy-builder-box h3 {
+  font-size: 1rem;
+  margin: 0 0 8px;
+  color: #8ef0ae;
+}
+
+.policy-builder-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin: 14px 0 16px;
+}
+
+.version-tuple-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.version-tuple-row input {
+  width: 70px;
+  text-align: center;
+}
+
+.version-tuple-row span {
+  font-weight: bold;
+  color: #7d9685;
+}
+
+.policy-summary-box {
+  background: #0d1e15;
+  border: 1px solid #2f5a40;
+  border-radius: 10px;
+  padding: 18px;
+}
+
+.policy-summary-box h3 {
+  font-size: 1rem;
+  margin: 0 0 12px;
+  color: #8ef0ae;
+}
+
+.danger-button {
+  background: #c53030 !important;
+  border-color: #e53e3e !important;
+  color: #ffffff !important;
+}
+
+.danger-button:hover:not(:disabled) {
+  background: #9b2c2c !important;
+  border-color: #c53030 !important;
+}
+
+@media (max-width: 900px) {
+  .policy-builder-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 @media (max-width: 900px) {
   .workspace-grid {
     grid-template-columns: 1fr;
