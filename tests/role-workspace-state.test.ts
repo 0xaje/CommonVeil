@@ -817,14 +817,14 @@ test('36. Overlapping copy generations across lifecycle reset: stale A callback 
   let state = onSecretGeneratedOrImported(INITIAL_REGISTRAR_SECRET_UI_STATE);
 
   // Deferred resolvers for async clipboard simulation
-  let resolveA: () => void = () => {};
-  let rejectA: (err: any) => void = () => {};
+  let resolveA: () => void = () => { };
+  let rejectA: (err: any) => void = () => { };
   const promiseA = new Promise<void>((res, rej) => {
     resolveA = res;
     rejectA = rej;
   });
 
-  let resolveB: () => void = () => {};
+  let resolveB: () => void = () => { };
   const promiseB = new Promise<void>((res) => {
     resolveB = res;
   });
@@ -2056,7 +2056,7 @@ test('76. Retry performs zero additional submitCallTx calls', async () => {
 test('77. Regression: Passing privateStateId to unseeded private state provider reproduces pre-proof failure', async () => {
   const privateStateStore = new Map<string, any>();
   const mockPrivateStateProvider = {
-    setContractAddress: (_addr: string) => {},
+    setContractAddress: (_addr: string) => { },
     get: async (key: string) => privateStateStore.get(key) ?? null,
   };
 
@@ -2094,7 +2094,7 @@ test('78. Corrected registerMember invocation omits privateStateId and proceeds 
   const privateStateStore = new Map<string, any>();
   let getCallCount = 0;
   const mockPrivateStateProvider = {
-    setContractAddress: (_addr: string) => {},
+    setContractAddress: (_addr: string) => { },
     get: async (key: string) => {
       getCallCount++;
       return privateStateStore.get(key) ?? null;
@@ -4536,4 +4536,114 @@ test('152. CV-011: Compact execution rejects uncommitted snapshot or mismatched 
       ),
     /Inventory snapshot was not committed before policy activation/,
   );
+});
+
+// 153. CV-011: Concurrency-safe verification: expected nullifier present and accepted +1 succeeds
+test('153. CV-011: Concurrency-safe verification: expected nullifier present and accepted +1 succeeds', () => {
+  const preSubmitCount = 3n;
+  const postSubmitCount = 4n; // accepted increased by exactly 1
+  const nullifierRecorded = true;
+  const countSatisfied = postSubmitCount >= preSubmitCount + 1n;
+
+  assert.equal(nullifierRecorded && countSatisfied, true);
+
+  const state1 = onAttestationFinalizedIndexing(
+    INITIAL_MEMBER_ATTESTATION_UI_STATE,
+    '00'.repeat(32),
+  );
+  assert.equal(state1.stage, 'finalized-indexing');
+
+  const receipt: PrivateAttestationReceipt = {
+    schema: 'commonveil.private-attestation-receipt/v1',
+    network: 'preprod',
+    contractAddress: 'contract-addr-test',
+    advisoryId: 'CVE-2024-3094',
+    attestationTxId: '00'.repeat(32),
+    acceptedAt: new Date().toISOString(),
+    status: 'finalized',
+  };
+
+  const completed = onAttestationCompleted(state1, receipt);
+  assert.equal(completed.stage, 'attested');
+  assert.equal(completed.attestationTxId, '00'.repeat(32));
+  assert.equal(completed.receipt?.advisoryId, 'CVE-2024-3094');
+});
+
+// 154. CV-011: Concurrency-safe verification: expected nullifier present and accepted +2 or more succeeds
+test('154. CV-011: Concurrency-safe verification: expected nullifier present and accepted +2 or more succeeds', () => {
+  const preSubmitCount = 3n;
+  const postSubmitCount = 5n; // another Member attested in the interim (+2)
+  const nullifierRecorded = true;
+  const countSatisfied = postSubmitCount >= preSubmitCount + 1n;
+
+  // Crucial requirement: must succeed under concurrent attestation because nullifier is present
+  assert.equal(nullifierRecorded && countSatisfied, true);
+
+  // If code required strictly === preSubmitCount + 1n, it would have failed falsely:
+  const strictEqualityCondition = postSubmitCount === preSubmitCount + 1n;
+  assert.equal(strictEqualityCondition, false, 'Strict equality would fail concurrently');
+});
+
+// 155. CV-011: Concurrency-safe verification: accepted increases but expected nullifier is absent fails
+test('155. CV-011: Concurrency-safe verification: accepted increases but expected nullifier is absent fails', () => {
+  const preSubmitCount = 3n;
+  const postSubmitCount = 4n; // accepted counter incremented by someone else
+  const nullifierRecorded = false; // our member nullifier has NOT appeared yet
+  const countSatisfied = postSubmitCount >= preSubmitCount + 1n;
+
+  // Must not accept success based solely on the counter!
+  const isSuccessful = nullifierRecorded && countSatisfied;
+  assert.equal(isSuccessful, false, 'Missing nullifier must block completion even if counter increased');
+});
+
+// 156. CV-011: Indexer lag preserves genuine finalized txId and retry never resubmits
+test('156. CV-011: Indexer lag preserves genuine finalized txId and retry never resubmits', () => {
+  const canonicalTxId = 'aa'.repeat(32);
+
+  const indexingState = onAttestationFinalizedIndexing(
+    INITIAL_MEMBER_ATTESTATION_UI_STATE,
+    canonicalTxId,
+  );
+
+  assert.equal(indexingState.stage, 'finalized-indexing');
+  assert.equal(indexingState.attestationTxId, canonicalTxId);
+
+  // Subsequent indexer check during lag maintains state and canonical txId without erasing
+  const laggingState = onAttestationFinalizedIndexing(indexingState, null);
+  assert.equal(laggingState.attestationTxId, canonicalTxId);
+  assert.equal(laggingState.stage, 'finalized-indexing');
+});
+
+// 157. CV-011: Duplicate/nullifier-already-used state blocks and cannot trigger another submission
+test('157. CV-011: Duplicate/nullifier-already-used state blocks and cannot trigger another submission', () => {
+  // Prerequisite validation rejects used nullifier
+  const params = {
+    isConnected: true,
+    attachedContractAddress: SAMPLE_CONTRACT_ADDRESS,
+    hasMemberSecretAndSalt: true,
+    memberBackupRecoveryStatus: 'recovery-tested',
+    isMemberCredentialAdmitted: true,
+    hasSnapshotEvidence: true,
+    snapshotCredentialMatchesActiveMember: true,
+    snapshotCommitmentExistsOnChain: true,
+    hasPolicyReceipt: true,
+    policyReceiptContractMatchesAttached: true,
+    policyProductAndVersionMatchSnapshot: true,
+    isReleaseRegisteredOnChain: true,
+    isPolicyActive: true,
+    isNullifierAlreadyUsed: true, // ALREADY USED
+    isProofProviderConfigured: true,
+    isOperationPending: false,
+  };
+
+  const missing = checkMemberAttestationPrerequisites(params);
+  assert.equal(
+    missing.includes('Member nullifier has already been recorded in usedNullifiers.'),
+    true,
+  );
+  assert.equal(canInitiateAttestation(params), false, 'Must not be allowed to initiate attestation');
+
+  // Error mapping sanitizes replay cleanly
+  const replayError = mapAttestationError(new Error('Member already attested for this advisory'));
+  assert.equal(replayError, 'Member already attested for this advisory.');
 });

@@ -2456,9 +2456,9 @@ export function mapCertificationError(error: unknown): string {
   if (!error) return 'Inventory certification transaction could not be completed. Check wallet and try again.';
   const raw = (
     error instanceof Error ? error.message
-    : typeof error === 'string' ? error
-    : typeof (error as any)?.message === 'string' ? (error as any).message
-    : ''
+      : typeof error === 'string' ? error
+        : typeof (error as any)?.message === 'string' ? (error as any).message
+          : ''
   ).toLowerCase();
   if (raw.includes('cancel') || raw.includes('reject') || raw.includes('denied') || raw.includes('declined') || raw.includes('user aborted')) {
     return 'Inventory certification transaction was cancelled in 1AM.';
@@ -2688,9 +2688,9 @@ export function mapAffectedReleaseInspectionError(error: unknown): string {
   if (!error) return AFFECTED_RELEASE_VERIFICATION_ERROR_MESSAGES.GENERIC_VERIFICATION_FAILURE;
   const raw = (
     error instanceof Error ? error.message
-    : typeof error === 'string' ? error
-    : typeof (error as any)?.message === 'string' ? (error as any).message
-    : ''
+      : typeof error === 'string' ? error
+        : typeof (error as any)?.message === 'string' ? (error as any).message
+          : ''
   ).toLowerCase();
   if (raw.includes('contract not found') || raw.includes('no indexed contract')) {
     return AFFECTED_RELEASE_VERIFICATION_ERROR_MESSAGES.CONTRACT_NOT_FOUND;
@@ -2711,9 +2711,9 @@ export function mapAffectedReleaseRegistrationError(error: unknown): string {
   if (!error) return 'Affected release registration transaction could not be completed. Check wallet and try again.';
   const raw = (
     error instanceof Error ? error.message
-    : typeof error === 'string' ? error
-    : typeof (error as any)?.message === 'string' ? (error as any).message
-    : ''
+      : typeof error === 'string' ? error
+        : typeof (error as any)?.message === 'string' ? (error as any).message
+          : ''
   ).toLowerCase();
   if (raw.includes('cancel') || raw.includes('reject') || raw.includes('denied') || raw.includes('declined') || raw.includes('user aborted')) {
     return 'Affected release registration transaction was cancelled in 1AM.';
@@ -3123,9 +3123,9 @@ export function mapAttestationInspectionError(error: unknown): string {
   if (!error) return ATTESTATION_VERIFICATION_ERROR_MESSAGES.GENERIC_VERIFICATION_FAILURE;
   const raw = (
     error instanceof Error ? error.message
-    : typeof error === 'string' ? error
-    : typeof (error as any)?.message === 'string' ? (error as any).message
-    : ''
+      : typeof error === 'string' ? error
+        : typeof (error as any)?.message === 'string' ? (error as any).message
+          : ''
   ).toLowerCase();
   if (raw.includes('contract not found') || raw.includes('no indexed contract')) {
     return ATTESTATION_VERIFICATION_ERROR_MESSAGES.CONTRACT_NOT_FOUND;
@@ -3146,9 +3146,9 @@ export function mapAttestationError(error: unknown): string {
   if (!error) return 'Attestation transaction could not be completed. Check wallet and try again.';
   const raw = (
     error instanceof Error ? error.message
-    : typeof error === 'string' ? error
-    : typeof (error as any)?.message === 'string' ? (error as any).message
-    : ''
+      : typeof error === 'string' ? error
+        : typeof (error as any)?.message === 'string' ? (error as any).message
+          : ''
   ).toLowerCase();
   if (raw.includes('cancel') || raw.includes('reject') || raw.includes('denied') || raw.includes('declined') || raw.includes('user aborted')) {
     return 'Attestation transaction was cancelled in 1AM.';

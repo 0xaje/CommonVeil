@@ -3856,13 +3856,13 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
       // Enter finalized-indexing state
       setMemberAttestationUi((prev) => onAttestationFinalizedIndexing(prev, canonicalTxId));
 
-      // Inspect same contract to verify accepted increased by 1 and nullifier is recorded
+      // Inspect same contract to verify accepted increased by at least 1 and nullifier is recorded
       try {
         const sessionAfter = await queryCommonVeilContract(wallet.providers, attachedAddress);
         if (!isMounted.current || activeAttestationTokenRef.current !== operationToken) return;
 
         const nullifierRecorded = sessionAfter.hasUsedNullifier(nullifierBytes);
-        const acceptedIncreased = sessionAfter.publicState.accepted === preSubmitAcceptedCount + 1n;
+        const acceptedIncreased = sessionAfter.publicState.accepted >= preSubmitAcceptedCount + 1n;
 
         if (nullifierRecorded && acceptedIncreased) {
           const receipt = buildPrivateAttestationReceipt({
@@ -3873,7 +3873,7 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
 
           setMemberAttestationUi((prev) => onAttestationCompleted(prev, receipt));
           setMemberAttestationNotice(
-            'Private attestation confirmed on-chain. Public accepted report count incremented by 1.',
+            'Private attestation confirmed on-chain. Public accepted report count incremented.',
           );
           setContractState((prev) => ({
             ...prev,
