@@ -48,7 +48,7 @@ export function sanitizeTokens(value: string): string {
   return value
     .replace(/([?&]project_id=)[^& \r\n\t'"`)]*/gi, '$1[REDACTED]')
     .replace(/(project_id[:=]\s*)[^\s&,;'"`)]{6,}/gi, '$1[REDACTED]')
-    .replace(/\b(preprod[a-zA-Z0-9]{32,}|mainnet[a-zA-Z0-9]{32,}|preview[a-zA-Z0-9]{32,})\b/g, '[REDACTED_TOKEN]');
+    .replace(/\b((?:midnight)?(?:preprod|mainnet|preview)[a-zA-Z0-9]{20,})\b/g, '[REDACTED_TOKEN]');
 }
 
 const BLOCKFROST_HOST = 'midnight-preprod.blockfrost.io';

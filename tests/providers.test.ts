@@ -164,6 +164,12 @@ test('7. Token redaction from error messages, exceptions and URLs', () => {
   const sensitiveError = new IndexerConfigurationError(`Failed to connect with token ${secretToken} at ${urlWithToken}`);
   assert.equal(sensitiveError.message.includes(secretToken), false, 'Error message must not contain raw token');
   assert.match(sensitiveError.message, /\[REDACTED\]/);
+
+  // Test midnightpreprod token format redaction
+  const customMidnightToken = 'midnightpreprod0123456789abcdef0123';
+  const customRedacted = sanitizeTokens(`Error contacting indexer at project_id=${customMidnightToken}`);
+  assert.equal(customRedacted.includes(customMidnightToken), false);
+  assert.match(customRedacted, /project_id=\[REDACTED\]/);
 });
 
 // 8. No real Blockfrost project token committed to repository fixtures or files
