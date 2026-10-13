@@ -39,6 +39,9 @@ import {
   buildAffectedReleaseRegistrationReceipt,
   validateHttpsUrl,
   isCanonicalTransactionId,
+  PRIVATE_ATTESTATION_RECEIPT_SCHEMA,
+  validatePrivateAttestationReceipt,
+  buildPrivateAttestationReceipt,
 } from '../src/role-packages.ts';
 
 const SAMPLE_HEX_32 = 'a1'.repeat(32);
@@ -1729,5 +1732,124 @@ test('48. CV-010: isCanonicalTransactionId rigorously enforces exactly 64 or 66 
         createdAt: new Date().toISOString(),
       }),
     /canonical 64-character or 66-character lowercase hexadecimal/,
+  );
+});
+
+// 49. CV-011: Valid Private Attestation Receipt round trip & strict whitelist
+test('49. CV-011: Valid Private Attestation Receipt round trip & strict whitelist', () => {
+  const txId = 'e'.repeat(64);
+  const receipt = buildPrivateAttestationReceipt({
+    contractAddress: SAMPLE_CONTRACT,
+    advisoryId: 'CVE-2024-3094',
+    attestationTxId: txId,
+    now: FIXED_NOW,
+  });
+
+  assert.equal(receipt.schema, PRIVATE_ATTESTATION_RECEIPT_SCHEMA);
+  assert.equal(receipt.network, 'preprod');
+  assert.equal(receipt.contractAddress, SAMPLE_CONTRACT);
+  assert.equal(receipt.advisoryId, 'CVE-2024-3094');
+  assert.equal(receipt.attestationTxId, txId);
+  assert.equal(receipt.acceptedAt, FIXED_NOW.toISOString());
+  assert.equal(receipt.status, 'finalized');
+
+  // Strict field whitelist verification: exactly 7 allowed fields
+  const allowed = new Set([
+    'schema',
+    'network',
+    'contractAddress',
+    'advisoryId',
+    'attestationTxId',
+    'acceptedAt',
+    'status',
+  ]);
+  for (const key of Object.keys(receipt)) {
+    assert.ok(allowed.has(key), `Key ${key} must be in allowed receipt fields`);
+  }
+  assert.equal(Object.keys(receipt).length, 7);
+});
+
+// 50. CV-011: Private Attestation Receipt rejects unauthorized or sensitive fields
+test('50. CV-011: Private Attestation Receipt rejects unauthorized or sensitive fields', () => {
+  const base = {
+    schema: PRIVATE_ATTESTATION_RECEIPT_SCHEMA,
+    network: 'preprod',
+    contractAddress: SAMPLE_CONTRACT,
+    advisoryId: 'CVE-2024-3094',
+    attestationTxId: 'f'.repeat(64),
+    acceptedAt: FIXED_NOW.toISOString(),
+    status: 'finalized',
+  };
+
+  // Rejects Member credential
+  assert.throws(
+    () => validatePrivateAttestationReceipt({ ...base, memberCredential: SAMPLE_HEX_32 }),
+    /unauthorized top-level fields: memberCredential/,
+  );
+
+  // Rejects Member secret or salt
+  assert.throws(
+    () => validatePrivateAttestationReceipt({ ...base, memberSecret: SAMPLE_HEX_32 }),
+    /unauthorized top-level fields: memberSecret/,
+  );
+  assert.throws(
+    () => validatePrivateAttestationReceipt({ ...base, snapshotSalt: SAMPLE_HEX_32 }),
+    /unauthorized top-level fields: snapshotSalt/,
+  );
+
+  // Rejects inventory commitment or raw inventory
+  assert.throws(
+    () => validatePrivateAttestationReceipt({ ...base, commitment: SAMPLE_HEX_32 }),
+    /unauthorized top-level fields: commitment/,
+  );
+  assert.throws(
+    () => validatePrivateAttestationReceipt({ ...base, certificationTxId: 'f'.repeat(64) }),
+    /unauthorized top-level fields: certificationTxId/,
+  );
+
+  // Rejects wrong network
+  assert.throws(
+    () => validatePrivateAttestationReceipt({ ...base, network: 'mainnet' }),
+    /Invalid network: expected 'preprod'/,
+  );
+
+  // Rejects non-canonical transaction ID
+  assert.throws(
+    () => validatePrivateAttestationReceipt({ ...base, attestationTxId: 'not-hex' }),
+    /canonical 64-character or 66-character lowercase hexadecimal/,
+  );
+});
+
+// 51. CV-011: Encrypted certified snapshot envelope decryption with correct vs wrong passphrase
+test('51. CV-011: Encrypted certified snapshot envelope decryption with correct vs wrong passphrase', async () => {
+  const snapshot = buildCertifiedSnapshotPackage({
+    contractAddress: SAMPLE_CONTRACT,
+    memberCredential: SAMPLE_HEX_32,
+    product: 'pkg:generic/xz-utils',
+    version: { major: 5, minor: 2, patch: 5 },
+    snapshotSalt: SAMPLE_HEX_32_B,
+    commitment: 'c1'.repeat(32),
+    txId: 'd'.repeat(64),
+    now: FIXED_NOW,
+  });
+
+  const envelope = await encryptToEnvelope(snapshot, VALID_PASSPHRASE, { now: FIXED_NOW });
+
+  // Correct passphrase succeeds and passes strict validator
+  const decrypted = await decryptAndValidateEnvelope(
+    envelope,
+    VALID_PASSPHRASE,
+    validateCertifiedSnapshotPackage,
+  );
+  assert.equal(decrypted.product, 'pkg:generic/xz-utils');
+  assert.equal(decrypted.version.major, 5);
+  assert.equal(decrypted.version.minor, 2);
+  assert.equal(decrypted.version.patch, 5);
+  assert.equal(decrypted.commitment, 'c1'.repeat(32));
+
+  // Wrong passphrase fails with sanitized decryption error
+  await assert.rejects(
+    () => decryptAndValidateEnvelope(envelope, 'WrongPassphrase123!', validateCertifiedSnapshotPackage),
+    /Failed to decrypt envelope: incorrect passphrase or tampered ciphertext\/metadata/,
   );
 });

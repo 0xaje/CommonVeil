@@ -13,6 +13,7 @@ import {
   encryptToEnvelope,
   decryptAndValidateEnvelope,
   type EncryptedEnvelope,
+  isHex,
   bytesToHex,
   hexToBytes,
   validateCertifierKeyPackage,
@@ -42,6 +43,11 @@ import {
   validateAffectedReleaseRegistrationReceipt,
   buildAffectedReleaseRegistrationReceipt,
   isCanonicalTransactionId,
+  PRIVATE_ATTESTATION_RECEIPT_SCHEMA,
+  type PrivateAttestationReceipt,
+  validatePrivateAttestationReceipt,
+  buildPrivateAttestationReceipt,
+  type CertifiedSnapshotPackage,
 } from './role-packages';
 import { deployContract, submitCallTx } from '@midnight-ntwrk/midnight-js-contracts';
 import { CompiledCommonVeilContract, CommonVeil } from './contract';
@@ -172,6 +178,22 @@ import {
   onAffectedReleaseReset,
   mapAffectedReleaseInspectionError,
   mapAffectedReleaseRegistrationError,
+  INITIAL_MEMBER_ATTESTATION_UI_STATE,
+  type MemberAttestationUiState,
+  checkMemberAttestationPrerequisites,
+  canInitiateAttestation,
+  onCertifiedSnapshotDecrypted,
+  onAffectedReleaseReceiptImported,
+  onAttestationConfirmationOpen,
+  onAttestationConfirmationDismissed,
+  onAttestationWalletRequest,
+  onAttestationSubmitting,
+  onAttestationFinalizedIndexing,
+  onAttestationCompleted,
+  onAttestationFailed,
+  onAttestationLifecycleReset,
+  mapAttestationInspectionError,
+  mapAttestationError,
 } from './role-workspace-state';
 import './role-workspace.css';
 
@@ -350,6 +372,63 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
     }
   };
 
+  // ── CV-011: Member Attestation Workflow State ─────────────────────────────
+  const [memberAttestationUi, setMemberAttestationUi] = useState<MemberAttestationUiState>(
+    INITIAL_MEMBER_ATTESTATION_UI_STATE,
+  );
+  const [memberAttestationNotice, setMemberAttestationNotice] = useState<string | null>(null);
+
+  // Snapshot import inputs
+  const [memberSnapshotEnvelopeContent, setMemberSnapshotEnvelopeContent] = useState<string | null>(null);
+  const [memberSnapshotPassphrase, setMemberSnapshotPassphrase] = useState('');
+  const [memberSnapshotShowPassphrase, setMemberSnapshotShowPassphrase] = useState(false);
+  const [memberSnapshotSelectedFileName, setMemberSnapshotSelectedFileName] = useState<string | null>(null);
+  const [memberSnapshotSelectedFileSize, setMemberSnapshotSelectedFileSize] = useState<number | null>(null);
+  const memberSnapshotFileInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Decrypted volatile snapshot salt (Uint8Array, never persisted, zeroized on reset)
+  const memberDecryptedSnapshotSaltRef = useRef<Uint8Array | null>(null);
+
+  // Affected release policy receipt import inputs
+  const [memberPolicyReceiptContent, setMemberPolicyReceiptContent] = useState<string | null>(null);
+  const [memberPolicyReceiptSelectedFileName, setMemberPolicyReceiptSelectedFileName] = useState<string | null>(null);
+  const [memberPolicyReceiptSelectedFileSize, setMemberPolicyReceiptSelectedFileSize] = useState<number | null>(null);
+  const memberPolicyReceiptFileInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Monotonically increasing attestation token to prevent race conditions
+  const attestationGenerationRef = useRef(0);
+  const activeAttestationTokenRef = useRef<number | null>(null);
+
+  const resetMemberAttestationState = (preserveFinalizedReceipt: boolean = false) => {
+    attestationGenerationRef.current++;
+    activeAttestationTokenRef.current = null;
+    zeroizeBytes(memberDecryptedSnapshotSaltRef.current);
+    memberDecryptedSnapshotSaltRef.current = null;
+    setMemberSnapshotEnvelopeContent(null);
+    setMemberSnapshotPassphrase('');
+    setMemberSnapshotShowPassphrase(false);
+    setMemberSnapshotSelectedFileName(null);
+    setMemberSnapshotSelectedFileSize(null);
+    setMemberPolicyReceiptContent(null);
+    setMemberPolicyReceiptSelectedFileName(null);
+    setMemberPolicyReceiptSelectedFileSize(null);
+    setMemberAttestationNotice(null);
+    if (memberSnapshotFileInputRef.current) {
+      memberSnapshotFileInputRef.current.value = '';
+    }
+    if (memberPolicyReceiptFileInputRef.current) {
+      memberPolicyReceiptFileInputRef.current.value = '';
+    }
+    if (!preserveFinalizedReceipt) {
+      setMemberAttestationUi(onAttestationLifecycleReset());
+    } else {
+      setMemberAttestationUi((prev) => {
+        if (prev.stage === 'attested') return prev;
+        return onAttestationLifecycleReset();
+      });
+    }
+  };
+
   // Plaintext secrets in volatile component memory only (Uint8Array, never React string state)
   const plaintextSecretRef = useRef<Uint8Array | null>(null);
   const plaintextCertifierSecretRef = useRef<Uint8Array | null>(null);
@@ -395,6 +474,8 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
       activeCertificationTokenRef.current = null;
       regAffectedGenerationRef.current++;
       activeRegAffectedTokenRef.current = null;
+      attestationGenerationRef.current++;
+      activeAttestationTokenRef.current = null;
       zeroizeBytes(plaintextSecretRef.current);
       plaintextSecretRef.current = null;
       zeroizeBytes(plaintextCertifierSecretRef.current);
@@ -405,7 +486,10 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
       plaintextMemberSaltRef.current = null;
       zeroizeBytes(snapshotSaltRef.current);
       snapshotSaltRef.current = null;
+      zeroizeBytes(memberDecryptedSnapshotSaltRef.current);
+      memberDecryptedSnapshotSaltRef.current = null;
       resetMemberInventory();
+      resetMemberAttestationState(false);
     };
   }, []);
 
@@ -429,12 +513,18 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
     affectedReleaseUi.stage === 'submitting' ||
     affectedReleaseUi.stage === 'finalized-indexing';
 
+  const isAttesting =
+    memberAttestationUi.stage === 'requesting-wallet' ||
+    memberAttestationUi.stage === 'submitting' ||
+    memberAttestationUi.stage === 'finalized-indexing';
+
   const isBusy =
     contractState.inspectionState === 'inspecting' ||
     contractState.inspectionState === 'attaching' ||
     isDeploying ||
     isAdmitting ||
-    isRegisteringAffected;
+    isRegisteringAffected ||
+    isAttesting;
 
   // Monotonically increasing copy generation tokens to prevent stale callbacks across secret lifecycles
   const copyGenerationRef = useRef(0);
@@ -515,6 +605,7 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
     setMemberBackupFileContent(null);
     setMemberError(null);
     resetMemberInventory();
+    resetMemberAttestationState(false);
   };
 
   // Clear secrets when role changes
@@ -554,6 +645,7 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
     setAdmissionUi((prev) => onAdmissionReset(prev));
     resetAffectedReleaseState(false);
     resetCertificationState();
+    resetMemberAttestationState(false);
   };
 
   const handleAddressChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -571,6 +663,8 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
     activeCertificationTokenRef.current = null;
     regAffectedGenerationRef.current++;
     activeRegAffectedTokenRef.current = null;
+    attestationGenerationRef.current++;
+    activeAttestationTokenRef.current = null;
     clearMemberSecret(false);
     const next = handleAddressInputChange(contractState, e.target.value);
     setContractState(next);
@@ -591,6 +685,7 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
     setAdmissionUi((prev) => onAdmissionReset(prev));
     resetAffectedReleaseState(false);
     resetCertificationState();
+    resetMemberAttestationState(false);
   };
 
   const handleInspect = async () => {
@@ -3394,6 +3489,522 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
     resetAffectedReleaseState(false);
   };
 
+  // ── CV-011: Member Certified Snapshot Import & Decryption ─────────────────
+  const handleMemberSnapshotFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    setMemberAttestationNotice(null);
+    const file = e.target.files?.[0];
+    if (!file) {
+      setMemberSnapshotEnvelopeContent(null);
+      setMemberSnapshotSelectedFileName(null);
+      setMemberSnapshotSelectedFileSize(null);
+      return;
+    }
+    setMemberSnapshotSelectedFileName(file.name);
+    setMemberSnapshotSelectedFileSize(file.size);
+    try {
+      const text = await file.text();
+      setMemberSnapshotEnvelopeContent(text);
+    } catch {
+      setMemberSnapshotEnvelopeContent(null);
+      setMemberAttestationUi((prev) =>
+        onAttestationFailed(prev, 'Could not read encrypted snapshot file content.'),
+      );
+    }
+  };
+
+  const handleDecryptMemberSnapshot = async () => {
+    if (!wallet || !contractState.attachedAddress) {
+      setMemberAttestationUi((prev) =>
+        onAttestationFailed(prev, 'Attach a compatible CommonVeil contract before decrypting a certified snapshot.'),
+      );
+      return;
+    }
+    if (!memberSnapshotEnvelopeContent) {
+      setMemberAttestationUi((prev) =>
+        onAttestationFailed(prev, 'Select an encrypted snapshot file to import.'),
+      );
+      return;
+    }
+    if (!memberSnapshotPassphrase) {
+      setMemberAttestationUi((prev) =>
+        onAttestationFailed(prev, 'Enter the handoff password to decrypt the snapshot envelope.'),
+      );
+      return;
+    }
+    if (!plaintextMemberSecretRef.current || !plaintextMemberSaltRef.current || !memberUi.memberCredentialHex) {
+      setMemberAttestationUi((prev) =>
+        onAttestationFailed(prev, 'Active Member secret and salt must exist in volatile session memory.'),
+      );
+      return;
+    }
+
+    try {
+      let envelopeJson: unknown;
+      try {
+        envelopeJson = JSON.parse(memberSnapshotEnvelopeContent);
+      } catch {
+        throw new Error('Encrypted snapshot file does not contain valid JSON.');
+      }
+
+      // Decrypt using AES-256-GCM + PBKDF2-SHA-256 (600,000 iterations)
+      const decryptedSnapshot = await decryptAndValidateEnvelope<CertifiedSnapshotPackage>(
+        envelopeJson as EncryptedEnvelope,
+        memberSnapshotPassphrase,
+        (payload) => validateCertifiedSnapshotPackage(payload),
+      );
+
+      // Verify contract matches attached contract
+      const attachedAddress = contractState.attachedAddress;
+      if (decryptedSnapshot.contractAddress.toLowerCase().trim() !== attachedAddress.toLowerCase().trim()) {
+        throw new Error(
+          `Snapshot contract address (${decryptedSnapshot.contractAddress}) does not match attached contract (${attachedAddress}).`,
+        );
+      }
+
+      // Verify memberCredential matches active member credential
+      if (
+        decryptedSnapshot.memberCredential.toLowerCase().trim() !==
+        memberUi.memberCredentialHex.toLowerCase().trim()
+      ) {
+        throw new Error('Snapshot member credential does not match the active Member credential.');
+      }
+
+      // Verify snapshot salt is exactly 32 bytes hex
+      if (!isHex(decryptedSnapshot.snapshotSalt, 32)) {
+        throw new Error('Snapshot salt must be exactly 32 bytes hex.');
+      }
+
+      // Verify snapshot commitment reproduces the derived commitment
+      const memberCredentialBytes = hexToBytes(memberUi.memberCredentialHex);
+      const productIdBytes = await productDigest(decryptedSnapshot.product);
+      const snapshotSaltBytes = hexToBytes(decryptedSnapshot.snapshotSalt);
+
+      const derivedCommitment = CommonVeil.pureCircuits.deriveInventoryCommitment(
+        memberCredentialBytes,
+        productIdBytes,
+        BigInt(decryptedSnapshot.version.major),
+        BigInt(decryptedSnapshot.version.minor),
+        BigInt(decryptedSnapshot.version.patch),
+        snapshotSaltBytes,
+      );
+      const derivedCommitmentHex = bytesToHex(derivedCommitment).toLowerCase();
+
+      if (derivedCommitmentHex !== decryptedSnapshot.commitment.toLowerCase()) {
+        throw new Error('Snapshot commitment does not match recomputed inventory commitment.');
+      }
+
+      // Verify snapshot commitment exists in the attached on-chain public ledger
+      const session = await queryCommonVeilContract(wallet.providers, attachedAddress);
+      if (!isMounted.current) return;
+
+      const hasCommitmentOnChain = session.hasInventoryCommitment(derivedCommitment);
+      if (!hasCommitmentOnChain) {
+        throw new Error('Snapshot inventory commitment does not exist in the on-chain public ledger.');
+      }
+
+      // Keep the decrypted snapshot salt ONLY in volatile memory
+      zeroizeBytes(memberDecryptedSnapshotSaltRef.current);
+      memberDecryptedSnapshotSaltRef.current = new Uint8Array(snapshotSaltBytes);
+
+      // Clear password inputs immediately from state
+      setMemberSnapshotPassphrase('');
+
+      setMemberAttestationUi((prev) =>
+        onCertifiedSnapshotDecrypted(prev, decryptedSnapshot, {
+          attachedContractAddress: attachedAddress,
+          activeMemberCredentialHex: memberUi.memberCredentialHex,
+          hasCommitmentOnChain: true,
+        }),
+      );
+      setMemberAttestationNotice('Encrypted certified snapshot verified and bound locally.');
+    } catch (err: unknown) {
+      if (!isMounted.current) return;
+      const rawMsg = err instanceof Error ? err.message : String(err);
+      setMemberAttestationUi((prev) => onAttestationFailed(prev, rawMsg));
+    }
+  };
+
+  // ── CV-011: Public Affected-Release Policy Receipt Import ──────────────────
+  const handleMemberPolicyReceiptFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    setMemberAttestationNotice(null);
+    const file = e.target.files?.[0];
+    if (!file) {
+      setMemberPolicyReceiptContent(null);
+      setMemberPolicyReceiptSelectedFileName(null);
+      setMemberPolicyReceiptSelectedFileSize(null);
+      return;
+    }
+    setMemberPolicyReceiptSelectedFileName(file.name);
+    setMemberPolicyReceiptSelectedFileSize(file.size);
+    try {
+      const text = await file.text();
+      setMemberPolicyReceiptContent(text);
+    } catch {
+      setMemberPolicyReceiptContent(null);
+      setMemberAttestationUi((prev) =>
+        onAttestationFailed(prev, 'Could not read policy registration receipt file content.'),
+      );
+    }
+  };
+
+  const handleImportMemberPolicyReceipt = async () => {
+    if (!wallet || !contractState.attachedAddress) {
+      setMemberAttestationUi((prev) =>
+        onAttestationFailed(prev, 'Attach a compatible CommonVeil contract before importing an affected-release receipt.'),
+      );
+      return;
+    }
+    if (!memberPolicyReceiptContent) {
+      setMemberAttestationUi((prev) =>
+        onAttestationFailed(prev, 'Select an affected-release registration receipt JSON file.'),
+      );
+      return;
+    }
+    if (!memberAttestationUi.snapshotEvidence) {
+      setMemberAttestationUi((prev) =>
+        onAttestationFailed(prev, 'Import and decrypt the certified snapshot before importing the affected-release receipt.'),
+      );
+      return;
+    }
+    if (!plaintextMemberSecretRef.current) {
+      setMemberAttestationUi((prev) =>
+        onAttestationFailed(prev, 'Active Member secret must exist in volatile session memory.'),
+      );
+      return;
+    }
+
+    try {
+      let receiptJson: unknown;
+      try {
+        receiptJson = JSON.parse(memberPolicyReceiptContent);
+      } catch {
+        throw new Error('Receipt file does not contain valid JSON.');
+      }
+
+      const receipt = validateAffectedReleaseRegistrationReceipt(receiptJson);
+      const attachedAddress = contractState.attachedAddress;
+
+      if (receipt.contractAddress.toLowerCase().trim() !== attachedAddress.toLowerCase().trim()) {
+        throw new Error(
+          `Receipt contract address (${receipt.contractAddress}) does not match attached contract (${attachedAddress}).`,
+        );
+      }
+      if (!receipt.policyActive) {
+        throw new Error('Affected-release receipt indicates that the on-chain policy is not active.');
+      }
+
+      // Check whether product and version match the certified snapshot
+      const productMatches = memberAttestationUi.snapshotEvidence.product === receipt.product;
+      const versionMatches =
+        memberAttestationUi.snapshotEvidence.version.major === receipt.version.major &&
+        memberAttestationUi.snapshotEvidence.version.minor === receipt.version.minor &&
+        memberAttestationUi.snapshotEvidence.version.patch === receipt.version.patch;
+
+      if (!productMatches || !versionMatches) {
+        // Honest negative outcome: e.g. xz-utils 5.2.5 vs CVE-2024-3094 5.6.0/5.6.1
+        setMemberAttestationUi((prev) =>
+          onAffectedReleaseReceiptImported(prev, receipt, {
+            attachedContractAddress: attachedAddress,
+            isReleaseInLedger: false,
+            isNullifierUsed: false,
+            derivedNullifierHex: '',
+          }),
+        );
+        return;
+      }
+
+      // Recompute release ID and verify it exists in affectedReleases on-chain
+      const advisoryIdBytes = await advisoryDigest(receipt.advisoryId);
+      const productIdBytes = await productDigest(receipt.product);
+      const releaseIdBytes = CommonVeil.pureCircuits.deriveReleaseId(
+        advisoryIdBytes,
+        productIdBytes,
+        BigInt(receipt.version.major),
+        BigInt(receipt.version.minor),
+        BigInt(receipt.version.patch),
+      );
+
+      const session = await queryCommonVeilContract(wallet.providers, attachedAddress);
+      if (!isMounted.current) return;
+
+      const isReleaseInLedger = session.hasAffectedRelease(releaseIdBytes);
+      if (!isReleaseInLedger) {
+        throw new Error('Derived release ID does not exist in the on-chain affectedReleases set.');
+      }
+
+      // Preflight nullifier derivation: deriveNullifier(advisoryId, memberSecret)
+      const nullifierBytes = CommonVeil.pureCircuits.deriveNullifier(
+        advisoryIdBytes,
+        plaintextMemberSecretRef.current,
+      );
+      const nullifierHex = bytesToHex(nullifierBytes).toLowerCase();
+      const isNullifierUsed = session.hasUsedNullifier(nullifierBytes);
+
+      setMemberAttestationUi((prev) =>
+        onAffectedReleaseReceiptImported(prev, receipt, {
+          attachedContractAddress: attachedAddress,
+          isReleaseInLedger: true,
+          isNullifierUsed,
+          derivedNullifierHex: nullifierHex,
+        }),
+      );
+      if (isNullifierUsed) {
+        setMemberAttestationNotice('Member already attested for this advisory on-chain (nullifier recorded).');
+      } else {
+        setMemberAttestationNotice('Certified snapshot matches registered affected release. Ready to attest.');
+      }
+    } catch (err: unknown) {
+      if (!isMounted.current) return;
+      const rawMsg = err instanceof Error ? err.message : String(err);
+      setMemberAttestationUi((prev) => onAttestationFailed(prev, rawMsg));
+    }
+  };
+
+  // ── CV-011: Confirmation Dialog Controls ──────────────────────────────────
+  const handleOpenAttestConfirmation = () => {
+    setMemberAttestationUi((prev) => onAttestationConfirmationOpen(prev));
+  };
+
+  const handleDismissAttestConfirmation = () => {
+    setMemberAttestationUi((prev) => onAttestationConfirmationDismissed(prev));
+  };
+
+  // ── CV-011: Submit Genuine Attest Transaction ─────────────────────────────
+  const handleConfirmAndAttest = async () => {
+    if (
+      !wallet ||
+      !contractState.attachedAddress ||
+      !memberAttestationUi.snapshotEvidence ||
+      !memberAttestationUi.importedPolicyReceipt ||
+      !plaintextMemberSecretRef.current ||
+      !plaintextMemberSaltRef.current ||
+      !memberDecryptedSnapshotSaltRef.current
+    ) {
+      return;
+    }
+
+    const operationToken = ++attestationGenerationRef.current;
+    activeAttestationTokenRef.current = operationToken;
+
+    setMemberAttestationUi((prev) => onAttestationWalletRequest(prev));
+    setMemberAttestationNotice(null);
+
+    const attachedAddress = contractState.attachedAddress;
+    const policyReceipt = memberAttestationUi.importedPolicyReceipt;
+    const snapshotEvidence = memberAttestationUi.snapshotEvidence;
+    const memberSecretBytes = plaintextMemberSecretRef.current;
+    const memberSaltBytes = plaintextMemberSaltRef.current;
+    const snapshotSaltBytes = memberDecryptedSnapshotSaltRef.current;
+
+    try {
+      // Local Preflight check before wallet submission
+      const advisoryIdBytes = await advisoryDigest(policyReceipt.advisoryId);
+      const productIdBytes = await productDigest(snapshotEvidence.product);
+
+      // Verify nullifier not already used on-chain
+      const nullifierBytes = CommonVeil.pureCircuits.deriveNullifier(
+        advisoryIdBytes,
+        memberSecretBytes,
+      );
+      const sessionBefore = await queryCommonVeilContract(wallet.providers, attachedAddress);
+      if (!isMounted.current || activeAttestationTokenRef.current !== operationToken) return;
+
+      if (sessionBefore.hasUsedNullifier(nullifierBytes)) {
+        setMemberAttestationUi((prev) => ({
+          ...prev,
+          stage: 'already-attested',
+          noticeMessage: 'Member already attested for this advisory.',
+        }));
+        return;
+      }
+
+      const preSubmitAcceptedCount = sessionBefore.publicState.accepted;
+
+      setMemberAttestationUi((prev) => onAttestationSubmitting(prev));
+
+      // Call genuine attest circuit via Midnight SDK
+      // attest(advisoryId, memberSecret, memberSalt, productId, major, minor, patch, snapshotSalt)
+      const finalized = await submitCallTx(
+        wallet.providers,
+        {
+          compiledContract: CompiledCommonVeilContract,
+          contractAddress: attachedAddress,
+          circuitId: 'attest',
+          args: [
+            advisoryIdBytes,
+            memberSecretBytes,
+            memberSaltBytes,
+            productIdBytes,
+            BigInt(snapshotEvidence.version.major),
+            BigInt(snapshotEvidence.version.minor),
+            BigInt(snapshotEvidence.version.patch),
+            snapshotSaltBytes,
+          ],
+        },
+      );
+
+      if (!isMounted.current || activeAttestationTokenRef.current !== operationToken) return;
+
+      const rawTxId: unknown = finalized.public.txId;
+      if (!isCanonicalTransactionId(rawTxId)) {
+        throw new Error(
+          `Indexer or SDK returned non-canonical transaction ID: ${String(rawTxId)}`,
+        );
+      }
+      const canonicalTxId = (rawTxId as string).toLowerCase();
+
+      // Enter finalized-indexing state
+      setMemberAttestationUi((prev) => onAttestationFinalizedIndexing(prev, canonicalTxId));
+
+      // Inspect same contract to verify accepted increased by 1 and nullifier is recorded
+      try {
+        const sessionAfter = await queryCommonVeilContract(wallet.providers, attachedAddress);
+        if (!isMounted.current || activeAttestationTokenRef.current !== operationToken) return;
+
+        const nullifierRecorded = sessionAfter.hasUsedNullifier(nullifierBytes);
+        const acceptedIncreased = sessionAfter.publicState.accepted === preSubmitAcceptedCount + 1n;
+
+        if (nullifierRecorded && acceptedIncreased) {
+          const receipt = buildPrivateAttestationReceipt({
+            contractAddress: attachedAddress,
+            advisoryId: policyReceipt.advisoryId,
+            attestationTxId: canonicalTxId,
+          });
+
+          setMemberAttestationUi((prev) => onAttestationCompleted(prev, receipt));
+          setMemberAttestationNotice(
+            'Private attestation confirmed on-chain. Public accepted report count incremented by 1.',
+          );
+          setContractState((prev) => ({
+            ...prev,
+            inspectedState: sessionAfter.publicState,
+          }));
+        } else {
+          // Delayed indexing: stay in finalized-indexing without resubmitting
+          setMemberAttestationNotice(
+            'Attestation transaction finalized on-chain; indexer synchronization is pending. Use retry confirmation below.',
+          );
+        }
+      } catch (inspectError: unknown) {
+        if (!isMounted.current) return;
+        setMemberAttestationNotice(
+          'Attestation transaction finalized on-chain; indexer synchronization is pending. Use retry confirmation below.',
+        );
+      }
+    } catch (attestError: unknown) {
+      if (!isMounted.current || activeAttestationTokenRef.current !== operationToken) return;
+
+      const raw = (
+        attestError instanceof Error
+          ? attestError.message
+          : typeof attestError === 'string'
+            ? attestError
+            : ''
+      ).toLowerCase();
+
+      if (
+        raw.includes('cancel') ||
+        raw.includes('reject') ||
+        raw.includes('denied') ||
+        raw.includes('declined') ||
+        raw.includes('user aborted')
+      ) {
+        setMemberAttestationUi((prev) =>
+          onAttestationFailed(prev, 'Attestation transaction was cancelled in 1AM.'),
+        );
+      } else {
+        setMemberAttestationUi((prev) =>
+          onAttestationFailed(prev, mapAttestationError(attestError)),
+        );
+      }
+    }
+  };
+
+  // ── CV-011: Read-Only Indexer Retry for Attestation ────────────────────────
+  const handleRetryAttestationVerification = async () => {
+    if (
+      !wallet ||
+      !contractState.attachedAddress ||
+      !memberAttestationUi.snapshotEvidence ||
+      !memberAttestationUi.importedPolicyReceipt ||
+      !plaintextMemberSecretRef.current ||
+      memberAttestationUi.stage !== 'finalized-indexing'
+    ) {
+      return;
+    }
+
+    const attachedAddress = contractState.attachedAddress;
+    const policyReceipt = memberAttestationUi.importedPolicyReceipt;
+
+    try {
+      const advisoryIdBytes = await advisoryDigest(policyReceipt.advisoryId);
+      const nullifierBytes = CommonVeil.pureCircuits.deriveNullifier(
+        advisoryIdBytes,
+        plaintextMemberSecretRef.current,
+      );
+
+      const session = await queryCommonVeilContract(wallet.providers, attachedAddress);
+      if (!isMounted.current) return;
+
+      const nullifierRecorded = session.hasUsedNullifier(nullifierBytes);
+      if (!nullifierRecorded) {
+        setMemberAttestationNotice(
+          'Indexer has not yet recorded the derived nullifier. Check again shortly.',
+        );
+        return;
+      }
+
+      const canonicalTxId = memberAttestationUi.attestationTxId ?? '00'.repeat(32);
+      const receipt = buildPrivateAttestationReceipt({
+        contractAddress: attachedAddress,
+        advisoryId: policyReceipt.advisoryId,
+        attestationTxId: canonicalTxId,
+      });
+
+      setMemberAttestationUi((prev) => onAttestationCompleted(prev, receipt));
+      setMemberAttestationNotice(
+        'Private attestation confirmed on-chain in usedNullifiers set. Public accepted report count incremented.',
+      );
+
+      setContractState((prev) => ({
+        ...prev,
+        inspectedState: session.publicState,
+      }));
+    } catch (inspectError: unknown) {
+      if (!isMounted.current) return;
+      const errorCode =
+        inspectError instanceof ContractSessionError
+          ? inspectError.code
+          : (inspectError as { code?: string } | null)?.code;
+
+      if (errorCode === 'CONTRACT_NOT_FOUND' || errorCode === 'INDEXER_QUERY_FAILED') {
+        return;
+      }
+
+      setMemberAttestationUi((prev) =>
+        onAttestationFailed(prev, mapAttestationInspectionError(inspectError)),
+      );
+    }
+  };
+
+  // ── CV-011: Download Privacy-Preserving Attestation Receipt ─────────────────
+  const handleDownloadPrivateAttestationReceipt = () => {
+    if (!memberAttestationUi.receipt) return;
+    try {
+      const validated = validatePrivateAttestationReceipt(memberAttestationUi.receipt);
+      triggerBlobDownload(
+        JSON.stringify(validated, null, 2),
+        `commonveil-private-attestation-receipt-${validated.advisoryId.toLowerCase()}-${validated.attestationTxId.slice(0, 16)}.json`,
+      );
+    } catch {
+      setMemberAttestationNotice('Could not create valid private attestation receipt.');
+    }
+  };
+
+  const handleResetMemberAttestation = () => {
+    resetMemberAttestationState(false);
+  };
+
   return (
     <main className="role-workspace-main" aria-busy={walletConnecting || isBusy}>
       <nav className="role-workspace-nav">
@@ -4842,6 +5453,427 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
             </article>
           )}
 
+          {role === 'member' && (
+            <article className="workspace-card member-snapshot-import-card">
+              <div className="card-header">
+                <span className="card-step">05</span>
+                <h2>Import Certified Snapshot</h2>
+              </div>
+              <p className="card-caption">
+                Import the encrypted snapshot envelope received privately from the Certifier and enter your handoff password to decrypt and verify the certified inventory commitment locally.
+              </p>
+
+              <div className="local-privacy-notice-box" role="note">
+                <strong>Memory-Only Decryption & Privacy Notice</strong>
+                <p>
+                  Decryption occurs entirely within volatile browser session memory. The password, plaintext package, and snapshot salt are never written to disk, localStorage, or analytics. JavaScript runtime memory cannot guarantee absolute memory scrubbing.
+                </p>
+              </div>
+
+              {memberAttestationNotice && (
+                <div className="safe-notice-banner" role="status">
+                  <p>{memberAttestationNotice}</p>
+                </div>
+              )}
+
+              {memberAttestationUi.errorMessage && (
+                <div className="safe-error-banner" role="alert">
+                  <strong>Snapshot Error</strong>
+                  <p>{memberAttestationUi.errorMessage}</p>
+                </div>
+              )}
+
+              <div className="form-field-group">
+                <label htmlFor="member-snapshot-file-input">
+                  Select Encrypted Snapshot Envelope (<code>commonveil.encrypted-envelope/v1</code>)
+                </label>
+                <input
+                  id="member-snapshot-file-input"
+                  ref={memberSnapshotFileInputRef}
+                  type="file"
+                  accept=".json,application/json"
+                  onChange={handleMemberSnapshotFileSelect}
+                  aria-label="Select encrypted snapshot envelope JSON file"
+                />
+                {memberSnapshotSelectedFileName && (
+                  <small className="field-caption">
+                    Selected file: {memberSnapshotSelectedFileName} ({memberSnapshotSelectedFileSize} bytes)
+                  </small>
+                )}
+              </div>
+
+              <div className="form-field-group">
+                <label htmlFor="member-snapshot-passphrase-input">Snapshot Handoff Password</label>
+                <div className="input-with-button-row">
+                  <input
+                    id="member-snapshot-passphrase-input"
+                    type={memberSnapshotShowPassphrase ? 'text' : 'password'}
+                    value={memberSnapshotPassphrase}
+                    onChange={(e) => setMemberSnapshotPassphrase(e.target.value)}
+                    placeholder="Enter envelope password (PBKDF2-SHA-256, 600,000 iterations)"
+                    autoComplete="off"
+                    aria-label="Snapshot envelope decryption password"
+                  />
+                  <button
+                    type="button"
+                    className="action-button secondary"
+                    onClick={() => setMemberSnapshotShowPassphrase((v) => !v)}
+                  >
+                    {memberSnapshotShowPassphrase ? 'Hide' : 'Show'}
+                  </button>
+                </div>
+              </div>
+
+              <div className="button-row">
+                <button
+                  type="button"
+                  className="action-button primary"
+                  onClick={handleDecryptMemberSnapshot}
+                  disabled={!memberSnapshotEnvelopeContent || !memberSnapshotPassphrase}
+                  aria-label="Decrypt and verify certified snapshot"
+                >
+                  Decrypt & Verify Snapshot
+                </button>
+              </div>
+
+              {memberAttestationUi.snapshotEvidence && (
+                <div className="verified-evidence-box">
+                  <div className="evidence-header-row">
+                    <span className="provenance-badge live-host-scan">Encrypted Snapshot Verified ✔</span>
+                    <span className="credential-match-tag">Member credential matched locally ✔</span>
+                  </div>
+                  <dl className="property-list">
+                    <dt>Product</dt>
+                    <dd><code>{memberAttestationUi.snapshotEvidence.product}</code></dd>
+                    <dt>Exact Version</dt>
+                    <dd>
+                      <code>
+                        {memberAttestationUi.snapshotEvidence.version.major}.
+                        {memberAttestationUi.snapshotEvidence.version.minor}.
+                        {memberAttestationUi.snapshotEvidence.version.patch}
+                      </code>
+                    </dd>
+                    <dt>Certification Tx ID</dt>
+                    <dd title={memberAttestationUi.snapshotEvidence.txId}>
+                      <code>{shortenAddress(memberAttestationUi.snapshotEvidence.txId)}</code>
+                    </dd>
+                    <dt>Inventory Commitment</dt>
+                    <dd title={memberAttestationUi.snapshotEvidence.commitment}>
+                      <code>{shortenAddress(memberAttestationUi.snapshotEvidence.commitment)}</code>
+                    </dd>
+                    <dt>Attached Contract</dt>
+                    <dd>
+                      <code>{contractState.attachedAddress ? shortenAddress(contractState.attachedAddress) : 'None'}</code>
+                    </dd>
+                  </dl>
+                </div>
+              )}
+            </article>
+          )}
+
+          {role === 'member' && (
+            <article className="workspace-card member-attestation-card">
+              <div className="card-header">
+                <span className="card-step">06</span>
+                <h2>Private Affected-Release Attestation</h2>
+              </div>
+              <p className="card-caption">
+                Privately prove membership in an active on-chain affected-release policy without revealing your identity or inventory data to the public ledger.
+              </p>
+
+              <div className="honesty-notice-box" role="note">
+                <strong>Honesty & Verification Notice</strong>
+                <p>
+                  CommonVeil proves membership against the on-chain affected-release policy. It does not independently authenticate the external advisory publisher.
+                </p>
+              </div>
+
+              {/* Attestation Prerequisites Checklist */}
+              {(() => {
+                const prereqsMet = canInitiateAttestation({
+                  isConnected: Boolean(wallet),
+                  attachedContractAddress: contractState.attachedAddress,
+                  hasMemberSecretAndSalt: Boolean(plaintextMemberSecretRef.current && plaintextMemberSaltRef.current),
+                  memberBackupRecoveryStatus: memberUi.backupRecoveryStatus,
+                  isMemberCredentialAdmitted: memberUi.verificationStatus === 'verified',
+                  hasSnapshotEvidence: Boolean(memberAttestationUi.snapshotEvidence),
+                  snapshotCredentialMatchesActiveMember: Boolean(
+                    memberAttestationUi.snapshotEvidence && memberUi.memberCredentialHex,
+                  ),
+                  snapshotCommitmentExistsOnChain: Boolean(
+                    memberAttestationUi.snapshotEvidence &&
+                    contractState.inspectedState?.inventoryCommitments.toString() !== '0',
+                  ),
+                  hasPolicyReceipt: Boolean(memberAttestationUi.importedPolicyReceipt),
+                  policyReceiptContractMatchesAttached: Boolean(
+                    memberAttestationUi.importedPolicyReceipt &&
+                    contractState.attachedAddress &&
+                    memberAttestationUi.importedPolicyReceipt.contractAddress.toLowerCase().trim() ===
+                      contractState.attachedAddress.toLowerCase().trim(),
+                  ),
+                  policyProductAndVersionMatchSnapshot: Boolean(
+                    memberAttestationUi.importedPolicyReceipt &&
+                    memberAttestationUi.snapshotEvidence &&
+                    memberAttestationUi.importedPolicyReceipt.product === memberAttestationUi.snapshotEvidence.product &&
+                    memberAttestationUi.importedPolicyReceipt.version.major === memberAttestationUi.snapshotEvidence.version.major &&
+                    memberAttestationUi.importedPolicyReceipt.version.minor === memberAttestationUi.snapshotEvidence.version.minor &&
+                    memberAttestationUi.importedPolicyReceipt.version.patch === memberAttestationUi.snapshotEvidence.version.patch,
+                  ),
+                  isReleaseRegisteredOnChain: Boolean(
+                    memberAttestationUi.importedPolicyReceipt &&
+                    contractState.inspectedState?.affectedReleases.toString() !== '0',
+                  ),
+                  isPolicyActive: Boolean(contractState.inspectedState?.policyActive),
+                  isNullifierAlreadyUsed: memberAttestationUi.stage === 'already-attested',
+                  isProofProviderConfigured: true,
+                  isOperationPending: isBusy,
+                });
+
+                return (
+                  <div className="prerequisites-warning-box" role="status">
+                    <span className="field-caption">Attestation Prerequisites Status</span>
+                    <ul className="prerequisites-list">
+                      <li className={wallet ? 'met' : 'unmet'}>
+                        {wallet ? '✔' : '○'} 1AM connected on Midnight Preprod
+                      </li>
+                      <li className={contractState.attachedAddress ? 'met' : 'unmet'}>
+                        {contractState.attachedAddress ? '✔' : '○'} Compatible CommonVeil contract attached
+                      </li>
+                      <li className={plaintextMemberSecretRef.current && plaintextMemberSaltRef.current ? 'met' : 'unmet'}>
+                        {plaintextMemberSecretRef.current && plaintextMemberSaltRef.current ? '✔' : '○'} Active Member secret & salt in session memory
+                      </li>
+                      <li className={memberUi.backupRecoveryStatus === 'recovery-tested' ? 'met' : 'unmet'}>
+                        {memberUi.backupRecoveryStatus === 'recovery-tested' ? '✔' : '○'} Member backup is recovery-tested
+                      </li>
+                      <li className={memberUi.verificationStatus === 'verified' ? 'met' : 'unmet'}>
+                        {memberUi.verificationStatus === 'verified' ? '✔' : '○'} Derived Member credential admitted in ledger
+                      </li>
+                      <li className={memberAttestationUi.snapshotEvidence ? 'met' : 'unmet'}>
+                        {memberAttestationUi.snapshotEvidence ? '✔' : '○'} Certified snapshot decrypted and verified
+                      </li>
+                      <li className={memberAttestationUi.importedPolicyReceipt ? 'met' : 'unmet'}>
+                        {memberAttestationUi.importedPolicyReceipt ? '✔' : '○'} Affected-release policy receipt imported
+                      </li>
+                      <li className={contractState.inspectedState?.policyActive ? 'met' : 'unmet'}>
+                        {contractState.inspectedState?.policyActive ? '✔' : '○'} Policy active on-chain (policyActive = true)
+                      </li>
+                    </ul>
+                  </div>
+                );
+              })()}
+
+              <div className="form-field-group">
+                <label htmlFor="member-policy-receipt-input">
+                  Import Public Affected-Release Registration Receipt (<code>commonveil.affected-release-registration-receipt/v1</code>)
+                </label>
+                <input
+                  id="member-policy-receipt-input"
+                  ref={memberPolicyReceiptFileInputRef}
+                  type="file"
+                  accept=".json,application/json"
+                  onChange={handleMemberPolicyReceiptFileSelect}
+                  aria-label="Select affected release registration receipt JSON file"
+                />
+                {memberPolicyReceiptSelectedFileName && (
+                  <small className="field-caption">
+                    Selected file: {memberPolicyReceiptSelectedFileName} ({memberPolicyReceiptSelectedFileSize} bytes)
+                  </small>
+                )}
+              </div>
+
+              <div className="button-row">
+                <button
+                  type="button"
+                  className="action-button secondary"
+                  onClick={handleImportMemberPolicyReceipt}
+                  disabled={!memberPolicyReceiptContent || !memberAttestationUi.snapshotEvidence}
+                  aria-label="Import affected release registration receipt"
+                >
+                  Import & Verify Policy Receipt
+                </button>
+              </div>
+
+              {memberAttestationUi.stage === 'unaffected' && (
+                <div className="safe-notice-banner" role="status">
+                  <strong>Unaffected Release Evaluation</strong>
+                  <p>This certified version is outside the registered affected-release set.</p>
+                </div>
+              )}
+
+              {memberAttestationUi.stage === 'already-attested' && (
+                <div className="safe-notice-banner" role="status">
+                  <strong>Replay Protection Active</strong>
+                  <p>Member already attested for this advisory (nullifier recorded on-chain). Duplicate attestation is prohibited.</p>
+                </div>
+              )}
+
+              {memberAttestationUi.importedPolicyReceipt && memberAttestationUi.stage === 'ready-to-attest' && (
+                <div className="policy-match-details">
+                  <span className="field-caption">Policy Match Summary</span>
+                  <dl className="property-list">
+                    <dt>Advisory ID</dt>
+                    <dd><code>{memberAttestationUi.importedPolicyReceipt.advisoryId}</code></dd>
+                    <dt>Product & Version</dt>
+                    <dd>
+                      <code>
+                        {memberAttestationUi.importedPolicyReceipt.product} @ {memberAttestationUi.importedPolicyReceipt.version.major}.{memberAttestationUi.importedPolicyReceipt.version.minor}.{memberAttestationUi.importedPolicyReceipt.version.patch}
+                      </code>
+                    </dd>
+                    <dt>Policy Active</dt>
+                    <dd><strong>Yes (On-Chain Confirmed)</strong></dd>
+                  </dl>
+
+                  <div className="button-row">
+                    <button
+                      type="button"
+                      className="action-button primary"
+                      onClick={handleOpenAttestConfirmation}
+                      disabled={isBusy}
+                      aria-label="Prove affected release"
+                    >
+                      Prove Affected Release
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Attestation Confirmation Dialog */}
+              {memberAttestationUi.stage === 'confirming' && (
+                <div className="confirmation-modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="attest-confirm-title">
+                  <div className="confirmation-modal-card">
+                    <h3 id="attest-confirm-title">Confirm Private Affected-Release Attestation</h3>
+                    <p className="modal-caption">
+                      Review transaction details before invoking the Midnight zero-knowledge attest circuit.
+                    </p>
+
+                    <dl className="property-list">
+                      <dt>Network</dt>
+                      <dd><strong>Midnight Preprod</strong></dd>
+                      <dt>Contract Address</dt>
+                      <dd><code>{contractState.attachedAddress ? shortenAddress(contractState.attachedAddress) : ''}</code></dd>
+                      <dt>Advisory Identifier</dt>
+                      <dd><code>{memberAttestationUi.importedPolicyReceipt?.advisoryId}</code></dd>
+                      <dt>Product & Version</dt>
+                      <dd>
+                        <code>
+                          {memberAttestationUi.snapshotEvidence?.product} @ {memberAttestationUi.snapshotEvidence?.version.major}.{memberAttestationUi.snapshotEvidence?.version.minor}.{memberAttestationUi.snapshotEvidence?.version.patch}
+                        </code>
+                      </dd>
+                      <dt>Certification Commitment</dt>
+                      <dd>Verified on-chain ✔</dd>
+                      <dt>Affected Release</dt>
+                      <dd>Verified in policy ✔</dd>
+                    </dl>
+
+                    <div className="modal-warning-box">
+                      <strong>DUST Fee & Replay Warning</strong>
+                      <p>
+                        A small DUST network transaction fee is consumed. The same Member cannot attest twice for the same advisory; an anonymous nullifier is published on-chain to prevent replay.
+                      </p>
+                    </div>
+
+                    <div className="privacy-statement-box">
+                      <strong>Privacy Statement</strong>
+                      <p>
+                        Your Member identity, Member secret, Member salt, and snapshot salt remain completely confidential. Only the advisory identifier, an anonymous nullifier, and the incremented accepted-report count become public.
+                      </p>
+                    </div>
+
+                    <div className="modal-button-row">
+                      <button
+                        type="button"
+                        className="action-button primary"
+                        onClick={handleConfirmAndAttest}
+                        disabled={isBusy}
+                      >
+                        {isBusy ? 'Submitting...' : 'Confirm & Submit Attestation'}
+                      </button>
+                      <button
+                        type="button"
+                        className="action-button secondary"
+                        onClick={handleDismissAttestConfirmation}
+                        disabled={isBusy}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Progress and Indexer Lag State */}
+              {memberAttestationUi.stage === 'requesting-wallet' && (
+                <div className="progress-banner" aria-live="polite">
+                  <p>Awaiting authorization in 1AM wallet...</p>
+                </div>
+              )}
+
+              {memberAttestationUi.stage === 'submitting' && (
+                <div className="progress-banner" aria-live="polite">
+                  <p>Generating zero-knowledge proof and submitting attestation transaction...</p>
+                </div>
+              )}
+
+              {memberAttestationUi.stage === 'finalized-indexing' && (
+                <div className="indexer-lag-box" aria-live="polite">
+                  <strong>Attestation Finalized (Indexing Delayed)</strong>
+                  <p>
+                    Transaction finalized on-chain with ID <code>{shortenAddress(memberAttestationUi.attestationTxId ?? '')}</code>. The indexer has not yet synchronized.
+                  </p>
+                  <button
+                    type="button"
+                    className="action-button secondary"
+                    onClick={handleRetryAttestationVerification}
+                  >
+                    Retry On-Chain Inspection (Zero New Tx)
+                  </button>
+                </div>
+              )}
+
+              {/* Completed Attestation Receipt State */}
+              {memberAttestationUi.stage === 'attested' && memberAttestationUi.receipt && (
+                <div className="completed-receipt-box">
+                  <h3>Private Attestation Accepted ✔</h3>
+                  <p>
+                    Your affected-release attestation was successfully verified and recorded by the CommonVeil contract without disclosing your identity.
+                  </p>
+
+                  <dl className="property-list">
+                    <dt>Transaction ID</dt>
+                    <dd title={memberAttestationUi.receipt.attestationTxId}>
+                      <code>{shortenAddress(memberAttestationUi.receipt.attestationTxId)}</code>
+                    </dd>
+                    <dt>Advisory ID</dt>
+                    <dd><code>{memberAttestationUi.receipt.advisoryId}</code></dd>
+                    <dt>Accepted Timestamp</dt>
+                    <dd><small>{memberAttestationUi.receipt.acceptedAt}</small></dd>
+                    <dt>Status</dt>
+                    <dd><strong>{memberAttestationUi.receipt.status}</strong></dd>
+                  </dl>
+
+                  <div className="button-row">
+                    <button
+                      type="button"
+                      className="action-button primary"
+                      onClick={handleDownloadPrivateAttestationReceipt}
+                      aria-label="Download private attestation receipt JSON"
+                    >
+                      Download Attestation Receipt (.json)
+                    </button>
+                    <button
+                      type="button"
+                      className="action-button secondary"
+                      onClick={handleResetMemberAttestation}
+                      aria-label="Attest another advisory"
+                    >
+                      Done / Reset
+                    </button>
+                  </div>
+                </div>
+              )}
+            </article>
+          )}
+
           {role === 'registrar' && (
             <article className="workspace-card registrar-identity-card">
               <div className="card-header">
@@ -6059,7 +7091,7 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
           {/* Public State Panel */}
           <article className="workspace-card public-state-card">
             <div className="card-header">
-              <span className="card-step">{role === 'registrar' ? '07' : '05'}</span>
+              <span className="card-step">{role === 'registrar' ? '07' : role === 'member' ? '07' : '05'}</span>
               <h2>Public Contract State</h2>
             </div>
             <p className="privacy-guarantee-notice">

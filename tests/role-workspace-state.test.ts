@@ -131,6 +131,23 @@ import {
   mapAffectedReleaseInspectionError,
   mapAffectedReleaseRegistrationError,
   AFFECTED_RELEASE_VERIFICATION_ERROR_MESSAGES,
+  INITIAL_MEMBER_ATTESTATION_UI_STATE,
+  type MemberAttestationUiState,
+  checkMemberAttestationPrerequisites,
+  canInitiateAttestation,
+  onCertifiedSnapshotDecrypted,
+  onAffectedReleaseReceiptImported,
+  onAttestationConfirmationOpen,
+  onAttestationConfirmationDismissed,
+  onAttestationWalletRequest,
+  onAttestationSubmitting,
+  onAttestationFinalizedIndexing,
+  onAttestationCompleted,
+  onAttestationFailed,
+  onAttestationLifecycleReset,
+  mapAttestationInspectionError,
+  mapAttestationError,
+  ATTESTATION_VERIFICATION_ERROR_MESSAGES,
 } from '../src/role-workspace-state.ts';
 import {
   bytesToHex,
@@ -155,6 +172,9 @@ import {
   buildAffectedReleaseRegistrationReceipt,
   type AffectedReleasePolicyPackage,
   type AffectedReleaseRegistrationReceipt,
+  buildPrivateAttestationReceipt,
+  validatePrivateAttestationReceipt,
+  type PrivateAttestationReceipt,
 } from '../src/role-packages.ts';
 import {
   verifyRegistrarSecret,
@@ -3943,5 +3963,577 @@ test('142. CV-010: Compact execution confirms policyActive, duplicate rejection,
         0n,
       ),
     /Affected release already registered/,
+  );
+});
+
+// 143. CV-011: checkMemberAttestationPrerequisites comprehensive prerequisite validation
+test('143. CV-011: checkMemberAttestationPrerequisites comprehensive prerequisite validation', () => {
+  const missingAll = checkMemberAttestationPrerequisites({
+    isConnected: false,
+    attachedContractAddress: null,
+    hasMemberSecretAndSalt: false,
+    memberBackupRecoveryStatus: 'none',
+    isMemberCredentialAdmitted: false,
+    hasSnapshotEvidence: false,
+    snapshotCredentialMatchesActiveMember: false,
+    snapshotCommitmentExistsOnChain: false,
+    hasPolicyReceipt: false,
+    policyReceiptContractMatchesAttached: false,
+    policyProductAndVersionMatchSnapshot: false,
+    isReleaseRegisteredOnChain: false,
+    isPolicyActive: false,
+    isNullifierAlreadyUsed: false,
+    isProofProviderConfigured: false,
+    isOperationPending: true,
+  });
+
+  assert.ok(missingAll.length >= 13, `Expected at least 13 missing prereqs, got ${missingAll.length}`);
+  assert.ok(missingAll.some((m) => m.includes('1AM wallet')));
+  assert.ok(missingAll.some((m) => m.includes('CommonVeil contract')));
+  assert.ok(missingAll.some((m) => m.includes('Member secret and salt')));
+  assert.ok(missingAll.some((m) => m.includes('recovery-tested')));
+  assert.ok(missingAll.some((m) => m.includes('admitted in the public ledger')));
+  assert.ok(missingAll.some((m) => m.includes('certified snapshot')));
+  assert.ok(missingAll.some((m) => m.includes('policyActive')));
+
+  // All satisfied
+  const missingNone = checkMemberAttestationPrerequisites({
+    isConnected: true,
+    attachedContractAddress: SAMPLE_CONTRACT_ADDRESS,
+    hasMemberSecretAndSalt: true,
+    memberBackupRecoveryStatus: 'recovery-tested',
+    isMemberCredentialAdmitted: true,
+    hasSnapshotEvidence: true,
+    snapshotCredentialMatchesActiveMember: true,
+    snapshotCommitmentExistsOnChain: true,
+    hasPolicyReceipt: true,
+    policyReceiptContractMatchesAttached: true,
+    policyProductAndVersionMatchSnapshot: true,
+    isReleaseRegisteredOnChain: true,
+    isPolicyActive: true,
+    isNullifierAlreadyUsed: false,
+    isProofProviderConfigured: true,
+    isOperationPending: false,
+  });
+  assert.equal(missingNone.length, 0);
+  assert.equal(canInitiateAttestation({
+    isConnected: true,
+    attachedContractAddress: SAMPLE_CONTRACT_ADDRESS,
+    hasMemberSecretAndSalt: true,
+    memberBackupRecoveryStatus: 'recovery-tested',
+    isMemberCredentialAdmitted: true,
+    hasSnapshotEvidence: true,
+    snapshotCredentialMatchesActiveMember: true,
+    snapshotCommitmentExistsOnChain: true,
+    hasPolicyReceipt: true,
+    policyReceiptContractMatchesAttached: true,
+    policyProductAndVersionMatchSnapshot: true,
+    isReleaseRegisteredOnChain: true,
+    isPolicyActive: true,
+    isNullifierAlreadyUsed: false,
+    isProofProviderConfigured: true,
+    isOperationPending: false,
+  }), true);
+});
+
+// 144. CV-011: onCertifiedSnapshotDecrypted validates contract, credential, and on-chain commitment
+test('144. CV-011: onCertifiedSnapshotDecrypted validates contract, credential, and on-chain commitment', () => {
+  const snapshot = buildCertifiedSnapshotPackage({
+    contractAddress: SAMPLE_CONTRACT_ADDRESS,
+    memberCredential: SAMPLE_HEX_64,
+    product: 'pkg:generic/xz-utils',
+    version: { major: 5, minor: 2, patch: 5 },
+    snapshotSalt: 'b'.repeat(64),
+    commitment: 'c'.repeat(64),
+    txId: 'd'.repeat(64),
+    now: new Date('2026-10-07T12:00:00.000Z'),
+  });
+
+  // Contract mismatch fails
+  const mismatchContract = onCertifiedSnapshotDecrypted(
+    INITIAL_MEMBER_ATTESTATION_UI_STATE,
+    snapshot,
+    {
+      attachedContractAddress: '0200different',
+      activeMemberCredentialHex: SAMPLE_HEX_64,
+      hasCommitmentOnChain: true,
+    },
+  );
+  assert.equal(mismatchContract.stage, 'failed');
+  assert.ok(mismatchContract.errorMessage?.includes('does not match active contract'));
+
+  // Credential mismatch fails
+  const mismatchCred = onCertifiedSnapshotDecrypted(
+    INITIAL_MEMBER_ATTESTATION_UI_STATE,
+    snapshot,
+    {
+      attachedContractAddress: SAMPLE_CONTRACT_ADDRESS,
+      activeMemberCredentialHex: '9'.repeat(64),
+      hasCommitmentOnChain: true,
+    },
+  );
+  assert.equal(mismatchCred.stage, 'failed');
+  assert.ok(mismatchCred.errorMessage?.includes('does not match the credential derived'));
+
+  // Commitment absent from ledger fails
+  const absentCommitment = onCertifiedSnapshotDecrypted(
+    INITIAL_MEMBER_ATTESTATION_UI_STATE,
+    snapshot,
+    {
+      attachedContractAddress: SAMPLE_CONTRACT_ADDRESS,
+      activeMemberCredentialHex: SAMPLE_HEX_64,
+      hasCommitmentOnChain: false,
+    },
+  );
+  assert.equal(absentCommitment.stage, 'failed');
+  assert.ok(absentCommitment.errorMessage?.includes('does not exist in the on-chain ledger'));
+
+  // Valid snapshot transitions to snapshot-imported
+  const valid = onCertifiedSnapshotDecrypted(
+    INITIAL_MEMBER_ATTESTATION_UI_STATE,
+    snapshot,
+    {
+      attachedContractAddress: SAMPLE_CONTRACT_ADDRESS,
+      activeMemberCredentialHex: SAMPLE_HEX_64,
+      hasCommitmentOnChain: true,
+    },
+  );
+  assert.equal(valid.stage, 'snapshot-imported');
+  assert.equal(valid.snapshotEvidence?.product, 'pkg:generic/xz-utils');
+  assert.equal(valid.snapshotEvidence?.version.major, 5);
+  assert.equal(valid.snapshotEvidence?.version.minor, 2);
+  assert.equal(valid.snapshotEvidence?.version.patch, 5);
+  assert.equal(valid.snapshotEvidence?.commitment, 'c'.repeat(64));
+});
+
+// 145. CV-011: Honest negative outcome when certified snapshot (5.2.5) does not match affected release (5.6.0)
+test('145. CV-011: Honest negative outcome when certified snapshot (5.2.5) does not match affected release (5.6.0)', () => {
+  const snapshot = buildCertifiedSnapshotPackage({
+    contractAddress: SAMPLE_CONTRACT_ADDRESS,
+    memberCredential: SAMPLE_HEX_64,
+    product: 'pkg:generic/xz-utils',
+    version: { major: 5, minor: 2, patch: 5 },
+    snapshotSalt: 'b'.repeat(64),
+    commitment: 'c'.repeat(64),
+    txId: 'd'.repeat(64),
+    now: new Date('2026-10-07T12:00:00.000Z'),
+  });
+
+  const stateWithSnapshot = onCertifiedSnapshotDecrypted(
+    INITIAL_MEMBER_ATTESTATION_UI_STATE,
+    snapshot,
+    {
+      attachedContractAddress: SAMPLE_CONTRACT_ADDRESS,
+      activeMemberCredentialHex: SAMPLE_HEX_64,
+      hasCommitmentOnChain: true,
+    },
+  );
+
+  const affectedReceipt = buildAffectedReleaseRegistrationReceipt({
+    contractAddress: SAMPLE_CONTRACT_ADDRESS,
+    advisoryId: 'CVE-2024-3094',
+    product: 'pkg:generic/xz-utils',
+    version: { major: 5, minor: 6, patch: 0 },
+    sourcePublisher: 'Debian Security Team',
+    sourceReference: 'https://security.debian.org',
+    registrationTxId: 'a'.repeat(64),
+    policyActive: true,
+  });
+
+  const result = onAffectedReleaseReceiptImported(
+    stateWithSnapshot,
+    affectedReceipt,
+    {
+      attachedContractAddress: SAMPLE_CONTRACT_ADDRESS,
+      isReleaseInLedger: true,
+      isNullifierUsed: false,
+      derivedNullifierHex: '1'.repeat(64),
+    },
+  );
+
+  // Honest negative evaluation: version 5.2.5 is outside the registered affected-release set 5.6.0
+  assert.equal(result.stage, 'unaffected');
+  assert.equal(result.noticeMessage, 'This certified version is outside the registered affected-release set.');
+  assert.equal(result.errorMessage, null);
+});
+
+// 146. CV-011: Exact 5.6.0 matching behavior enables attestation
+test('146. CV-011: Exact 5.6.0 matching behavior enables attestation', () => {
+  const snapshot = buildCertifiedSnapshotPackage({
+    contractAddress: SAMPLE_CONTRACT_ADDRESS,
+    memberCredential: SAMPLE_HEX_64,
+    product: 'pkg:generic/xz-utils',
+    version: { major: 5, minor: 6, patch: 0 },
+    snapshotSalt: 'b'.repeat(64),
+    commitment: 'c'.repeat(64),
+    txId: 'd'.repeat(64),
+    now: new Date('2026-10-07T12:00:00.000Z'),
+  });
+
+  const stateWithSnapshot = onCertifiedSnapshotDecrypted(
+    INITIAL_MEMBER_ATTESTATION_UI_STATE,
+    snapshot,
+    {
+      attachedContractAddress: SAMPLE_CONTRACT_ADDRESS,
+      activeMemberCredentialHex: SAMPLE_HEX_64,
+      hasCommitmentOnChain: true,
+    },
+  );
+
+  const affectedReceipt = buildAffectedReleaseRegistrationReceipt({
+    contractAddress: SAMPLE_CONTRACT_ADDRESS,
+    advisoryId: 'CVE-2024-3094',
+    product: 'pkg:generic/xz-utils',
+    version: { major: 5, minor: 6, patch: 0 },
+    sourcePublisher: 'Debian Security Team',
+    sourceReference: 'https://security.debian.org',
+    registrationTxId: 'a'.repeat(64),
+    policyActive: true,
+  });
+
+  const result = onAffectedReleaseReceiptImported(
+    stateWithSnapshot,
+    affectedReceipt,
+    {
+      attachedContractAddress: SAMPLE_CONTRACT_ADDRESS,
+      isReleaseInLedger: true,
+      isNullifierUsed: false,
+      derivedNullifierHex: '1'.repeat(64),
+    },
+  );
+
+  assert.equal(result.stage, 'ready-to-attest');
+  assert.equal(result.derivedNullifierHex, '1'.repeat(64));
+  assert.ok(result.noticeMessage?.includes('Ready to attest'));
+});
+
+// 147. CV-011: Already-attested member nullifier is rejected from re-attesting
+test('147. CV-011: Already-attested member nullifier is rejected from re-attesting', () => {
+  const snapshot = buildCertifiedSnapshotPackage({
+    contractAddress: SAMPLE_CONTRACT_ADDRESS,
+    memberCredential: SAMPLE_HEX_64,
+    product: 'pkg:generic/xz-utils',
+    version: { major: 5, minor: 6, patch: 0 },
+    snapshotSalt: 'b'.repeat(64),
+    commitment: 'c'.repeat(64),
+    txId: 'd'.repeat(64),
+    now: new Date('2026-10-07T12:00:00.000Z'),
+  });
+
+  const stateWithSnapshot = onCertifiedSnapshotDecrypted(
+    INITIAL_MEMBER_ATTESTATION_UI_STATE,
+    snapshot,
+    {
+      attachedContractAddress: SAMPLE_CONTRACT_ADDRESS,
+      activeMemberCredentialHex: SAMPLE_HEX_64,
+      hasCommitmentOnChain: true,
+    },
+  );
+
+  const affectedReceipt = buildAffectedReleaseRegistrationReceipt({
+    contractAddress: SAMPLE_CONTRACT_ADDRESS,
+    advisoryId: 'CVE-2024-3094',
+    product: 'pkg:generic/xz-utils',
+    version: { major: 5, minor: 6, patch: 0 },
+    sourcePublisher: 'Debian Security Team',
+    sourceReference: 'https://security.debian.org',
+    registrationTxId: 'a'.repeat(64),
+    policyActive: true,
+  });
+
+  const result = onAffectedReleaseReceiptImported(
+    stateWithSnapshot,
+    affectedReceipt,
+    {
+      attachedContractAddress: SAMPLE_CONTRACT_ADDRESS,
+      isReleaseInLedger: true,
+      isNullifierUsed: true, // Already recorded on-chain
+      derivedNullifierHex: '1'.repeat(64),
+    },
+  );
+
+  assert.equal(result.stage, 'already-attested');
+  assert.ok(result.noticeMessage?.includes('Member already attested'));
+});
+
+// 148. CV-011: Attestation UI state reducer lifecycle transitions
+test('148. CV-011: Attestation UI state reducer lifecycle transitions', () => {
+  let state = INITIAL_MEMBER_ATTESTATION_UI_STATE;
+  assert.equal(state.stage, 'idle');
+
+  state = onAttestationConfirmationOpen(state);
+  assert.equal(state.stage, 'confirming');
+
+  state = onAttestationConfirmationDismissed(state);
+  assert.equal(state.stage, 'idle');
+
+  state = onAttestationWalletRequest(state);
+  assert.equal(state.stage, 'requesting-wallet');
+
+  state = onAttestationSubmitting(state);
+  assert.equal(state.stage, 'submitting');
+
+  state = onAttestationFinalizedIndexing(state, 'c'.repeat(64));
+  assert.equal(state.stage, 'finalized-indexing');
+  assert.equal(state.attestationTxId, 'c'.repeat(64));
+
+  const receipt = buildPrivateAttestationReceipt({
+    contractAddress: SAMPLE_CONTRACT_ADDRESS,
+    advisoryId: 'CVE-2024-3094',
+    attestationTxId: 'c'.repeat(64),
+  });
+
+  state = onAttestationCompleted(state, receipt);
+  assert.equal(state.stage, 'attested');
+  assert.equal(state.receipt?.attestationTxId, 'c'.repeat(64));
+
+  state = onAttestationLifecycleReset();
+  assert.equal(state.stage, 'idle');
+  assert.equal(state.receipt, null);
+});
+
+// 149. CV-011: mapAttestationError and mapAttestationInspectionError error sanitization
+test('149. CV-011: mapAttestationError and mapAttestationInspectionError error sanitization', () => {
+  // Cancellation
+  assert.equal(
+    mapAttestationError(new Error('User rejected the transaction in 1AM')),
+    'Attestation transaction was cancelled in 1AM.',
+  );
+  // Replay
+  assert.equal(
+    mapAttestationError(new Error('Member already attested for this advisory')),
+    'Member already attested for this advisory.',
+  );
+  // Unadmitted
+  assert.equal(
+    mapAttestationError(new Error('Member credential not admitted')),
+    'Member credential is not admitted in the public ledger.',
+  );
+  // Uncommitted snapshot
+  assert.equal(
+    mapAttestationError(new Error('Inventory snapshot was not committed before policy activation')),
+    'Inventory snapshot commitment was not found on-chain.',
+  );
+  // Prover failure
+  assert.equal(
+    mapAttestationError(new Error('ZK proof generation failed')),
+    'ZK proof generation failed. Ensure your local proof server is reachable and responsive.',
+  );
+  // Generic safe fallback
+  assert.equal(
+    mapAttestationError(new Error('internal graphql error at http://localhost:8080/query')),
+    'The attestation transaction could not be completed. Check the network connection and try again.',
+  );
+
+  // Inspection error mapping
+  assert.equal(
+    mapAttestationInspectionError(new Error('Contract not found at address')),
+    ATTESTATION_VERIFICATION_ERROR_MESSAGES.CONTRACT_NOT_FOUND,
+  );
+  assert.equal(
+    mapAttestationInspectionError(new Error('Timeout during indexer lookup')),
+    'The Midnight indexer could not complete the contract lookup.',
+  );
+});
+
+// 150. CV-011: Deterministic nullifier derivation via pureCircuits.deriveNullifier
+test('150. CV-011: Deterministic nullifier derivation via pureCircuits.deriveNullifier', async () => {
+  const advisoryA = await advisoryDigest('CVE-2024-3094');
+  const advisoryB = await advisoryDigest('CVE-2023-44487');
+  const memberSecret1 = new Uint8Array(32).fill(7);
+  const memberSecret2 = new Uint8Array(32).fill(8);
+
+  const nullifier1A = pureCircuits.deriveNullifier(advisoryA, memberSecret1);
+  const nullifier1A_again = pureCircuits.deriveNullifier(advisoryA, memberSecret1);
+  assert.deepEqual(nullifier1A, nullifier1A_again);
+  assert.equal(nullifier1A.length, 32);
+
+  // Different advisory yields different nullifier for same member
+  const nullifier1B = pureCircuits.deriveNullifier(advisoryB, memberSecret1);
+  assert.notDeepEqual(nullifier1A, nullifier1B);
+
+  // Different member yields different nullifier for same advisory
+  const nullifier2A = pureCircuits.deriveNullifier(advisoryA, memberSecret2);
+  assert.notDeepEqual(nullifier1A, nullifier2A);
+});
+
+// 151. CV-011: Compact execution of full protocol from admission through private attestation
+test('151. CV-011: Compact execution of full protocol from admission through private attestation', async () => {
+  const { Contract, ledger } = await import('../contracts/managed/commonveil/contract/index.js');
+  const { createConstructorContext, createCircuitContext } = await import('@midnight-ntwrk/compact-runtime');
+
+  const contract = new Contract({});
+  const key = '00'.repeat(32);
+  const adminSecret = new Uint8Array(32).fill(1);
+  const certifierSecret = new Uint8Array(32).fill(2);
+  const adminKey = pureCircuits.deriveAdminKey(adminSecret);
+  const certifierKey = pureCircuits.deriveCertifierKey(certifierSecret);
+
+  // Initialize contract
+  const initial = contract.initialState(createConstructorContext({}, key), adminKey, certifierKey);
+  const context0 = createCircuitContext(key, key, initial.currentContractState, initial.currentPrivateState);
+
+  // 1. Admit member
+  const memberSecret = new Uint8Array(32).fill(3);
+  const memberSalt = new Uint8Array(32).fill(4);
+  const credential = pureCircuits.deriveMemberCredential(memberSecret, memberSalt);
+  const admitted = contract.impureCircuits.registerMember(
+    context0,
+    adminSecret,
+    credential,
+  );
+  assert.equal(ledger(admitted.context.currentQueryContext.state).memberCredentials.size(), 1n);
+
+  // 2. Certify pre-policy snapshot (version 5.6.0)
+  const productXz = await productDigest('pkg:generic/xz-utils');
+  const snapshotSalt = new Uint8Array(32).fill(5);
+  const certified = contract.impureCircuits.certifyInventory(
+    admitted.context,
+    certifierSecret,
+    credential,
+    productXz,
+    5n,
+    6n,
+    0n,
+    snapshotSalt,
+  );
+  assert.equal(ledger(certified.context.currentQueryContext.state).inventoryCommitments.size(), 1n);
+
+  // 3. Register affected release and activate policy (CVE-2024-3094, 5.6.0)
+  const advisoryA = await advisoryDigest('CVE-2024-3094');
+  const registered = contract.impureCircuits.registerAffectedRelease(
+    certified.context,
+    adminSecret,
+    advisoryA,
+    productXz,
+    5n,
+    6n,
+    0n,
+  );
+  assert.equal(ledger(registered.context.currentQueryContext.state).policyActive, true);
+  assert.equal(ledger(registered.context.currentQueryContext.state).affectedReleases.size(), 1n);
+  assert.equal(ledger(registered.context.currentQueryContext.state).accepted, 0n);
+
+  // 4. Member privately proves that certified snapshot matches affected release
+  const attested = contract.impureCircuits.attest(
+    registered.context,
+    advisoryA,
+    memberSecret,
+    memberSalt,
+    productXz,
+    5n,
+    6n,
+    0n,
+    snapshotSalt,
+  );
+
+  const stateAfterAttest = ledger(attested.context.currentQueryContext.state);
+  assert.equal(stateAfterAttest.accepted, 1n, 'Accepted counter must increment by exactly 1');
+  assert.equal(stateAfterAttest.usedNullifiers.size(), 1n, 'Nullifier must be recorded in usedNullifiers');
+
+  const expectedNullifier = pureCircuits.deriveNullifier(advisoryA, memberSecret);
+  assert.equal(stateAfterAttest.usedNullifiers.member(expectedNullifier), true);
+
+  // 5. Replay protection: attesting second time for same advisory is rejected
+  assert.throws(
+    () =>
+      contract.impureCircuits.attest(
+        attested.context,
+        advisoryA,
+        memberSecret,
+        memberSalt,
+        productXz,
+        5n,
+        6n,
+        0n,
+        snapshotSalt,
+      ),
+    /Member already attested for this advisory/,
+  );
+});
+
+// 152. CV-011: Compact execution rejects uncommitted snapshot or mismatched version
+test('152. CV-011: Compact execution rejects uncommitted snapshot or mismatched version', async () => {
+  const { Contract } = await import('../contracts/managed/commonveil/contract/index.js');
+  const { createConstructorContext, createCircuitContext } = await import('@midnight-ntwrk/compact-runtime');
+
+  const contract = new Contract({});
+  const key = '00'.repeat(32);
+  const adminSecret = new Uint8Array(32).fill(11);
+  const certifierSecret = new Uint8Array(32).fill(12);
+  const adminKey = pureCircuits.deriveAdminKey(adminSecret);
+  const certifierKey = pureCircuits.deriveCertifierKey(certifierSecret);
+
+  const initial = contract.initialState(createConstructorContext({}, key), adminKey, certifierKey);
+  const context0 = createCircuitContext(key, key, initial.currentContractState, initial.currentPrivateState);
+
+  const memberSecret = new Uint8Array(32).fill(13);
+  const memberSalt = new Uint8Array(32).fill(14);
+  const credential = pureCircuits.deriveMemberCredential(memberSecret, memberSalt);
+  const admitted = contract.impureCircuits.registerMember(
+    context0,
+    adminSecret,
+    credential,
+  );
+
+  const productXz = await productDigest('pkg:generic/xz-utils');
+  const snapshotSalt = new Uint8Array(32).fill(15);
+
+  // Certify 5.2.5 (safe version)
+  const certified = contract.impureCircuits.certifyInventory(
+    admitted.context,
+    certifierSecret,
+    credential,
+    productXz,
+    5n,
+    2n,
+    5n,
+    snapshotSalt,
+  );
+
+  // Register 5.6.0 as affected release
+  const advisory = await advisoryDigest('CVE-2024-3094');
+  const registered = contract.impureCircuits.registerAffectedRelease(
+    certified.context,
+    adminSecret,
+    advisory,
+    productXz,
+    5n,
+    6n,
+    0n,
+  );
+
+  // Attempting to attest with certified 5.2.5 fails because 5.2.5 is not an affected release
+  assert.throws(
+    () =>
+      contract.impureCircuits.attest(
+        registered.context,
+        advisory,
+        memberSecret,
+        memberSalt,
+        productXz,
+        5n,
+        2n,
+        5n,
+        snapshotSalt,
+      ),
+    /Product version is not an affected release/,
+  );
+
+  // Attempting to claim 5.6.0 without having a certified commitment for 5.6.0 fails
+  assert.throws(
+    () =>
+      contract.impureCircuits.attest(
+        registered.context,
+        advisory,
+        memberSecret,
+        memberSalt,
+        productXz,
+        5n,
+        6n,
+        0n,
+        snapshotSalt,
+      ),
+    /Inventory snapshot was not committed before policy activation/,
   );
 });

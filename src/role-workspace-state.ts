@@ -27,6 +27,8 @@ import {
   buildCertificationRequestPackage,
   assertNoSensitiveFields,
   CERTIFIED_SNAPSHOT_SCHEMA,
+  type CertifiedSnapshotPackage,
+  validateCertifiedSnapshotPackage,
   INVENTORY_CERTIFICATION_RECEIPT_SCHEMA,
   type InventoryCertificationReceipt,
   buildInventoryCertificationReceipt,
@@ -36,6 +38,10 @@ import {
   AFFECTED_RELEASE_REGISTRATION_RECEIPT_SCHEMA,
   type AffectedReleaseRegistrationReceipt,
   buildAffectedReleaseRegistrationReceipt,
+  PRIVATE_ATTESTATION_RECEIPT_SCHEMA,
+  type PrivateAttestationReceipt,
+  validatePrivateAttestationReceipt,
+  buildPrivateAttestationReceipt,
   type VersionTuple,
   productDigest,
   advisoryDigest,
@@ -2734,4 +2740,445 @@ export function mapAffectedReleaseRegistrationError(error: unknown): string {
     return 'Network communication failure during registration. Check Midnight Preprod connectivity.';
   }
   return 'The affected release registration transaction could not be completed. Check the network connection and try again.';
+}
+
+// ============================================================================
+// CV-011: Member Certified Snapshot Import & Private Affected-Release Attestation
+// ============================================================================
+
+export type MemberAttestationStage =
+  | 'idle'
+  | 'snapshot-imported'
+  | 'ready-to-attest'
+  | 'confirming'
+  | 'requesting-wallet'
+  | 'submitting'
+  | 'finalized-indexing'
+  | 'attested'
+  | 'already-attested'
+  | 'unaffected'
+  | 'failed';
+
+export interface DecryptedSnapshotEvidence {
+  readonly product: string;
+  readonly version: VersionTuple;
+  readonly commitment: string;
+  readonly txId: string;
+  readonly createdAt: string;
+}
+
+export interface MemberAttestationUiState {
+  readonly stage: MemberAttestationStage;
+  readonly snapshotEvidence: DecryptedSnapshotEvidence | null;
+  readonly importedPolicyReceipt: AffectedReleaseRegistrationReceipt | null;
+  readonly derivedNullifierHex: string | null;
+  readonly attestationTxId: string | null;
+  readonly receipt: PrivateAttestationReceipt | null;
+  readonly noticeMessage: string | null;
+  readonly errorMessage: string | null;
+}
+
+export const INITIAL_MEMBER_ATTESTATION_UI_STATE: MemberAttestationUiState = {
+  stage: 'idle',
+  snapshotEvidence: null,
+  importedPolicyReceipt: null,
+  derivedNullifierHex: null,
+  attestationTxId: null,
+  receipt: null,
+  noticeMessage: null,
+  errorMessage: null,
+};
+
+export const ATTESTATION_VERIFICATION_ERROR_MESSAGES = {
+  CONTRACT_NOT_FOUND: 'No indexed contract state exists at the supplied address.',
+  NULLIFIER_NOT_FOUND: 'The derived nullifier has not yet been indexed on the Midnight ledger.',
+  ALREADY_ATTESTED: 'This Member has already submitted an attestation for this advisory (nullifier used).',
+  GENERIC_VERIFICATION_FAILURE: 'Failed to verify on-chain attestation status due to an internal error.',
+  INCOMPATIBLE_CONTRACT: 'The indexed state is not compatible with this CommonVeil build.',
+} as const;
+
+export function checkMemberAttestationPrerequisites(params: {
+  readonly isConnected: boolean;
+  readonly attachedContractAddress: string | null;
+  readonly hasMemberSecretAndSalt: boolean;
+  readonly memberBackupRecoveryStatus: string;
+  readonly isMemberCredentialAdmitted: boolean;
+  readonly hasSnapshotEvidence: boolean;
+  readonly snapshotCredentialMatchesActiveMember: boolean;
+  readonly snapshotCommitmentExistsOnChain: boolean;
+  readonly hasPolicyReceipt: boolean;
+  readonly policyReceiptContractMatchesAttached: boolean;
+  readonly policyProductAndVersionMatchSnapshot: boolean;
+  readonly isReleaseRegisteredOnChain: boolean;
+  readonly isPolicyActive: boolean;
+  readonly isNullifierAlreadyUsed: boolean;
+  readonly isProofProviderConfigured: boolean;
+  readonly isOperationPending: boolean;
+}): string[] {
+  const missing: string[] = [];
+  if (!params.isConnected) {
+    missing.push('1AM wallet must be connected on Midnight Preprod.');
+  }
+  if (!params.attachedContractAddress) {
+    missing.push('A verified CommonVeil contract must be attached.');
+  }
+  if (!params.hasMemberSecretAndSalt) {
+    missing.push('Active Member secret and salt must exist in volatile session memory.');
+  }
+  if (params.memberBackupRecoveryStatus !== 'recovery-tested') {
+    missing.push("Member backup status must be recovery-tested (status 'recovery-tested').");
+  }
+  if (!params.isMemberCredentialAdmitted) {
+    missing.push('Derived Member credential must be admitted in the public ledger.');
+  }
+  if (!params.hasSnapshotEvidence) {
+    missing.push('Encrypted certified snapshot must be decrypted and validated.');
+  }
+  if (!params.snapshotCredentialMatchesActiveMember) {
+    missing.push('Certified snapshot credential does not match active Member identity.');
+  }
+  if (!params.snapshotCommitmentExistsOnChain) {
+    missing.push('Certified snapshot inventory commitment does not exist on-chain.');
+  }
+  if (!params.hasPolicyReceipt) {
+    missing.push('Public affected-release registration receipt must be imported.');
+  }
+  if (!params.policyReceiptContractMatchesAttached) {
+    missing.push('Affected-release receipt contract address does not match attached contract.');
+  }
+  if (!params.policyProductAndVersionMatchSnapshot) {
+    missing.push('Affected-release receipt product and version do not match certified snapshot.');
+  }
+  if (!params.isReleaseRegisteredOnChain) {
+    missing.push('Derived release ID does not exist in on-chain affectedReleases set.');
+  }
+  if (!params.isPolicyActive) {
+    missing.push('On-chain policy is not active (policyActive must be true).');
+  }
+  if (params.isNullifierAlreadyUsed) {
+    missing.push('Member nullifier has already been recorded in usedNullifiers.');
+  }
+  if (!params.isProofProviderConfigured) {
+    missing.push('Local proof provider (prover service) must be reachable and configured.');
+  }
+  if (params.isOperationPending) {
+    missing.push('Another attestation operation is currently pending.');
+  }
+  return missing;
+}
+
+export function canInitiateAttestation(params: {
+  readonly isConnected: boolean;
+  readonly attachedContractAddress: string | null;
+  readonly hasMemberSecretAndSalt: boolean;
+  readonly memberBackupRecoveryStatus: string;
+  readonly isMemberCredentialAdmitted: boolean;
+  readonly hasSnapshotEvidence: boolean;
+  readonly snapshotCredentialMatchesActiveMember: boolean;
+  readonly snapshotCommitmentExistsOnChain: boolean;
+  readonly hasPolicyReceipt: boolean;
+  readonly policyReceiptContractMatchesAttached: boolean;
+  readonly policyProductAndVersionMatchSnapshot: boolean;
+  readonly isReleaseRegisteredOnChain: boolean;
+  readonly isPolicyActive: boolean;
+  readonly isNullifierAlreadyUsed: boolean;
+  readonly isProofProviderConfigured: boolean;
+  readonly isOperationPending: boolean;
+}): boolean {
+  return checkMemberAttestationPrerequisites(params).length === 0;
+}
+
+export function onCertifiedSnapshotDecrypted(
+  prevState: MemberAttestationUiState,
+  snapshot: CertifiedSnapshotPackage,
+  context: {
+    attachedContractAddress: string | null;
+    activeMemberCredentialHex: string | null;
+    hasCommitmentOnChain: boolean;
+  },
+): MemberAttestationUiState {
+  if (!context.attachedContractAddress) {
+    return {
+      ...prevState,
+      stage: 'failed',
+      errorMessage: 'Attach and verify a CommonVeil contract before importing a certified snapshot.',
+    };
+  }
+  if (snapshot.network !== 'preprod') {
+    return {
+      ...prevState,
+      stage: 'failed',
+      errorMessage: "Certified snapshot network must be 'preprod'.",
+    };
+  }
+  if (snapshot.contractAddress.toLowerCase().trim() !== context.attachedContractAddress.toLowerCase().trim()) {
+    return {
+      ...prevState,
+      stage: 'failed',
+      errorMessage: `Snapshot targets contract ${snapshot.contractAddress}, which does not match active contract ${context.attachedContractAddress}.`,
+    };
+  }
+  if (!context.activeMemberCredentialHex) {
+    return {
+      ...prevState,
+      stage: 'failed',
+      errorMessage: 'No active Member secret and salt found in session memory.',
+    };
+  }
+  if (snapshot.memberCredential.toLowerCase().trim() !== context.activeMemberCredentialHex.toLowerCase().trim()) {
+    return {
+      ...prevState,
+      stage: 'failed',
+      errorMessage: 'Snapshot member credential does not match the credential derived from the active Member identity.',
+    };
+  }
+  if (!context.hasCommitmentOnChain) {
+    return {
+      ...prevState,
+      stage: 'failed',
+      errorMessage: 'Snapshot commitment does not exist in the on-chain ledger.',
+    };
+  }
+  if (!isCanonicalTransactionId(snapshot.txId)) {
+    return {
+      ...prevState,
+      stage: 'failed',
+      errorMessage: 'Snapshot certification transaction ID is not canonical.',
+    };
+  }
+
+  const snapshotEvidence: DecryptedSnapshotEvidence = {
+    product: snapshot.product,
+    version: {
+      major: snapshot.version.major,
+      minor: snapshot.version.minor,
+      patch: snapshot.version.patch,
+    },
+    commitment: snapshot.commitment.toLowerCase(),
+    txId: snapshot.txId.toLowerCase(),
+    createdAt: snapshot.createdAt,
+  };
+
+  return {
+    ...prevState,
+    stage: prevState.importedPolicyReceipt ? 'ready-to-attest' : 'snapshot-imported',
+    snapshotEvidence,
+    noticeMessage: 'Encrypted certified snapshot verified and loaded in volatile session memory.',
+    errorMessage: null,
+  };
+}
+
+export function onAffectedReleaseReceiptImported(
+  prevState: MemberAttestationUiState,
+  receipt: AffectedReleaseRegistrationReceipt,
+  context: {
+    attachedContractAddress: string | null;
+    isReleaseInLedger: boolean;
+    isNullifierUsed: boolean;
+    derivedNullifierHex: string;
+  },
+): MemberAttestationUiState {
+  if (!context.attachedContractAddress) {
+    return {
+      ...prevState,
+      stage: 'failed',
+      errorMessage: 'Attach and verify a CommonVeil contract before importing an affected-release receipt.',
+    };
+  }
+  if (receipt.contractAddress.toLowerCase().trim() !== context.attachedContractAddress.toLowerCase().trim()) {
+    return {
+      ...prevState,
+      stage: 'failed',
+      errorMessage: `Receipt targets contract ${receipt.contractAddress}, which does not match active contract ${context.attachedContractAddress}.`,
+    };
+  }
+  if (!receipt.policyActive) {
+    return {
+      ...prevState,
+      stage: 'failed',
+      errorMessage: 'Affected-release policy receipt indicates policy is not active.',
+    };
+  }
+  if (!prevState.snapshotEvidence) {
+    return {
+      ...prevState,
+      stage: 'failed',
+      errorMessage: 'Import and decrypt the certified snapshot before importing the affected-release receipt.',
+    };
+  }
+
+  // Compare product and version against snapshot
+  const productMatches = prevState.snapshotEvidence.product === receipt.product;
+  const versionMatches =
+    prevState.snapshotEvidence.version.major === receipt.version.major &&
+    prevState.snapshotEvidence.version.minor === receipt.version.minor &&
+    prevState.snapshotEvidence.version.patch === receipt.version.patch;
+
+  if (!productMatches || !versionMatches) {
+    // Honest negative outcome: e.g. xz-utils 5.2.5 vs CVE-2024-3094 affected 5.6.0/5.6.1
+    return {
+      ...prevState,
+      stage: 'unaffected',
+      importedPolicyReceipt: receipt,
+      noticeMessage: 'This certified version is outside the registered affected-release set.',
+      errorMessage: null,
+    };
+  }
+
+  if (!context.isReleaseInLedger) {
+    return {
+      ...prevState,
+      stage: 'failed',
+      errorMessage: 'Derived release ID does not exist in on-chain affectedReleases set.',
+    };
+  }
+
+  if (context.isNullifierUsed) {
+    return {
+      ...prevState,
+      stage: 'already-attested',
+      importedPolicyReceipt: receipt,
+      derivedNullifierHex: context.derivedNullifierHex.toLowerCase(),
+      noticeMessage: 'Member already attested for this advisory (nullifier recorded on-chain).',
+      errorMessage: null,
+    };
+  }
+
+  return {
+    ...prevState,
+    stage: 'ready-to-attest',
+    importedPolicyReceipt: receipt,
+    derivedNullifierHex: context.derivedNullifierHex.toLowerCase(),
+    noticeMessage: 'Certified snapshot matches registered affected release. Ready to attest.',
+    errorMessage: null,
+  };
+}
+
+export function onAttestationConfirmationOpen(
+  prevState: MemberAttestationUiState,
+): MemberAttestationUiState {
+  return { ...prevState, stage: 'confirming', errorMessage: null };
+}
+
+export function onAttestationConfirmationDismissed(
+  prevState: MemberAttestationUiState,
+): MemberAttestationUiState {
+  return {
+    ...prevState,
+    stage: prevState.snapshotEvidence && prevState.importedPolicyReceipt ? 'ready-to-attest' : 'idle',
+    errorMessage: null,
+  };
+}
+
+export function onAttestationWalletRequest(
+  prevState: MemberAttestationUiState,
+): MemberAttestationUiState {
+  return { ...prevState, stage: 'requesting-wallet', errorMessage: null };
+}
+
+export function onAttestationSubmitting(
+  prevState: MemberAttestationUiState,
+): MemberAttestationUiState {
+  return { ...prevState, stage: 'submitting', errorMessage: null };
+}
+
+export function onAttestationFinalizedIndexing(
+  prevState: MemberAttestationUiState,
+  txId?: string | null,
+): MemberAttestationUiState {
+  const normalizedTxId =
+    typeof txId === 'string' && isCanonicalTransactionId(txId.trim())
+      ? txId.trim()
+      : null;
+  const resolvedTxId = normalizedTxId ?? prevState.attestationTxId;
+  return { ...prevState, stage: 'finalized-indexing', attestationTxId: resolvedTxId, errorMessage: null };
+}
+
+export function onAttestationCompleted(
+  prevState: MemberAttestationUiState,
+  receipt: PrivateAttestationReceipt,
+): MemberAttestationUiState {
+  return {
+    ...prevState,
+    stage: 'attested',
+    attestationTxId: receipt.attestationTxId,
+    receipt,
+    noticeMessage: 'Private attestation accepted on-chain. Public accepted report count incremented.',
+    errorMessage: null,
+  };
+}
+
+export function onAttestationFailed(
+  prevState: MemberAttestationUiState,
+  errorMessage: string,
+): MemberAttestationUiState {
+  return { ...prevState, stage: 'failed', errorMessage };
+}
+
+export function onAttestationLifecycleReset(): MemberAttestationUiState {
+  return { ...INITIAL_MEMBER_ATTESTATION_UI_STATE };
+}
+
+export function mapAttestationInspectionError(error: unknown): string {
+  if (!error) return ATTESTATION_VERIFICATION_ERROR_MESSAGES.GENERIC_VERIFICATION_FAILURE;
+  const raw = (
+    error instanceof Error ? error.message
+    : typeof error === 'string' ? error
+    : typeof (error as any)?.message === 'string' ? (error as any).message
+    : ''
+  ).toLowerCase();
+  if (raw.includes('contract not found') || raw.includes('no indexed contract')) {
+    return ATTESTATION_VERIFICATION_ERROR_MESSAGES.CONTRACT_NOT_FOUND;
+  }
+  if (raw.includes('indexer') || raw.includes('graphql') || raw.includes('query failed') || raw.includes('timeout')) {
+    return 'The Midnight indexer could not complete the contract lookup.';
+  }
+  if (raw.includes('already attested') || raw.includes('nullifier')) {
+    return ATTESTATION_VERIFICATION_ERROR_MESSAGES.ALREADY_ATTESTED;
+  }
+  if (raw.includes('incompatible') || raw.includes('ledger') || raw.includes('decode')) {
+    return ATTESTATION_VERIFICATION_ERROR_MESSAGES.INCOMPATIBLE_CONTRACT;
+  }
+  return ATTESTATION_VERIFICATION_ERROR_MESSAGES.GENERIC_VERIFICATION_FAILURE;
+}
+
+export function mapAttestationError(error: unknown): string {
+  if (!error) return 'Attestation transaction could not be completed. Check wallet and try again.';
+  const raw = (
+    error instanceof Error ? error.message
+    : typeof error === 'string' ? error
+    : typeof (error as any)?.message === 'string' ? (error as any).message
+    : ''
+  ).toLowerCase();
+  if (raw.includes('cancel') || raw.includes('reject') || raw.includes('denied') || raw.includes('declined') || raw.includes('user aborted')) {
+    return 'Attestation transaction was cancelled in 1AM.';
+  }
+  if (raw.includes('already attested') || (raw.includes('nullifier') && raw.includes('used'))) {
+    return 'Member already attested for this advisory.';
+  }
+  if (raw.includes('credential not admitted') || raw.includes('not admitted')) {
+    return 'Member credential is not admitted in the public ledger.';
+  }
+  if (raw.includes('snapshot was not committed') || raw.includes('inventory commitment')) {
+    return 'Inventory snapshot commitment was not found on-chain.';
+  }
+  if (raw.includes('not an affected release') || raw.includes('outside the registered')) {
+    return 'Product version is not registered as an affected release on-chain.';
+  }
+  if (raw.includes('dust') || raw.includes('balance') || raw.includes('insufficient funds')) {
+    return 'Insufficient DUST or balance in connected 1AM wallet to cover transaction fees.';
+  }
+  if (raw.includes('proof') || raw.includes('prover') || raw.includes('proving')) {
+    return 'ZK proof generation failed. Ensure your local proof server is reachable and responsive.';
+  }
+  if (raw.includes('indexer') || raw.includes('lookup')) {
+    return 'Attestation transaction finalized on-chain, but indexer synchronization is delayed. Use retry confirmation.';
+  }
+  if (raw.includes('timeout') || raw.includes('deadline')) {
+    return 'Transaction submission timed out. Check network status and wallet activity.';
+  }
+  if (raw.includes('network') || raw.includes('preprod') || raw.includes('connection')) {
+    return 'Network communication failure during attestation. Check Midnight Preprod connectivity.';
+  }
+  return 'The attestation transaction could not be completed. Check the network connection and try again.';
 }

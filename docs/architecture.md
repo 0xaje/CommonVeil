@@ -54,4 +54,19 @@ Raw secrets, snapshot salt, product, version, and member identity are not stored
 - The same member can report for a different registered advisory.
 - Successful proof reveals affected-set membership, not the exact private release within that small public set.
 
+## Multi-role package boundaries and receipts (CV-006 through CV-011)
+
+Out-of-band communication between roles is partitioned into strictly typed packages:
+- `commonveil.certifier-key/v1`: Certifier public key package.
+- `commonveil.member-admission/v1`: Restricted credential admission package.
+- `commonveil.certification-request/v1`: Private inventory measurement request.
+- `commonveil.certified-snapshot/v1`: Private certified snapshot package containing `snapshotSalt`.
+- `commonveil.encrypted-envelope/v1`: AES-256-GCM / PBKDF2-SHA-256 (600,000 iterations) envelope for private packages.
+- `commonveil.affected-release-registration-receipt/v1`: Public affected-release registration receipt.
+- `commonveil.private-attestation-receipt/v1`: Public attestation receipt containing only safe, non-linking transaction and scope fields.
+
+## Operational Status
+
+Preprod operational build with locally verified workflows; final live end-to-end policy and attestation validation remains pending network availability.
+
 See [threat-model.md](threat-model.md) for non-goals and residual risks.

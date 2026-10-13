@@ -11,6 +11,8 @@
 | Reported inventory was certified | Private tuple must reproduce a stored salted commitment |
 | Inventory is in the affected set | Private tuple must reproduce a registered release commitment |
 | One report per member/advisory | Advisory-scoped nullifier must be unused |
+| Member identity is not disclosed in receipt | Receipt whitelists only public tx/advisory fields; credential omitted |
+| Non-affected inventory cannot attest | UI blocks attestation and honestly reports version outside policy set |
 
 ## Adversaries considered
 
@@ -43,3 +45,7 @@ The generated-circuit test exercises each of these negative paths against the co
 ## Production work required
 
 A production deployment needs independently operated registrar and certifier services, secure key custody, authenticated credential handoff, scanner-to-host binding, durable encrypted private state, recovery and rotation procedures, monitoring, and an audited enrollment policy.
+
+## Operational Status
+
+Preprod operational build with locally verified workflows; final live end-to-end policy and attestation validation remains pending network availability.

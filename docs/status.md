@@ -91,3 +91,14 @@ Boundary: this demonstrates cryptographic role separation, not an independently 
 CV-005 is complete for the authorized-certifier guarantee demonstrated above. All network evidence is from finalized Midnight Preprod transactions; no transaction identifier, certification, or exposure result is fabricated.
 
 References inspected: official example-hello-world commit fa01af37511e955672f484af6f1ef31cb6509798 and the official midnight-leaderboard Connector v4 browser implementation available on 2026-10-07.
+
+## CV-011 measured status — 2026-10-13 (Operational Milestone)
+
+- Member imports encrypted certified snapshot (`commonveil.encrypted-envelope/v1`), decrypts with AES-256-GCM / PBKDF2-SHA-256 (600,000 iterations), validates inner `commonveil.certified-snapshot/v1`, and confirms commitment on-chain.
+- Member imports public affected-release registration receipt (`commonveil.affected-release-registration-receipt/v1`) and validates release exists in on-chain ledger.
+- Honest negative evaluation: host scan `xz-utils 5.2.5` against registered releases 5.6.0 and 5.6.1 is blocked from attestation with status *"This certified version is outside the registered affected-release set."* No fabricated match is produced.
+- Generates and submits private affected-release proof (`attest`) using exact generated Compact circuit argument order.
+- Privacy-preserving public receipt (`commonveil.private-attestation-receipt/v1`) whitelists only non-linking metadata (`schema`, `network`, `contractAddress`, `advisoryId`, `attestationTxId`, `acceptedAt`, `status`). Member credentials, secrets, salts, and host measurements are strictly excluded.
+- Total test suite: 208 passing tests across 6 MJS and 202 TypeScript tests, validating all protocol invariants, prerequisite gating, encryption/decryption, error sanitization, lifecycle zeroization, and authentic Compact circuit execution.
+
+Preprod operational build with locally verified workflows; final live end-to-end policy and attestation validation remains pending network availability.

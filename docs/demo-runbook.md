@@ -57,6 +57,19 @@ Open `http://localhost:3000` and keep the wallet unlocked during each operation.
 
 The successful final view must show `Verified`, accepted reports `1`, used nullifiers `1`, inventory value `Not published`, and six transaction identifiers.
 
+> [!NOTE]
+> **Manual Live Runbook Status**: Marked pending until the Midnight Preprod indexer is available.
+> Preprod operational build with locally verified workflows; final live end-to-end policy and attestation validation remains pending network availability.
+> Local verification runs complete Compact circuit proofs locally.
+
+## Host measurement and honest negative evaluation
+
+When `npm run scan` is run on the genuine host, it detects `xz-utils 5.2.5`. When imported by the Member:
+- CommonVeil verifies the measurement honestly.
+- Because registered CVE-2024-3094 releases are 5.6.0 and 5.6.1, CommonVeil blocks attestation and reports:
+  *"This certified version is outside the registered affected-release set."*
+- CommonVeil never fabricates a positive match or alters genuine scan data.
+
 ## What to say during the demo
 
 “CommonVeil lets an admitted organization prove that an authorized pre-policy inventory snapshot falls within an exact affected-release set. Midnight verifies membership, certification timing, affected-version matching, and duplicate prevention without publishing the organization or its inventory value. This Preprod demo uses distinct role secrets in one browser; production scanner isolation and hardware-backed measurement remain explicit future work.”

@@ -18,3 +18,12 @@ Measured public result after finalization:
 - inventory value displayed as `Not published`.
 
 These transactions demonstrate protocol behavior on Preprod. The controlled XZ Utils 5.6.1 input is not a claim that the test computer was exposed.
+
+## CV-006 through CV-011 Operational Status
+
+Preprod operational build with locally verified workflows; final live end-to-end policy and attestation validation remains pending network availability.
+
+- **Automated Compact Execution Evidence**: Full end-to-end multi-role workflows and circuit execution (admission, inventory certification, policy registration, and private attestation) are tested and verified locally using authentic Compact circuit execution.
+- **Prior Genuine Preprod Evidence**: The deployment, admission, certification, policy registration, and private attestation transactions listed above represent genuine finalized transactions on Midnight Preprod from milestone CV-005.
+- **Pending Live Transactions**: Live on-chain execution of the multi-role split workflows (CV-008 through CV-011) remains pending until the Midnight Preprod indexer returns to availability.
+- **Genuine Host Measurement**: Scanning the host machine yields `xz-utils 5.2.5`, which correctly and honestly evaluates as unaffected by `CVE-2024-3094`.

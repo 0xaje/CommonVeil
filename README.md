@@ -56,7 +56,13 @@ Never upload wallet seeds, mnemonics, private inventory, or private state. A Pre
 
 ## Status
 
-CV-001 through CV-005 are complete. CV-005 compiled, passed its generated-circuit test and production build, and finalized deployment, member admission, authorized inventory certification, two exact affected-release registrations, and one private certified-exposure proof on Midnight Preprod. Genuine finalized transaction IDs and measured results are recorded in `docs/status.md`; no transaction ID is invented.
+CV-001 through CV-005 established the verified on-chain Preprod cryptographic baseline. CV-006 through CV-011 complete the multi-role operational protocol across Registrar, Certifier, and Member.
+
+Preprod operational build with locally verified workflows; final live end-to-end policy and attestation validation remains pending network availability.
+
+Automated Compact execution evidence validates all core protocol circuits locally without network dependency. Prior genuine Preprod deployment and admission evidence (CV-001 through CV-005) is preserved in `docs/status.md` and `docs/evidence.md`. Final live submission of CV-008 through CV-011 transactions remains pending indexer availability on Midnight Preprod.
+
+Honest scanning: scanning the genuine host measures `xz-utils 5.2.5`, which is honestly evaluated as outside the registered `CVE-2024-3094` affected-release set (5.6.0 and 5.6.1). CommonVeil does not fabricate a positive exposure claim for `xz-utils 5.2.5`.
 
 ## Current contract requirements
 

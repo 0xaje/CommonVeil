@@ -54,6 +54,12 @@ export interface CommonVeilContractSession {
    * Used by the Registrar workflow to detect duplicate registration.
    */
   readonly hasAffectedRelease: (releaseIdBytes: Uint8Array) => boolean;
+  /**
+   * Narrow helper to verify if a nullifier is recorded
+   * in the attached contract's usedNullifiers set.
+   * Used by the Member workflow to detect prior attestation for an advisory.
+   */
+  readonly hasUsedNullifier: (nullifierBytes: Uint8Array) => boolean;
 }
 
 export type ContractSessionErrorCode =
@@ -208,6 +214,10 @@ export async function queryCommonVeilContract(
     hasAffectedRelease: (releaseIdBytes: Uint8Array): boolean => {
       requireExactly32Bytes(releaseIdBytes, 'releaseId');
       return ledger.affectedReleases.member(releaseIdBytes);
+    },
+    hasUsedNullifier: (nullifierBytes: Uint8Array): boolean => {
+      requireExactly32Bytes(nullifierBytes, 'nullifier');
+      return ledger.usedNullifiers.member(nullifierBytes);
     },
   };
 }

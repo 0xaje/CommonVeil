@@ -24,6 +24,7 @@ export const ENCRYPTED_ENVELOPE_SCHEMA = 'commonveil.encrypted-envelope/v1' as c
 export const INVENTORY_CERTIFICATION_RECEIPT_SCHEMA = 'commonveil.inventory-certification-receipt/v1' as const;
 export const AFFECTED_RELEASE_POLICY_SCHEMA = 'commonveil.affected-release-policy/v1' as const;
 export const AFFECTED_RELEASE_REGISTRATION_RECEIPT_SCHEMA = 'commonveil.affected-release-registration-receipt/v1' as const;
+export const PRIVATE_ATTESTATION_RECEIPT_SCHEMA = 'commonveil.private-attestation-receipt/v1' as const;
 
 export const INVENTORY_REPORT_SCHEMA = 'commonveil.inventory/v1' as const;
 
@@ -112,6 +113,16 @@ export interface AffectedReleaseRegistrationReceipt {
   readonly registrationTxId: string | null;
   readonly registeredAt: string;
   readonly policyActive: boolean;
+  readonly status: 'finalized';
+}
+
+export interface PrivateAttestationReceipt {
+  readonly schema: typeof PRIVATE_ATTESTATION_RECEIPT_SCHEMA;
+  readonly network: 'preprod';
+  readonly contractAddress: string;
+  readonly advisoryId: string;
+  readonly attestationTxId: string;
+  readonly acceptedAt: string;
   readonly status: 'finalized';
 }
 
@@ -1177,6 +1188,113 @@ export function buildAffectedReleaseRegistrationReceipt(params: {
     registrationTxId: params.registrationTxId ?? null,
     registeredAt: now.toISOString(),
     policyActive: params.policyActive,
+    status: 'finalized',
+  });
+}
+
+export const PRIVATE_ATTESTATION_RECEIPT_REQUIRED_FIELDS = [
+  'schema',
+  'network',
+  'contractAddress',
+  'advisoryId',
+  'attestationTxId',
+  'acceptedAt',
+  'status',
+] as const;
+
+export function validatePrivateAttestationReceipt(receipt: unknown): PrivateAttestationReceipt {
+  if (!receipt || typeof receipt !== 'object' || Array.isArray(receipt)) {
+    throw new Error('Private attestation receipt must be an object');
+  }
+  const r = receipt as Record<string, unknown>;
+
+  const allowedSet = new Set<string>(PRIVATE_ATTESTATION_RECEIPT_REQUIRED_FIELDS);
+  const extraKeys = Object.keys(r).filter((k) => !allowedSet.has(k));
+  if (extraKeys.length > 0) {
+    throw new Error(`Private attestation receipt contains unauthorized top-level fields: ${extraKeys.join(', ')}`);
+  }
+
+  // Reject sensitive or identity-linking fields anywhere in the object
+  const forbiddenPatterns = [
+    'secret',
+    'salt',
+    'password',
+    'passphrase',
+    'privatekey',
+    'seed',
+    'mnemonic',
+    'inventory',
+    'credential',
+    'membercredential',
+    'commitment',
+    'certification',
+    'rawinventory',
+    'fingerprint',
+    'username',
+    'mock',
+    'demo',
+    'simulated',
+    'synthetic',
+    'controlled-test-vector',
+  ];
+  for (const key of Object.keys(r)) {
+    const lowerKey = key.toLowerCase();
+    for (const pattern of forbiddenPatterns) {
+      if (lowerKey.includes(pattern)) {
+        throw new Error(`Private attestation receipt contains forbidden field: ${key}`);
+      }
+    }
+  }
+
+  if (r.schema !== PRIVATE_ATTESTATION_RECEIPT_SCHEMA) {
+    throw new Error(`Invalid schema: expected '${PRIVATE_ATTESTATION_RECEIPT_SCHEMA}', received '${String(r.schema)}'`);
+  }
+  if (r.network !== 'preprod') {
+    throw new Error("Invalid network: expected 'preprod'");
+  }
+  const contractAddress = validateContractAddress(r.contractAddress);
+
+  if (typeof r.advisoryId !== 'string' || r.advisoryId.trim().length === 0) {
+    throw new Error('advisoryId must be a non-empty string');
+  }
+
+  if (!isCanonicalTransactionId(r.attestationTxId)) {
+    throw new Error('attestationTxId must be a canonical 64-character or 66-character lowercase hexadecimal transaction identifier');
+  }
+
+  if (!isValidIsoTimestamp(r.acceptedAt)) {
+    throw new Error('acceptedAt must be a valid ISO-8601 UTC timestamp');
+  }
+
+  if (r.status !== 'finalized') {
+    throw new Error("status must be 'finalized'");
+  }
+
+  return {
+    schema: PRIVATE_ATTESTATION_RECEIPT_SCHEMA,
+    network: 'preprod',
+    contractAddress,
+    advisoryId: (r.advisoryId as string).trim(),
+    attestationTxId: (r.attestationTxId as string).toLowerCase(),
+    acceptedAt: r.acceptedAt as string,
+    status: 'finalized',
+  };
+}
+
+export function buildPrivateAttestationReceipt(params: {
+  contractAddress: string;
+  advisoryId: string;
+  attestationTxId: string;
+  now?: Date;
+}): PrivateAttestationReceipt {
+  const now = params.now ?? new Date();
+  return validatePrivateAttestationReceipt({
+    schema: PRIVATE_ATTESTATION_RECEIPT_SCHEMA,
+    network: 'preprod',
+    contractAddress: params.contractAddress,
+    advisoryId: params.advisoryId,
+    attestationTxId: params.attestationTxId,
+    acceptedAt: now.toISOString(),
     status: 'finalized',
   });
 }
