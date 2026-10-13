@@ -4103,6 +4103,12 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
                     <dd>
                       {wallet.proofMode === 'wallet' ? 'In-wallet prover (Configured)' : 'Local proof server (Configured)'}
                     </dd>
+                    <dt>Indexer</dt>
+                    <dd id="wallet-indexer-status">
+                      <span className="status-indicator active" aria-label={`Indexer configuration: ${wallet.indexerStatus}`}>
+                        {wallet.indexerStatus}
+                      </span>
+                    </dd>
                   </dl>
                   <button
                     type="button"

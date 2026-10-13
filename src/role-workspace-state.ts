@@ -173,7 +173,14 @@ export function mapWalletError(error: unknown): string {
     rawMessage.includes('denied') ||
     rawMessage.includes('declined')
   ) {
+    if (rawMessage.includes('blockfrost') || rawMessage.includes('indexer configuration') || rawMessage.includes('override')) {
+      return error instanceof Error ? error.message : 'Invalid indexer override configuration.';
+    }
     return 'Wallet connection request was cancelled or declined in 1AM.';
+  }
+
+  if (rawMessage.includes('blockfrost') || rawMessage.includes('indexer configuration') || rawMessage.includes('vite_indexer')) {
+    return error instanceof Error ? error.message : 'Invalid indexer override configuration.';
   }
 
   return 'Wallet connection was not completed. Unlock 1AM on Preprod and try again.';

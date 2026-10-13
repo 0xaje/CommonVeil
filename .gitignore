@@ -151,6 +151,7 @@ vite.config.ts.timestamp-*
 # CommonVeil generated/private artifacts
 contracts/managed/
 .env*
+!.env.example
 private-state/
 out/
 public/keys/

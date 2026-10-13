@@ -292,7 +292,7 @@ export function LegacyDemo() {
           <div className="step">01</div><h2>Connect wallet</h2>
           <p>Authorize a standard Midnight Connector v4 wallet on Preprod.</p>
           <button onClick={connect} disabled={busy || !!wallet}>{wallet ? 'Connected' : 'Connect 1AM'}</button>
-          {wallet && <dl><dt>Wallet</dt><dd>{wallet.name}</dd><dt>Address</dt><dd title={wallet.address}>{short(wallet.address)}</dd><dt>DUST</dt><dd>{formatDust(wallet.dustBalance)}</dd><dt>Proving</dt><dd>{wallet.proofMode === 'wallet' ? 'In wallet' : 'Local :6300'}</dd></dl>}
+          {wallet && <dl><dt>Wallet</dt><dd>{wallet.name}</dd><dt>Address</dt><dd title={wallet.address}>{short(wallet.address)}</dd><dt>DUST</dt><dd>{formatDust(wallet.dustBalance)}</dd><dt>Proving</dt><dd>{wallet.proofMode === 'wallet' ? 'In wallet' : 'Local :6300'}</dd><dt>Indexer</dt><dd>{wallet.indexerStatus}</dd></dl>}
         </article>
 
         <article>
