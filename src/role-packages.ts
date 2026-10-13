@@ -173,6 +173,18 @@ export function isValidIsoTimestamp(value: unknown): value is string {
 }
 
 /**
+ * Validates canonical Midnight TransactionId strings:
+ * - Exactly 64 or exactly 66 lowercase hexadecimal characters.
+ * - Rejects uppercase hex, non-hex, whitespace, and non-canonical lengths (such as 63, 65, 67).
+ */
+export const CANONICAL_TX_ID_REGEX = /^(?:[0-9a-f]{64}|[0-9a-f]{66})$/;
+
+export function isCanonicalTransactionId(value: unknown): value is string {
+  if (typeof value !== 'string') return false;
+  return CANONICAL_TX_ID_REGEX.test(value);
+}
+
+/**
  * Validates version integers:
  * - Must be safe integer
  * - 0 <= value <= 4,294,967,295 (uint32 range)
@@ -707,8 +719,8 @@ export function validateCertifiedSnapshotPackage(pkg: unknown): CertifiedSnapsho
   if (!isHex(p.commitment, 32)) {
     throw new Error('commitment must be 32-byte hex (64 chars)');
   }
-  if (typeof p.txId !== 'string' || !isHex(p.txId) || p.txId.length < 16) {
-    throw new Error('txId must be a valid hex transaction identifier');
+  if (!isCanonicalTransactionId(p.txId)) {
+    throw new Error('txId must be a canonical 64-character or 66-character lowercase hexadecimal transaction identifier');
   }
   if (!isValidIsoTimestamp(p.createdAt)) {
     throw new Error('createdAt must be a valid ISO-8601 UTC timestamp');
@@ -727,7 +739,7 @@ export function validateCertifiedSnapshotPackage(pkg: unknown): CertifiedSnapsho
     },
     snapshotSalt: (p.snapshotSalt as string).toLowerCase(),
     commitment: (p.commitment as string).toLowerCase(),
-    txId: (p.txId as string).toLowerCase(),
+    txId: p.txId,
     createdAt: p.createdAt,
   };
 }
@@ -758,8 +770,8 @@ export function buildCertifiedSnapshotPackage(params: {
   if (!isHex(params.commitment, 32)) {
     throw new Error('commitment must be 32-byte hex (64 chars)');
   }
-  if (typeof params.txId !== 'string' || !isHex(params.txId) || params.txId.length < 16) {
-    throw new Error('txId must be a valid hex transaction identifier');
+  if (!isCanonicalTransactionId(params.txId)) {
+    throw new Error('txId must be a canonical 64-character or 66-character lowercase hexadecimal transaction identifier');
   }
   const now = params.now ?? new Date();
   return {
@@ -825,8 +837,8 @@ export function validateInventoryCertificationReceipt(receipt: unknown): Invento
   }
   // certificationTxId may be null if indexer lag prevented capture
   if (r.certificationTxId !== null) {
-    if (typeof r.certificationTxId !== 'string' || !isHex(r.certificationTxId) || r.certificationTxId.length < 16) {
-      throw new Error('certificationTxId must be a valid hex string or null');
+    if (!isCanonicalTransactionId(r.certificationTxId)) {
+      throw new Error('certificationTxId must be a canonical 64-character or 66-character lowercase hexadecimal string or null');
     }
   }
   if (!isValidIsoTimestamp(r.certifiedAt)) {
@@ -1104,8 +1116,8 @@ export function validateAffectedReleaseRegistrationReceipt(
   const sourceReference = validateHttpsUrl(r.sourceReference);
 
   if (r.registrationTxId !== null) {
-    if (typeof r.registrationTxId !== 'string' || !/^[0-9a-f]{64,66}$/.test(r.registrationTxId)) {
-      throw new Error('registrationTxId must be a 64-character or 66-character lowercase hexadecimal string or null');
+    if (!isCanonicalTransactionId(r.registrationTxId)) {
+      throw new Error('registrationTxId must be a canonical 64-character or 66-character lowercase hexadecimal string or null');
     }
   }
 

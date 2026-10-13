@@ -38,6 +38,7 @@ import {
   validateAffectedReleaseRegistrationReceipt,
   buildAffectedReleaseRegistrationReceipt,
   validateHttpsUrl,
+  isCanonicalTransactionId,
 } from '../src/role-packages.ts';
 
 const SAMPLE_HEX_32 = 'a1'.repeat(32);
@@ -366,7 +367,7 @@ test('10. Certified snapshot validation', () => {
 
   assert.throws(
     () => validateCertifiedSnapshotPackage({ ...pkg, txId: '' }),
-    /txId must be a valid hex transaction identifier/,
+    /canonical 64-character or 66-character lowercase hexadecimal/,
   );
 });
 
@@ -1612,5 +1613,121 @@ test('47. CV-010: Affected-release registration receipt round trip & strict whit
   assert.throws(
     () => validateAffectedReleaseRegistrationReceipt({ ...receipt, registrationTxId: 'zz'.repeat(32) }),
     /64-character or 66-character lowercase hexadecimal string/,
+  );
+});
+
+// 48. CV-010: Centralized isCanonicalTransactionId helper and boundary enforcement
+test('48. CV-010: isCanonicalTransactionId rigorously enforces exactly 64 or 66 lowercase hex characters', () => {
+  const hex64 = 'ab12'.repeat(16);
+  const hex66 = '00' + hex64;
+  assert.equal(hex64.length, 64);
+  assert.equal(hex66.length, 66);
+
+  // 1. Exactly 64 lowercase hex passes
+  assert.equal(isCanonicalTransactionId(hex64), true);
+
+  // 2. Exactly 66 lowercase hex passes
+  assert.equal(isCanonicalTransactionId(hex66), true);
+
+  // 3. 63 characters fails
+  assert.equal(isCanonicalTransactionId(hex64.slice(0, 63)), false);
+
+  // 4. 65 characters fails
+  assert.equal(isCanonicalTransactionId('0' + hex64), false);
+
+  // 5. 67 characters fails
+  assert.equal(isCanonicalTransactionId(hex66 + '1'), false);
+
+  // 6. Uppercase fails
+  assert.equal(isCanonicalTransactionId(hex64.toUpperCase()), false);
+  assert.equal(isCanonicalTransactionId(hex66.toUpperCase()), false);
+  assert.equal(isCanonicalTransactionId('00162A6cea69226e4731b519f76ca71e14e011eca434cfe2a08b88dda51f02f66b'), false);
+
+  // 7. Non-hex fails
+  assert.equal(isCanonicalTransactionId('z'.repeat(64)), false);
+  assert.equal(isCanonicalTransactionId('g'.repeat(66)), false);
+
+  // 8. Whitespace prefixed or suffixed fails
+  assert.equal(isCanonicalTransactionId(' ' + hex64), false);
+  assert.equal(isCanonicalTransactionId(hex64 + ' '), false);
+  assert.equal(isCanonicalTransactionId('\n' + hex66), false);
+  assert.equal(isCanonicalTransactionId(' ' + hex66 + ' '), false);
+
+  // 9. Contract address is never substituted as a transaction ID
+  // Real contract addresses begin with '0200' and are 32-byte (64 hex) representation of contract address
+  // While both may be 64-character hex strings, their semantic domains and schemas strictly forbid substitution
+  const contractAddress = SAMPLE_CONTRACT;
+  assert.throws(
+    () =>
+      validateAffectedReleaseRegistrationReceipt({
+        schema: AFFECTED_RELEASE_REGISTRATION_RECEIPT_SCHEMA,
+        network: 'preprod',
+        contractAddress: hex64,
+        advisoryId: 'CVE-2024-3094',
+        product: 'pkg:generic/xz-utils',
+        version: { major: 5, minor: 6, patch: 0 },
+        sourcePublisher: 'Red Hat',
+        sourceReference: 'https://example.com/advisory',
+        registrationTxId: '65chars_'.padEnd(65, 'a'), // 65 chars rejected
+        registeredAt: new Date().toISOString(),
+        policyActive: true,
+        status: 'finalized',
+      }),
+    /canonical 64-character or 66-character lowercase hexadecimal string/,
+  );
+
+  // Uppercase txId rejected in affected-release receipt
+  assert.throws(
+    () =>
+      validateAffectedReleaseRegistrationReceipt({
+        schema: AFFECTED_RELEASE_REGISTRATION_RECEIPT_SCHEMA,
+        network: 'preprod',
+        contractAddress: hex64,
+        advisoryId: 'CVE-2024-3094',
+        product: 'pkg:generic/xz-utils',
+        version: { major: 5, minor: 6, patch: 0 },
+        sourcePublisher: 'Red Hat',
+        sourceReference: 'https://example.com/advisory',
+        registrationTxId: hex64.toUpperCase(),
+        registeredAt: new Date().toISOString(),
+        policyActive: true,
+        status: 'finalized',
+      }),
+    /canonical 64-character or 66-character lowercase hexadecimal string/,
+  );
+
+  // Uppercase txId rejected in inventory certification receipt
+  assert.throws(
+    () =>
+      validateInventoryCertificationReceipt({
+        schema: INVENTORY_CERTIFICATION_RECEIPT_SCHEMA,
+        network: 'preprod',
+        contractAddress,
+        certifierKey: hex64,
+        memberCredential: hex64,
+        commitment: hex64,
+        certificationTxId: hex66.toUpperCase(),
+        certifiedAt: new Date().toISOString(),
+        status: 'finalized',
+      }),
+    /canonical 64-character or 66-character lowercase hexadecimal string/,
+  );
+
+  // 65-char txId rejected in certified snapshot
+  assert.throws(
+    () =>
+      validateCertifiedSnapshotPackage({
+        schema: CERTIFIED_SNAPSHOT_SCHEMA,
+        network: 'preprod',
+        contractAddress,
+        memberCredential: hex64,
+        product: 'pkg:generic/xz-utils',
+        version: { major: 5, minor: 6, patch: 0 },
+        snapshotSalt: hex64,
+        commitment: hex64,
+        txId: 'a'.repeat(65),
+        createdAt: new Date().toISOString(),
+      }),
+    /canonical 64-character or 66-character lowercase hexadecimal/,
   );
 });

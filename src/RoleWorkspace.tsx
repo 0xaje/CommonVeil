@@ -41,6 +41,7 @@ import {
   type AffectedReleaseRegistrationReceipt,
   validateAffectedReleaseRegistrationReceipt,
   buildAffectedReleaseRegistrationReceipt,
+  isCanonicalTransactionId,
 } from './role-packages';
 import { deployContract, submitCallTx } from '@midnight-ntwrk/midnight-js-contracts';
 import { CompiledCommonVeilContract, CommonVeil } from './contract';
@@ -2274,10 +2275,11 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
       }
 
       // Check captured genuine transaction ID from SDK FinalizedTxData
-      const txId: string = finalized.public.txId;
-      if (typeof txId !== 'string' || txId.trim() === '') {
-        throw new Error('Finalized transaction data missing transaction ID');
+      const rawTxId: unknown = finalized.public.txId;
+      if (!isCanonicalTransactionId(rawTxId)) {
+        throw new Error('Finalized transaction data missing canonical transaction ID');
       }
+      const txId: string = rawTxId;
 
       // Automatically inspect public ledger to verify memberCredentials contains credential
       try {
@@ -2614,10 +2616,11 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
       }
 
       // Extract genuine transaction ID from SDK FinalizedTxData
-      const txId: string = finalized.public.txId;
-      if (typeof txId !== 'string' || txId.trim() === '') {
-        throw new Error('Finalized transaction data missing transaction ID');
+      const rawTxId: unknown = finalized.public.txId;
+      if (!isCanonicalTransactionId(rawTxId)) {
+        throw new Error('Finalized transaction data missing canonical transaction ID');
       }
+      const txId: string = rawTxId;
 
       // Derive commitment exactly using CommonVeil pureCircuits.deriveInventoryCommitment
       const derivedCommitmentBytes = CommonVeil.pureCircuits.deriveInventoryCommitment(
@@ -3192,12 +3195,12 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
         return;
       }
 
-      // Extract genuine transaction ID from SDK FinalizedTxData (64 or 66 hex TransactionId)
+      // Extract genuine transaction ID from SDK FinalizedTxData (canonical 64 or 66 hex TransactionId)
       const rawTxId: unknown = finalized.public.txId;
-      if (typeof rawTxId !== 'string' || !/^[0-9a-f]{64,66}$/i.test(rawTxId.trim())) {
-        throw new Error('Finalized transaction data missing valid hexadecimal transaction ID');
+      if (!isCanonicalTransactionId(rawTxId)) {
+        throw new Error('Finalized transaction data missing valid canonical hexadecimal transaction ID');
       }
-      const txId: string = rawTxId.trim().toLowerCase();
+      const txId: string = rawTxId;
 
       // Automatically inspect public ledger to verify affectedReleases and policyActive
       try {

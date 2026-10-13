@@ -39,6 +39,7 @@ import {
   type VersionTuple,
   productDigest,
   advisoryDigest,
+  isCanonicalTransactionId,
 } from './role-packages';
 
 export type RoleType = 'registrar' | 'certifier' | 'member';
@@ -1124,8 +1125,10 @@ export function validateDeploymentReceipt(receipt: unknown): DeploymentReceipt {
   if (typeof r.contractAddress !== 'string' || !r.contractAddress.trim()) {
     throw new Error('Receipt contractAddress must be a non-empty string.');
   }
-  if (r.deploymentTxId !== null && typeof r.deploymentTxId !== 'string') {
-    throw new Error('Receipt deploymentTxId must be a string or null.');
+  if (r.deploymentTxId !== null) {
+    if (!isCanonicalTransactionId(r.deploymentTxId)) {
+      throw new Error('Receipt deploymentTxId must be a canonical 64-character or 66-character lowercase hexadecimal string or null.');
+    }
   }
   if (
     typeof r.registrarPublicKey !== 'string' ||
@@ -1563,8 +1566,8 @@ export function validateMemberAdmissionReceipt(receipt: unknown): MemberAdmissio
     throw new Error('admittedMemberCredential must be a 32-byte hex string (64 characters).');
   }
   if (r.admissionTxId !== null) {
-    if (typeof r.admissionTxId !== 'string' || !r.admissionTxId.trim() || !isHex(r.admissionTxId.trim())) {
-      throw new Error('admissionTxId must be a valid hex string or null.');
+    if (!isCanonicalTransactionId(r.admissionTxId)) {
+      throw new Error('admissionTxId must be a canonical 64-character or 66-character lowercase hexadecimal string or null.');
     }
   }
   if (!isValidIsoTimestamp(r.admittedAt)) {
@@ -1745,10 +1748,11 @@ export function onAdmissionFinalizedIndexing(
   prevState: RegistrarAdmissionUiState,
   txId?: string | null,
 ): RegistrarAdmissionUiState {
-  const resolvedTxId =
-    typeof txId === 'string' && txId.trim() !== ''
-      ? txId
-      : prevState.admissionTxId;
+  const normalizedInputTxId =
+    typeof txId === 'string' && isCanonicalTransactionId(txId.trim())
+      ? txId.trim()
+      : null;
+  const resolvedTxId = normalizedInputTxId ?? prevState.admissionTxId;
 
   return {
     ...prevState,
@@ -2345,7 +2349,11 @@ export function onCertificationFinalizedIndexing(
   prevState: CertifierCertificationUiState,
   txId?: string | null,
 ): CertifierCertificationUiState {
-  const resolvedTxId = typeof txId === 'string' && txId.trim() !== '' ? txId : prevState.certificationTxId;
+  const normalizedInputTxId =
+    typeof txId === 'string' && isCanonicalTransactionId(txId.trim())
+      ? txId.trim()
+      : null;
+  const resolvedTxId = normalizedInputTxId ?? prevState.certificationTxId;
   return { ...prevState, stage: 'finalized-indexing', certificationTxId: resolvedTxId, errorMessage: null };
 }
 
@@ -2639,8 +2647,8 @@ export function onAffectedReleaseFinalizedIndexing(
   txId?: string | null,
 ): RegistrarAffectedReleaseUiState {
   const normalizedInputTxId =
-    typeof txId === 'string' && /^[0-9a-f]{64,66}$/i.test(txId.trim())
-      ? txId.trim().toLowerCase()
+    typeof txId === 'string' && isCanonicalTransactionId(txId.trim())
+      ? txId.trim()
       : null;
   const resolvedTxId = normalizedInputTxId ?? prevState.registrationTxId;
   return { ...prevState, stage: 'finalized-indexing', registrationTxId: resolvedTxId, errorMessage: null };

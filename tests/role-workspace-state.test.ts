@@ -948,11 +948,12 @@ test('39. Deployment receipt schema validation and secret exclusion', () => {
   const registrarPublicKey = bytesToHex(adminKey);
   const certifierPublicKey = '55'.repeat(32);
 
+  const canonicalTxId = '00' + 'ab12'.repeat(16);
   const validReceipt: DeploymentReceipt = {
     schema: DEPLOYMENT_RECEIPT_SCHEMA,
     network: 'preprod',
     contractAddress: 'addr_test1' + '00'.repeat(25),
-    deploymentTxId: 'txid_' + '11'.repeat(25),
+    deploymentTxId: canonicalTxId,
     registrarPublicKey,
     certifierPublicKey,
     deployedAt: new Date().toISOString(),
@@ -966,6 +967,20 @@ test('39. Deployment receipt schema validation and secret exclusion', () => {
   assert.equal(validated.deploymentTxId, validReceipt.deploymentTxId);
   assert.equal(validated.status, 'finalized');
   assert.equal(validated.certifierPublicKey, certifierPublicKey);
+
+  // Non-canonical deploymentTxId (e.g. 65 chars, uppercase, or invalid length) is rejected
+  assert.throws(
+    () => validateDeploymentReceipt({ ...validReceipt, deploymentTxId: '1234' }),
+    /canonical 64-character or 66-character lowercase hexadecimal string or null/,
+  );
+  assert.throws(
+    () => validateDeploymentReceipt({ ...validReceipt, deploymentTxId: 'a'.repeat(65) }),
+    /canonical 64-character or 66-character lowercase hexadecimal string or null/,
+  );
+  assert.throws(
+    () => validateDeploymentReceipt({ ...validReceipt, deploymentTxId: canonicalTxId.toUpperCase() }),
+    /canonical 64-character or 66-character lowercase hexadecimal string or null/,
+  );
 
   // Valid receipt with null deploymentTxId (when SDK does not expose it)
   const validReceiptNoTxId: DeploymentReceipt = {
@@ -1717,6 +1732,18 @@ test('65. Admission receipt validation and private-data exclusion', () => {
   assert.throws(() => validateMemberAdmissionReceipt({ ...receipt, network: 'mainnet' }), /preprod/);
   assert.throws(() => validateMemberAdmissionReceipt({ ...receipt, status: 'pending' }), /finalized/);
   assert.throws(() => validateMemberAdmissionReceipt({ ...receipt, admittedMemberCredential: '123' }), /32-byte/);
+  assert.throws(
+    () => validateMemberAdmissionReceipt({ ...receipt, admissionTxId: '1234' }),
+    /canonical 64-character or 66-character lowercase hexadecimal string or null/,
+  );
+  assert.throws(
+    () => validateMemberAdmissionReceipt({ ...receipt, admissionTxId: 'a'.repeat(65) }),
+    /canonical 64-character or 66-character lowercase hexadecimal string or null/,
+  );
+  assert.throws(
+    () => validateMemberAdmissionReceipt({ ...receipt, admissionTxId: txId.toUpperCase() }),
+    /canonical 64-character or 66-character lowercase hexadecimal string or null/,
+  );
 });
 
 // 66. Raw error sanitization for member and admission operations
@@ -3155,9 +3182,10 @@ test('103. Certification UI state reducer lifecycle transitions', () => {
   assert.equal(state.stage, 'submitting');
 
   // Indexer lag enters finalized-indexing
-  state = onCertificationFinalizedIndexing(state, 'test-tx-id-1234');
+  const genuineCanonicalTxId = '00162a6cea69226e4731b519f76ca71e14e011eca434cfe2a08b88dda51f02f66b';
+  state = onCertificationFinalizedIndexing(state, genuineCanonicalTxId);
   assert.equal(state.stage, 'finalized-indexing');
-  assert.equal(state.certificationTxId, 'test-tx-id-1234');
+  assert.equal(state.certificationTxId, genuineCanonicalTxId);
 
   // Completed certification receipt
   const receipt = {
@@ -3167,7 +3195,7 @@ test('103. Certification UI state reducer lifecycle transitions', () => {
     certifierKey: SAMPLE_HEX_64,
     memberCredential: SAMPLE_HEX_64,
     commitment: 'cc'.repeat(32),
-    certificationTxId: 'test-tx-id-1234',
+    certificationTxId: genuineCanonicalTxId,
     status: 'finalized' as const,
     certifiedAt: FIXED_NOW.toISOString(),
   };
