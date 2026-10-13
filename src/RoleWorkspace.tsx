@@ -149,6 +149,10 @@ import {
   INITIAL_CERTIFIER_CERTIFICATION_UI_STATE,
   checkCertifierCertificationPrerequisites,
   canInitiateCertification,
+  getCertifierCertificationStageLabel,
+  isCertifierCertificationImportVisible,
+  isCertifierCertificationReviewVisible,
+  sanitizeCertificationImportError,
   onCertificationRequestImported,
   onCertificationConfirmationOpen,
   onCertificationConfirmationDismissed,
@@ -331,6 +335,7 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
     INITIAL_CERTIFIER_CERTIFICATION_UI_STATE,
   );
   const [certificationNotice, setCertificationNotice] = useState<string | null>(null);
+  const [certPreflightMemberAdmitted, setCertPreflightMemberAdmitted] = useState<boolean | null>(null);
   // Snapshot envelope passphrase inputs (never stored in long-lived React state)
   const [certSnapshotPassphrase, setCertSnapshotPassphrase] = useState('');
   const [certSnapshotConfirmPassphrase, setCertSnapshotConfirmPassphrase] = useState('');
@@ -353,6 +358,7 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
   const resetCertificationState = () => {
     setCertificationUi((prev) => onCertificationReset(prev));
     setCertificationNotice(null);
+    setCertPreflightMemberAdmitted(null);
     setCertSnapshotPassphrase('');
     setCertSnapshotConfirmPassphrase('');
     setCertSnapshotShowPassphrase(false);
@@ -371,6 +377,31 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
       certSnapshotTestInputRef.current.value = '';
     }
   };
+
+  // Preflight query: verify member credential admittance on-chain when request is present
+  useEffect(() => {
+    let cancelled = false;
+    if (!wallet?.providers || !contractState.attachedAddress || !certificationUi.importedRequest) {
+      setCertPreflightMemberAdmitted(null);
+      return;
+    }
+    const checkAdmitted = async () => {
+      try {
+        const session = await queryCommonVeilContract(wallet.providers, contractState.attachedAddress!);
+        if (cancelled) return;
+        const credBytes = hexToBytes(certificationUi.importedRequest!.memberCredential);
+        setCertPreflightMemberAdmitted(session.hasMemberCredential(credBytes));
+      } catch {
+        if (!cancelled) {
+          setCertPreflightMemberAdmitted(null);
+        }
+      }
+    };
+    checkAdmitted();
+    return () => {
+      cancelled = true;
+    };
+  }, [wallet?.providers, contractState.attachedAddress, certificationUi.importedRequest?.memberCredential]);
 
   // ── CV-011: Member Attestation Workflow State ─────────────────────────────
   const [memberAttestationUi, setMemberAttestationUi] = useState<MemberAttestationUiState>(
@@ -760,12 +791,31 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
           errorMessage: null,
         };
       });
+      if (
+        contractState.attachedAddress &&
+        contractState.attachedAddress.toLowerCase().trim() !==
+          session.publicState.contractAddress.toLowerCase().trim()
+      ) {
+        resetCertificationState();
+      }
       resetMemberInventory();
 
       // If we already have a secret in memory, verify it against the newly attached public state
       if (plaintextSecretRef.current && session.publicState) {
         const matches = verifyRegistrarSecret(session.publicState, plaintextSecretRef.current);
         setRegistrarUi((prev) => ({
+          ...prev,
+          verificationStatus: matches ? 'verified' : 'failed',
+        }));
+      }
+
+      if (plaintextCertifierSecretRef.current && session.publicState) {
+        const derivedKey = bytesToHex(
+          CommonVeil.pureCircuits.deriveCertifierKey(plaintextCertifierSecretRef.current),
+        );
+        const matches =
+          derivedKey.toLowerCase() === session.publicState.certifierKey.toLowerCase();
+        setCertifierUi((prev) => ({
           ...prev,
           verificationStatus: matches ? 'verified' : 'failed',
         }));
@@ -2580,7 +2630,7 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
     certifierBackupRecoveryStatus: certifierUi.backupRecoveryStatus,
     certifierVerificationStatus: certifierUi.verificationStatus,
     importedRequest: certificationUi.importedRequest,
-    isMemberAdmitted: null, // unknown until we query — guard checked at invocation time
+    isMemberAdmitted: certPreflightMemberAdmitted,
     isProofProviderConfigured: !!wallet?.providers,
     isOperationPending: isCertifying,
     policyActive: publicState?.policyActive ?? false,
@@ -2595,7 +2645,12 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
 
     try {
       const text = await file.text();
-      const raw = JSON.parse(text);
+      let raw: unknown;
+      try {
+        raw = JSON.parse(text);
+      } catch {
+        throw new Error('File content is not valid JSON.');
+      }
       const pkg = await validateCertificationRequestPackage(raw);
       setCertificationUi((prev) =>
         onCertificationRequestImported(
@@ -2606,11 +2661,34 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
         ),
       );
       setCertificationNotice(null);
+
+      // Perform preflight admitted member query immediately if connected & attached
+      if (wallet?.providers && contractState.attachedAddress) {
+        try {
+          const preflightSession = await queryCommonVeilContract(
+            wallet.providers,
+            contractState.attachedAddress,
+          );
+          const credBytes = hexToBytes(pkg.memberCredential);
+          setCertPreflightMemberAdmitted(preflightSession.hasMemberCredential(credBytes));
+        } catch {
+          setCertPreflightMemberAdmitted(null);
+        }
+      } else {
+        setCertPreflightMemberAdmitted(null);
+      }
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const sanitized = sanitizeCertificationImportError(err);
       setCertificationUi((prev) =>
-        onCertificationFailed(prev, `Invalid certification request: ${msg.slice(0, 120)}`),
+        onCertificationFailed({ ...prev, importedRequest: null }, sanitized),
       );
+    } finally {
+      if (e.target) {
+        e.target.value = '';
+      }
+      if (certificationRequestInputRef.current) {
+        certificationRequestInputRef.current.value = '';
+      }
     }
   };
 
@@ -2623,7 +2701,7 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
       !contractState.attachedAddress ||
       !plaintextCertifierSecretRef.current ||
       !certificationUi.importedRequest ||
-      certificationUi.stage !== 'confirming'
+      (certificationUi.stage !== 'confirming' && certificationUi.stage !== 'reviewing')
     ) {
       return;
     }
@@ -2669,7 +2747,10 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
     };
 
     logCertDiagnostic('prereqs-validated');
-    setCertificationUi((prev) => onCertificationWalletRequest(prev));
+    setCertificationUi((prev) => {
+      const confirming = prev.stage === 'reviewing' ? onCertificationConfirmationOpen(prev) : prev;
+      return onCertificationWalletRequest(confirming);
+    });
 
     try {
       setCertificationUi((prev) => onCertificationSubmitting(prev));
@@ -4615,19 +4696,7 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
                 <div>
                   <span className="field-caption">Certification Stage</span>
                   <strong className={`verification-badge ${certificationUi.stage === 'certified' ? 'verified' : 'unverified'}`}>
-                    {certificationUi.stage === 'certified'
-                      ? 'Certified'
-                      : certificationUi.stage === 'confirming'
-                        ? 'Reviewing request'
-                        : certificationUi.stage === 'requesting-wallet'
-                          ? '1AM Approval'
-                          : certificationUi.stage === 'submitting'
-                            ? 'Proving & Submitting'
-                            : certificationUi.stage === 'finalized-indexing'
-                              ? 'Finalized (Indexing)'
-                              : certificationUi.stage === 'failed'
-                                ? 'Failed'
-                                : 'Idle'}
+                    {getCertifierCertificationStageLabel(certificationUi.stage)}
                   </strong>
                 </div>
               </div>
@@ -4646,8 +4715,7 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
               )}
 
               {/* Import Request Box */}
-              {(certificationUi.stage === 'idle' ||
-                certificationUi.stage === 'failed') && (
+              {isCertifierCertificationImportVisible(certificationUi.stage) && (
                 <div className="admission-import-box">
                   <label htmlFor="certification-request-file-input">
                     Import Certification Request Package (.json)
@@ -4676,13 +4744,24 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
               )}
 
               {/* Review / Confirmation Box */}
-              {certificationUi.stage === 'confirming' && certificationUi.importedRequest && (
+              {isCertifierCertificationReviewVisible(certificationUi) && certificationUi.importedRequest && (
                 <div className="admission-confirmation-box" role="dialog" aria-labelledby="cert-confirm-heading">
                   <h3 id="cert-confirm-heading">Confirm Inventory Certification</h3>
                   <div className="admission-review-details">
                     <p>
                       <strong>Target Contract:</strong>{' '}
-                      <code>{shortenAddress(certificationUi.importedRequest.contractAddress)}</code>
+                      <code>{shortenAddress(certificationUi.importedRequest.contractAddress)}</code>{' '}
+                      {contractState.attachedAddress &&
+                      certificationUi.importedRequest.contractAddress.toLowerCase().trim() ===
+                        contractState.attachedAddress.toLowerCase().trim() ? (
+                        <span className="verification-badge verified" style={{ marginLeft: '8px' }}>
+                          Matches Attached Contract
+                        </span>
+                      ) : (
+                        <span className="verification-badge unverified" style={{ marginLeft: '8px' }}>
+                          Contract Mismatch
+                        </span>
+                      )}
                     </p>
                     <p>
                       <strong>Member Credential:</strong>{' '}
@@ -4691,8 +4770,17 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
                       </code>
                     </p>
                     <p>
+                      <strong>Provenance:</strong>{' '}
+                      <span className="verification-badge verified">
+                        {certificationUi.importedRequest.provenance} (validated)
+                      </span>
+                    </p>
+                    <p>
                       <strong>Product & Version:</strong>{' '}
-                      <code>{certificationUi.importedRequest.product} @ {certificationUi.importedRequest.rawVersion}</code>
+                      <code>
+                        {certificationUi.importedRequest.product} @ {certificationUi.importedRequest.rawVersion}{' '}
+                        (v{certificationUi.importedRequest.version.major}.{certificationUi.importedRequest.version.minor}.{certificationUi.importedRequest.version.patch})
+                      </code>
                     </p>
                     <p>
                       <strong>Measurement Digest:</strong>{' '}
@@ -4702,6 +4790,26 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
                     </p>
                     <p>
                       <strong>Observed At:</strong> {certificationUi.importedRequest.observedAt}
+                    </p>
+                    <p>
+                      <strong>Admitted Member Preflight:</strong>{' '}
+                      {certPreflightMemberAdmitted === true ? (
+                        <span className="verification-badge verified">Verified Admitted</span>
+                      ) : certPreflightMemberAdmitted === false ? (
+                        <span className="verification-badge unverified">Not Admitted on-chain</span>
+                      ) : (
+                        <span className="verification-badge unverified">Preflight Pending / Unverified</span>
+                      )}
+                    </p>
+                    <p>
+                      <strong>Policy Status:</strong>{' '}
+                      <span className={`verification-badge ${publicState && !publicState.policyActive ? 'verified' : 'unverified'}`}>
+                        {publicState
+                          ? !publicState.policyActive
+                            ? 'Open for certification'
+                            : 'Policy active (Certification closed)'
+                          : 'Unknown'}
+                      </span>
                     </p>
                     <p className="card-caption">
                       This action will invoke the genuine <code>certifyInventory</code> circuit. DUST transaction fees will be paid by your connected 1AM wallet.

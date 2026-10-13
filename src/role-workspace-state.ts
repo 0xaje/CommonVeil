@@ -2424,6 +2424,65 @@ export function onCertificationReset(
   return INITIAL_CERTIFIER_CERTIFICATION_UI_STATE;
 }
 
+/**
+ * Returns human-readable label for the Certifier certification stage badge.
+ */
+export function getCertifierCertificationStageLabel(stage: CertifierCertificationStage): string {
+  switch (stage) {
+    case 'certified':
+      return 'Certified';
+    case 'reviewing':
+    case 'confirming':
+      return 'Reviewing request';
+    case 'requesting-wallet':
+      return '1AM Approval';
+    case 'submitting':
+      return 'Proving & Submitting';
+    case 'finalized-indexing':
+      return 'Finalized (Indexing)';
+    case 'failed':
+      return 'Failed';
+    case 'cancelled':
+      return 'Cancelled';
+    case 'idle':
+    default:
+      return 'Idle';
+  }
+}
+
+/**
+ * Returns true if the certification request import controls should be visible.
+ */
+export function isCertifierCertificationImportVisible(stage: CertifierCertificationStage): boolean {
+  return stage === 'idle' || stage === 'failed' || stage === 'cancelled';
+}
+
+/**
+ * Returns true if the certification review / confirmation panel should be visible.
+ */
+export function isCertifierCertificationReviewVisible(
+  uiState: CertifierCertificationUiState,
+): boolean {
+  return (
+    (uiState.stage === 'reviewing' || uiState.stage === 'confirming') &&
+    uiState.importedRequest !== null
+  );
+}
+
+/**
+ * Sanitizes errors encountered during certification request package import.
+ * Strips URLs, paths, and internal tokens while preserving actionable diagnostic context.
+ */
+export function sanitizeCertificationImportError(error: unknown): string {
+  const rawMsg = error instanceof Error ? error.message : typeof error === 'string' ? error : String(error);
+  const sanitized = rawMsg
+    .replace(/(?:https?|wss?):\/\/[^\s]+/g, '[redacted]')
+    .replace(/\/[a-zA-Z0-9_.-]+(?:\/[a-zA-Z0-9_.-]+)+/g, '[path]')
+    .slice(0, 160)
+    .trim();
+  return `Invalid certification request: ${sanitized}`;
+}
+
 export const CERTIFICATION_VERIFICATION_ERROR_MESSAGES = {
   INCOMPATIBLE_CONTRACT: 'The contract at this address does not expose a compatible CommonVeil ledger.',
   CERTIFIER_KEY_MISMATCH: 'On-chain certifier key does not match the active certifier secret.',

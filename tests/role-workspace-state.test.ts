@@ -101,6 +101,10 @@ import {
   type CertifierCertificationUiState,
   checkCertifierCertificationPrerequisites,
   canInitiateCertification,
+  getCertifierCertificationStageLabel,
+  isCertifierCertificationImportVisible,
+  isCertifierCertificationReviewVisible,
+  sanitizeCertificationImportError,
   onCertificationRequestImported,
   onCertificationConfirmationOpen,
   onCertificationConfirmationDismissed,
@@ -4646,4 +4650,293 @@ test('157. CV-011: Duplicate/nullifier-already-used state blocks and cannot trig
   // Error mapping sanitizes replay cleanly
   const replayError = mapAttestationError(new Error('Member already attested for this advisory'));
   assert.equal(replayError, 'Member already attested for this advisory.');
+});
+
+// 158. CV-009 regression: Successful certification request import leaves review state visible and does not remain Idle
+test('158. CV-009 regression: Successful certification request import leaves review state visible and does not remain Idle', () => {
+  let state = INITIAL_CERTIFIER_CERTIFICATION_UI_STATE;
+  assert.equal(state.stage, 'idle');
+  assert.equal(getCertifierCertificationStageLabel(state.stage), 'Idle');
+  assert.equal(isCertifierCertificationImportVisible(state.stage), true);
+  assert.equal(isCertifierCertificationReviewVisible(state), false);
+
+  const validRequest = {
+    schema: 'commonveil.certification-request/v1' as const,
+    network: 'preprod' as const,
+    contractAddress: SAMPLE_CONTRACT_ADDRESS,
+    memberCredential: SAMPLE_HEX_64,
+    provenance: 'live-host-scan' as const,
+    product: 'pkg:generic/xz-utils',
+    rawVersion: '5.6.1',
+    version: { major: 5, minor: 6, patch: 1 },
+    measurementDigest: '00'.repeat(32),
+    observedAt: FIXED_NOW.toISOString(),
+    createdAt: FIXED_NOW.toISOString(),
+  };
+
+  // 1. Successful import transitions to 'reviewing'
+  state = onCertificationRequestImported(state, validRequest, SAMPLE_CONTRACT_ADDRESS, 'verified');
+  assert.equal(state.stage, 'reviewing');
+  assert.equal(state.errorMessage, null);
+  assert.deepEqual(state.importedRequest, validRequest);
+
+  // 2. Stage does NOT remain Idle — displays 'Reviewing request'
+  const stageLabel = getCertifierCertificationStageLabel(state.stage);
+  assert.equal(stageLabel, 'Reviewing request');
+  assert.notEqual(stageLabel, 'Idle', 'Stage label must not remain Idle after successful import');
+
+  // 3. Review state is visible and import controls are hidden
+  assert.equal(isCertifierCertificationReviewVisible(state), true, 'Review panel must be visible');
+  assert.equal(isCertifierCertificationImportVisible(state.stage), false, 'Import box must be replaced by review panel');
+
+  // 4. Validated request metadata preserved
+  assert.equal(state.importedRequest?.provenance, 'live-host-scan');
+  assert.equal(state.importedRequest?.product, 'pkg:generic/xz-utils');
+  assert.equal(state.importedRequest?.rawVersion, '5.6.1');
+  assert.deepEqual(state.importedRequest?.version, { major: 5, minor: 6, patch: 1 });
+  assert.equal(state.importedRequest?.memberCredential, SAMPLE_HEX_64);
+  assert.equal(state.importedRequest?.measurementDigest, '00'.repeat(32));
+  assert.equal(state.importedRequest?.contractAddress, SAMPLE_CONTRACT_ADDRESS);
+
+  // 5. Opening confirmation preserves review visibility and keeps stage label
+  state = onCertificationConfirmationOpen(state);
+  assert.equal(state.stage, 'confirming');
+  assert.equal(getCertifierCertificationStageLabel(state.stage), 'Reviewing request');
+  assert.equal(isCertifierCertificationReviewVisible(state), true);
+
+  // 6. Dismissing confirmation returns to reviewing with review state visible
+  state = onCertificationConfirmationDismissed(state);
+  assert.equal(state.stage, 'reviewing');
+  assert.equal(getCertifierCertificationStageLabel(state.stage), 'Reviewing request');
+  assert.equal(isCertifierCertificationReviewVisible(state), true);
+});
+
+// 159. CV-009 regression: Invalid certification request import displays a safe error and retains/re-enables import controls
+test('159. CV-009 regression: Invalid certification request import displays a safe error and retains/re-enables import controls', () => {
+  const initialState = INITIAL_CERTIFIER_CERTIFICATION_UI_STATE;
+
+  const validRequest = {
+    schema: 'commonveil.certification-request/v1' as const,
+    network: 'preprod' as const,
+    contractAddress: SAMPLE_CONTRACT_ADDRESS,
+    memberCredential: SAMPLE_HEX_64,
+    provenance: 'live-host-scan' as const,
+    product: 'pkg:generic/xz-utils',
+    rawVersion: '5.6.1',
+    version: { major: 5, minor: 6, patch: 1 },
+    measurementDigest: '00'.repeat(32),
+    observedAt: FIXED_NOW.toISOString(),
+    createdAt: FIXED_NOW.toISOString(),
+  };
+
+  // 1. Thrown parser/validation error with internal URL or local path is safely sanitized
+  const leakError = new Error('Schema failure at https://internal-node.midnight:8080/jsonrpc in /home/user/CommonVeil/fixtures/invalid.json');
+  const sanitized = sanitizeCertificationImportError(leakError);
+  assert.equal(sanitized.includes('https://'), false, 'Must not leak URLs');
+  assert.equal(sanitized.includes('/home/user/'), false, 'Must not leak local file paths');
+  assert.match(sanitized, /^Invalid certification request:/);
+
+  const parseFailedState = onCertificationFailed(
+    { ...initialState, importedRequest: null },
+    sanitized,
+  );
+  assert.equal(parseFailedState.stage, 'failed');
+  assert.equal(isCertifierCertificationImportVisible(parseFailedState.stage), true, 'Import controls must be retained/visible');
+  assert.equal(isCertifierCertificationReviewVisible(parseFailedState), false, 'Review panel must not be visible on failure');
+  assert.equal(getCertifierCertificationStageLabel(parseFailedState.stage), 'Failed');
+  assert.match(parseFailedState.errorMessage!, /^Invalid certification request:/);
+
+  // 2. Contract address mismatch
+  const mismatchState = onCertificationRequestImported(
+    initialState,
+    { ...validRequest, contractAddress: '99'.repeat(32) },
+    SAMPLE_CONTRACT_ADDRESS,
+    'verified',
+  );
+  assert.equal(mismatchState.stage, 'failed');
+  assert.equal(mismatchState.importedRequest, null);
+  assert.equal(isCertifierCertificationImportVisible(mismatchState.stage), true);
+  assert.equal(isCertifierCertificationReviewVisible(mismatchState), false);
+  assert.match(mismatchState.errorMessage!, /does not match the attached contract/);
+
+  // 3. Unverified Certifier authority
+  const unverifiedState = onCertificationRequestImported(
+    initialState,
+    validRequest,
+    SAMPLE_CONTRACT_ADDRESS,
+    'unverified',
+  );
+  assert.equal(unverifiedState.stage, 'failed');
+  assert.equal(unverifiedState.importedRequest, null);
+  assert.equal(isCertifierCertificationImportVisible(unverifiedState.stage), true);
+  assert.equal(isCertifierCertificationReviewVisible(unverifiedState), false);
+  assert.match(unverifiedState.errorMessage!, /Active Certifier secret must be verified/);
+
+  // 4. Missing attached contract
+  const noContractState = onCertificationRequestImported(
+    initialState,
+    validRequest,
+    null,
+    'verified',
+  );
+  assert.equal(noContractState.stage, 'failed');
+  assert.equal(noContractState.importedRequest, null);
+  assert.equal(isCertifierCertificationImportVisible(noContractState.stage), true);
+  assert.equal(isCertifierCertificationReviewVisible(noContractState), false);
+  assert.match(noContractState.errorMessage!, /Attach to a verified CommonVeil contract/);
+
+  // 5. User cancellation in wallet
+  const cancelledState = onCertificationFailed(
+    initialState,
+    'Inventory certification transaction was cancelled in 1AM.',
+    true,
+  );
+  assert.equal(cancelledState.stage, 'cancelled');
+  assert.equal(isCertifierCertificationImportVisible(cancelledState.stage), true, 'Import controls re-enabled on cancellation');
+  assert.equal(isCertifierCertificationReviewVisible(cancelledState), false);
+  assert.equal(getCertifierCertificationStageLabel(cancelledState.stage), 'Cancelled');
+});
+
+// 160. CV-009 regression: Ordinary rerenders and public-state refreshes do not reset a valid imported request
+test('160. CV-009 regression: Ordinary rerenders and public-state refreshes do not reset a valid imported request', () => {
+  const validRequest = {
+    schema: 'commonveil.certification-request/v1' as const,
+    network: 'preprod' as const,
+    contractAddress: SAMPLE_CONTRACT_ADDRESS,
+    memberCredential: SAMPLE_HEX_64,
+    provenance: 'live-host-scan' as const,
+    product: 'pkg:generic/xz-utils',
+    rawVersion: '5.6.1',
+    version: { major: 5, minor: 6, patch: 1 },
+    measurementDigest: '00'.repeat(32),
+    observedAt: FIXED_NOW.toISOString(),
+    createdAt: FIXED_NOW.toISOString(),
+  };
+
+  let state = onCertificationRequestImported(
+    INITIAL_CERTIFIER_CERTIFICATION_UI_STATE,
+    validRequest,
+    SAMPLE_CONTRACT_ADDRESS,
+    'verified',
+  );
+
+  // Simulate multiple public-state refreshes / ledger updates
+  const publicStates = [
+    { accepted: 0n, members: 2n, policyActive: false },
+    { accepted: 1n, members: 2n, policyActive: false },
+    { accepted: 5n, members: 3n, policyActive: false },
+  ];
+
+  for (const pubState of publicStates) {
+    // Prerequisite recalculation during ordinary rerender with admitted member preflight
+    const prereqs = checkCertifierCertificationPrerequisites({
+      isConnected: true,
+      attachedContractAddress: SAMPLE_CONTRACT_ADDRESS,
+      hasCertifierSecret: true,
+      certifierBackupRecoveryStatus: 'recovery-tested',
+      certifierVerificationStatus: 'verified',
+      importedRequest: state.importedRequest,
+      isMemberAdmitted: true,
+      isProofProviderConfigured: true,
+      isOperationPending: false,
+      policyActive: pubState.policyActive,
+    });
+    assert.deepEqual(prereqs, [], 'Prerequisites must be satisfied when member is admitted and policy is open');
+    assert.equal(canInitiateCertification({
+      isConnected: true,
+      attachedContractAddress: SAMPLE_CONTRACT_ADDRESS,
+      hasCertifierSecret: true,
+      certifierBackupRecoveryStatus: 'recovery-tested',
+      certifierVerificationStatus: 'verified',
+      importedRequest: state.importedRequest,
+      isMemberAdmitted: true,
+      isProofProviderConfigured: true,
+      isOperationPending: false,
+      policyActive: pubState.policyActive,
+    }), true);
+
+    // State, imported request, and visibility remain untouched
+    assert.equal(state.stage, 'reviewing');
+    assert.deepEqual(state.importedRequest, validRequest);
+    assert.equal(isCertifierCertificationReviewVisible(state), true);
+    assert.equal(getCertifierCertificationStageLabel(state.stage), 'Reviewing request');
+  }
+
+  // Preflight check: when member is explicitly not admitted
+  const unadmittedPrereqs = checkCertifierCertificationPrerequisites({
+    isConnected: true,
+    attachedContractAddress: SAMPLE_CONTRACT_ADDRESS,
+    hasCertifierSecret: true,
+    certifierBackupRecoveryStatus: 'recovery-tested',
+    certifierVerificationStatus: 'verified',
+    importedRequest: state.importedRequest,
+    isMemberAdmitted: false,
+    isProofProviderConfigured: true,
+    isOperationPending: false,
+    policyActive: false,
+  });
+  assert.equal(
+    unadmittedPrereqs.includes('Member credential is not yet admitted in the public ledger memberCredentials set.'),
+    true,
+  );
+
+  // Preflight check: when policy window is closed (policyActive: true)
+  const policyClosedPrereqs = checkCertifierCertificationPrerequisites({
+    isConnected: true,
+    attachedContractAddress: SAMPLE_CONTRACT_ADDRESS,
+    hasCertifierSecret: true,
+    certifierBackupRecoveryStatus: 'recovery-tested',
+    certifierVerificationStatus: 'verified',
+    importedRequest: state.importedRequest,
+    isMemberAdmitted: true,
+    isProofProviderConfigured: true,
+    isOperationPending: false,
+    policyActive: true,
+  });
+  assert.equal(
+    policyClosedPrereqs.includes('Inventory certification window is closed: policyActive is true on-chain.'),
+    true,
+  );
+
+  // Still preserved despite prerequisite checks returning unmet conditions
+  assert.equal(state.stage, 'reviewing');
+  assert.deepEqual(state.importedRequest, validRequest);
+  assert.equal(isCertifierCertificationReviewVisible(state), true);
+});
+
+// 161. CV-009 regression: Lifecycle invalidation correctly resets imported request on identity or contract change
+test('161. CV-009 regression: Lifecycle invalidation correctly resets imported request on identity or contract change', () => {
+  const validRequest = {
+    schema: 'commonveil.certification-request/v1' as const,
+    network: 'preprod' as const,
+    contractAddress: SAMPLE_CONTRACT_ADDRESS,
+    memberCredential: SAMPLE_HEX_64,
+    provenance: 'live-host-scan' as const,
+    product: 'pkg:generic/xz-utils',
+    rawVersion: '5.6.1',
+    version: { major: 5, minor: 6, patch: 1 },
+    measurementDigest: '00'.repeat(32),
+    observedAt: FIXED_NOW.toISOString(),
+    createdAt: FIXED_NOW.toISOString(),
+  };
+
+  let state = onCertificationRequestImported(
+    INITIAL_CERTIFIER_CERTIFICATION_UI_STATE,
+    validRequest,
+    SAMPLE_CONTRACT_ADDRESS,
+    'verified',
+  );
+  assert.equal(isCertifierCertificationReviewVisible(state), true);
+
+  // Invalidation via onCertificationReset (called by wallet disconnect, address change,
+  // role change, session lock, or certifier secret change)
+  state = onCertificationReset(state);
+  assert.equal(state.stage, 'idle');
+  assert.equal(state.importedRequest, null);
+  assert.equal(state.certificationTxId, null);
+  assert.equal(state.receipt, null);
+  assert.equal(state.errorMessage, null);
+  assert.equal(getCertifierCertificationStageLabel(state.stage), 'Idle');
+  assert.equal(isCertifierCertificationImportVisible(state.stage), true);
+  assert.equal(isCertifierCertificationReviewVisible(state), false);
 });
