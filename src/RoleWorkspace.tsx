@@ -3192,11 +3192,12 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
         return;
       }
 
-      // Extract genuine transaction ID from SDK FinalizedTxData
-      const txId: string = finalized.public.txId;
-      if (typeof txId !== 'string' || txId.trim() === '') {
-        throw new Error('Finalized transaction data missing transaction ID');
+      // Extract genuine transaction ID from SDK FinalizedTxData (64 or 66 hex TransactionId)
+      const rawTxId: unknown = finalized.public.txId;
+      if (typeof rawTxId !== 'string' || !/^[0-9a-f]{64,66}$/i.test(rawTxId.trim())) {
+        throw new Error('Finalized transaction data missing valid hexadecimal transaction ID');
       }
+      const txId: string = rawTxId.trim().toLowerCase();
 
       // Automatically inspect public ledger to verify affectedReleases and policyActive
       try {
@@ -5658,7 +5659,7 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
                 <h2>Register Affected Release & Activate Policy</h2>
               </div>
               <p className="card-caption">
-                Record an authoritative security advisory on-chain. Registering an affected release activates the contract policy and permanently closes the pre-policy inventory certification window.
+                Record an authoritative security advisory on-chain. Registering an affected release activates the contract policy and permanently closes the pre-policy inventory-certification window for the Certifier. The Member later uses attest.
               </p>
 
               {/* Explicit Publisher Notice Required by Audit */}
@@ -5910,7 +5911,7 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
                   <div className="safe-error-banner" role="alert">
                     <strong>CRITICAL POLICY ACTIVATION NOTICE:</strong>
                     <p>
-                      Submitting this transaction sets <code>policyActive = true</code> on-chain! This permanently closes the pre-policy inventory certification window for Members. Once active, only the later attest circuit can be used by members.
+                      Submitting this transaction sets <code>policyActive = true</code> on-chain! Policy activation closes the pre-policy inventory-certification window for the Certifier. Once active, the Member later uses attest.
                     </p>
                   </div>
 

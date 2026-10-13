@@ -2638,7 +2638,11 @@ export function onAffectedReleaseFinalizedIndexing(
   prevState: RegistrarAffectedReleaseUiState,
   txId?: string | null,
 ): RegistrarAffectedReleaseUiState {
-  const resolvedTxId = typeof txId === 'string' && txId.trim() !== '' ? txId : prevState.registrationTxId;
+  const normalizedInputTxId =
+    typeof txId === 'string' && /^[0-9a-f]{64,66}$/i.test(txId.trim())
+      ? txId.trim().toLowerCase()
+      : null;
+  const resolvedTxId = normalizedInputTxId ?? prevState.registrationTxId;
   return { ...prevState, stage: 'finalized-indexing', registrationTxId: resolvedTxId, errorMessage: null };
 }
 

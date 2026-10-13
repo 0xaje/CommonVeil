@@ -1599,4 +1599,18 @@ test('47. CV-010: Affected-release registration receipt round trip & strict whit
     () => validateAffectedReleaseRegistrationReceipt({ ...receipt, schema: 'invalid' }),
     /Invalid schema/,
   );
+
+  // Invalid length or non-hex txId rejection
+  assert.throws(
+    () => validateAffectedReleaseRegistrationReceipt({ ...receipt, registrationTxId: '1234' }),
+    /64-character or 66-character lowercase hexadecimal string/,
+  );
+  assert.throws(
+    () => validateAffectedReleaseRegistrationReceipt({ ...receipt, registrationTxId: '00162a6cea69226e' }),
+    /64-character or 66-character lowercase hexadecimal string/,
+  );
+  assert.throws(
+    () => validateAffectedReleaseRegistrationReceipt({ ...receipt, registrationTxId: 'zz'.repeat(32) }),
+    /64-character or 66-character lowercase hexadecimal string/,
+  );
 });

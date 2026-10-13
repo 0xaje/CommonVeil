@@ -3673,8 +3673,11 @@ test('137. CV-010: Indexer lag transition preserves registrationTxId without res
   assert.equal(state.registrationTxId, txId);
   assert.equal(state.errorMessage, null);
 
-  // Consecutive finalized-indexing call retains original txId if txId is null/undefined
+  // Consecutive finalized-indexing call retains original txId if txId is null/undefined or invalid
   state = onAffectedReleaseFinalizedIndexing(state, null);
+  assert.equal(state.registrationTxId, txId);
+
+  state = onAffectedReleaseFinalizedIndexing(state, 'invalid-short-txId');
   assert.equal(state.registrationTxId, txId);
 });
 
@@ -3802,4 +3805,115 @@ test('141. CV-010: pureCircuits.deriveReleaseId produces 32-byte hash and matche
     1n,
   );
   assert.notDeepEqual(releaseId, releaseIdPatch1);
+});
+
+// 142. CV-010: Compact execution verifies affected release registration & policy activation behavior
+test('142. CV-010: Compact execution confirms policyActive, duplicate rejection, and post-activation registration', async () => {
+  const { Contract, ledger } = await import('../contracts/managed/commonveil/contract/index.js');
+  const { createConstructorContext, createCircuitContext } = await import('@midnight-ntwrk/compact-runtime');
+
+  const contract = new Contract({});
+  const key = '00'.repeat(32);
+  const adminSecret = new Uint8Array(32).fill(1);
+  const certifierSecret = new Uint8Array(32).fill(12);
+  const memberSecret = new Uint8Array(32).fill(3);
+  const memberSalt = new Uint8Array(32).fill(4);
+  const advisoryA = new Uint8Array(32).fill(6);
+  const advisoryB = new Uint8Array(32).fill(7);
+  const productXz = new Uint8Array(32).fill(8);
+  const snapshotSalt = new Uint8Array(32).fill(10);
+
+  const adminKey = pureCircuits.deriveAdminKey(adminSecret);
+  const certifierKey = pureCircuits.deriveCertifierKey(certifierSecret);
+  const credential = pureCircuits.deriveMemberCredential(memberSecret, memberSalt);
+
+  const initial = contract.initialState(createConstructorContext({}, key), adminKey, certifierKey);
+  const context0 = createCircuitContext(key, key, initial.currentContractState, initial.currentPrivateState);
+
+  // Initial ledger: policyActive is false
+  assert.equal(ledger(context0.currentQueryContext.state).policyActive, false);
+
+  // Admit member
+  const admitted = contract.impureCircuits.registerMember(context0, adminSecret, credential);
+
+  // Certify inventory while policy is not active -> succeeds
+  const certified = contract.impureCircuits.certifyInventory(
+    admitted.context,
+    certifierSecret,
+    credential,
+    productXz,
+    5n,
+    6n,
+    0n,
+    snapshotSalt,
+  );
+
+  // 1. Register first affected release (5.6.0) -> sets policyActive = true
+  const reg1 = contract.impureCircuits.registerAffectedRelease(
+    certified.context,
+    adminSecret,
+    advisoryA,
+    productXz,
+    5n,
+    6n,
+    0n,
+  );
+  assert.equal(ledger(reg1.context.currentQueryContext.state).policyActive, true);
+  assert.equal(ledger(reg1.context.currentQueryContext.state).affectedReleases.size(), 1n);
+
+  // 2. certifyInventory fails after policy activation
+  assert.throws(
+    () =>
+      contract.impureCircuits.certifyInventory(
+        reg1.context,
+        certifierSecret,
+        credential,
+        productXz,
+        5n,
+        6n,
+        1n,
+        snapshotSalt,
+      ),
+    /Inventory certification window is closed/,
+  );
+
+  // 3. Another distinct affected release (5.6.1) can still be registered after policy activation
+  const reg2 = contract.impureCircuits.registerAffectedRelease(
+    reg1.context,
+    adminSecret,
+    advisoryA,
+    productXz,
+    5n,
+    6n,
+    1n,
+  );
+  assert.equal(ledger(reg2.context.currentQueryContext.state).policyActive, true);
+  assert.equal(ledger(reg2.context.currentQueryContext.state).affectedReleases.size(), 2n);
+
+  // Another advisory release on different advisoryB can also be registered
+  const reg3 = contract.impureCircuits.registerAffectedRelease(
+    reg2.context,
+    adminSecret,
+    advisoryB,
+    productXz,
+    5n,
+    6n,
+    1n,
+  );
+  assert.equal(ledger(reg3.context.currentQueryContext.state).affectedReleases.size(), 3n);
+
+  // 4. Exact duplicate affected release (advisoryA, productXz, 5.6.0) is rejected
+  assert.throws(
+    () =>
+      contract.impureCircuits.registerAffectedRelease(
+        reg3.context,
+        adminSecret,
+        advisoryA,
+        productXz,
+        5n,
+        6n,
+        0n,
+      ),
+    /Affected release already registered/,
+  );
 });

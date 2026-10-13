@@ -1104,8 +1104,8 @@ export function validateAffectedReleaseRegistrationReceipt(
   const sourceReference = validateHttpsUrl(r.sourceReference);
 
   if (r.registrationTxId !== null) {
-    if (typeof r.registrationTxId !== 'string' || !isHex(r.registrationTxId) || r.registrationTxId.length < 16) {
-      throw new Error('registrationTxId must be a valid hex string or null');
+    if (typeof r.registrationTxId !== 'string' || !/^[0-9a-f]{64,66}$/.test(r.registrationTxId)) {
+      throw new Error('registrationTxId must be a 64-character or 66-character lowercase hexadecimal string or null');
     }
   }
 
