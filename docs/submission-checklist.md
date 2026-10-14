@@ -22,7 +22,7 @@ This checklist tracks the requirements shown on the official AKINDO Buildathon p
 - [x] Architecture, threat model, package boundary, evidence, and demo-runbook documentation.
 - [x] Genuine Midnight Preprod evidence separated from local tests.
 - [x] Current-wave progress narrative: [Buildathon submission draft](buildathon-submission.md).
-- [ ] Final slide deck with a public judge-accessible URL.
+- [x] Final slide deck is stored publicly in `docs/pitch/`; perform the final human content review before submission.
 - [ ] Final demo/video pitch with a public judge-accessible URL.
 - [ ] Public application URL, if the team can host the wallet-enabled build safely.
 - [ ] Final AKINDO project description and current-wave progress fields.
@@ -95,7 +95,7 @@ This checklist tracks the requirements shown on the official AKINDO Buildathon p
 ### Communication and marketing
 
 - [x] Professional Midnight-focused README.
-- [ ] Final pitch deck.
+- [x] Final pitch deck created and stored in the public repository.
 - [ ] Final demo video.
 - [ ] One public educational post explaining the privacy problem and Midnight design.
 - [ ] Optional Midnight community/Discord progress post that links the public repository.
