@@ -112,6 +112,13 @@ import {
   onMemberSecretGeneratedOrImported,
   onMemberSecretRestoredFromBackup,
   onMemberSecretClearedOrLocked,
+  onMemberVerificationPending,
+  onMemberVerificationSuccess,
+  onMemberVerificationNotAdmitted,
+  onMemberVerificationFailed,
+  onMemberVerificationReset,
+  getMemberVerificationStatusLabel,
+  mapMemberAdmissionInspectionError,
   INITIAL_REGISTRAR_ADMISSION_UI_STATE,
   type RegistrarAdmissionUiState,
   validateMemberAdmissionReceipt,
@@ -486,6 +493,9 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
   const regAffectedGenerationRef = useRef(0);
   const activeRegAffectedTokenRef = useRef<number | null>(null);
 
+  const memberVerificationGenerationRef = useRef(0);
+  const activeMemberVerificationTokenRef = useRef<number | null>(null);
+
   // Zeroize bytes and clear references on unmount or role change
   useEffect(() => {
     isMounted.current = true;
@@ -507,6 +517,8 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
       activeRegAffectedTokenRef.current = null;
       attestationGenerationRef.current++;
       activeAttestationTokenRef.current = null;
+      memberVerificationGenerationRef.current++;
+      activeMemberVerificationTokenRef.current = null;
       zeroizeBytes(plaintextSecretRef.current);
       plaintextSecretRef.current = null;
       zeroizeBytes(plaintextCertifierSecretRef.current);
@@ -620,6 +632,8 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
   const clearMemberSecret = (isLocked: boolean = false) => {
     memberCopyGenerationRef.current++;
     activeMemberCopyTokenRef.current = null;
+    memberVerificationGenerationRef.current++;
+    activeMemberVerificationTokenRef.current = null;
     zeroizeBytes(plaintextMemberSecretRef.current);
     plaintextMemberSecretRef.current = null;
     zeroizeBytes(plaintextMemberSaltRef.current);
@@ -696,6 +710,8 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
     activeRegAffectedTokenRef.current = null;
     attestationGenerationRef.current++;
     activeAttestationTokenRef.current = null;
+    memberVerificationGenerationRef.current++;
+    activeMemberVerificationTokenRef.current = null;
     clearMemberSecret(false);
     const next = handleAddressInputChange(contractState, e.target.value);
     setContractState(next);
@@ -712,6 +728,7 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
       canCopyOnce: false,
       backupRecoveryStatus: 'none',
     }));
+    setMemberUi((prev) => onMemberVerificationReset(prev));
     setDeploymentUi((prev) => onDeploymentReset(prev));
     setAdmissionUi((prev) => onAdmissionReset(prev));
     resetAffectedReleaseState(false);
@@ -820,9 +837,23 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
           verificationStatus: matches ? 'verified' : 'failed',
         }));
       }
+
+      if (plaintextMemberSecretRef.current && plaintextMemberSaltRef.current) {
+        const credBytes = CommonVeil.pureCircuits.deriveMemberCredential(
+          plaintextMemberSecretRef.current,
+          plaintextMemberSaltRef.current,
+        );
+        const matches = session.hasMemberCredential(credBytes);
+        setMemberUi((prev) =>
+          matches ? onMemberVerificationSuccess(prev) : onMemberVerificationNotAdmitted(prev),
+        );
+      } else {
+        setMemberUi((prev) => onMemberVerificationReset(prev));
+      }
     } catch (err: unknown) {
       if (!isMounted.current) return;
       resetMemberInventory();
+      setMemberUi((prev) => onMemberVerificationReset(prev));
       setContractState((prev) => {
         if (!isResponseCurrent(prev, currentRequestId, address)) {
           return prev;
@@ -1805,6 +1836,102 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
   // Member Identity & Encrypted Backup Handlers
   // ============================================================================
 
+  const verifyMemberAdmissionOnChain = async (
+    targetContractAddress?: string,
+    existingSession?: Awaited<ReturnType<typeof queryCommonVeilContract>>,
+  ) => {
+    const addressToQuery = targetContractAddress ?? contractState.attachedAddress;
+    if (!wallet?.providers || !addressToQuery) {
+      return;
+    }
+    if (!plaintextMemberSecretRef.current || !plaintextMemberSaltRef.current) {
+      return;
+    }
+
+    const currentGeneration = ++memberVerificationGenerationRef.current;
+    activeMemberVerificationTokenRef.current = currentGeneration;
+
+    setMemberUi((prev) => onMemberVerificationPending(prev));
+
+    try {
+      const session =
+        existingSession ?? (await queryCommonVeilContract(wallet.providers, addressToQuery));
+
+      if (
+        !isMounted.current ||
+        memberVerificationGenerationRef.current !== currentGeneration ||
+        activeMemberVerificationTokenRef.current !== currentGeneration
+      ) {
+        return;
+      }
+
+      if (!plaintextMemberSecretRef.current || !plaintextMemberSaltRef.current) {
+        return;
+      }
+
+      const credBytes = CommonVeil.pureCircuits.deriveMemberCredential(
+        plaintextMemberSecretRef.current,
+        plaintextMemberSaltRef.current,
+      );
+      const isAdmitted = session.hasMemberCredential(credBytes);
+
+      if (isAdmitted) {
+        setMemberUi((prev) => onMemberVerificationSuccess(prev));
+      } else {
+        setMemberUi((prev) => onMemberVerificationNotAdmitted(prev));
+      }
+    } catch (err: unknown) {
+      if (
+        !isMounted.current ||
+        memberVerificationGenerationRef.current !== currentGeneration ||
+        activeMemberVerificationTokenRef.current !== currentGeneration
+      ) {
+        return;
+      }
+      const sanitizedError = mapMemberAdmissionInspectionError(err);
+      setMemberUi((prev) => onMemberVerificationFailed(prev, sanitizedError));
+    }
+  };
+
+  const handleVerifyMemberAdmission = () => {
+    if (!contractState.attachedAddress) {
+      setMemberError('Attach to a verified CommonVeil contract before verifying Member admission.');
+      return;
+    }
+    if (!wallet?.providers) {
+      setMemberError('Connect 1AM wallet on Midnight Preprod before verifying Member admission.');
+      return;
+    }
+    if (!plaintextMemberSecretRef.current || !plaintextMemberSaltRef.current) {
+      setMemberError('No Member identity loaded in session memory.');
+      return;
+    }
+    setMemberError(null);
+    verifyMemberAdmissionOnChain(contractState.attachedAddress);
+  };
+
+  // CV-007: Automatically run read-only Member admission preflight whenever compatible contract
+  // is attached and Member secret and salt are loaded in session memory
+  useEffect(() => {
+    if (
+      role === 'member' &&
+      wallet?.providers &&
+      contractState.attachedAddress &&
+      memberUi.hasSecret &&
+      plaintextMemberSecretRef.current &&
+      plaintextMemberSaltRef.current &&
+      memberUi.verificationStatus === 'unverified'
+    ) {
+      verifyMemberAdmissionOnChain(contractState.attachedAddress);
+    }
+  }, [
+    role,
+    wallet?.providers,
+    contractState.attachedAddress,
+    memberUi.hasSecret,
+    memberUi.verificationStatus,
+  ]);
+
   const handleGenerateMemberIdentity = () => {
     setMemberError(null);
     setMemberNotice(null);
@@ -1822,6 +1949,9 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
       setMemberNotice(
         'Fresh Member secret and salt generated. Credential derived locally in volatile session memory.',
       );
+      if (contractState.attachedAddress && wallet?.providers) {
+        verifyMemberAdmissionOnChain(contractState.attachedAddress);
+      }
     } catch (err: unknown) {
       setMemberError(mapMemberOperationError(err));
     }
@@ -1850,6 +1980,9 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
       setMemberImportSecretHexInput('');
       setMemberImportSaltHexInput('');
       setMemberNotice('Member secret and salt imported. Credential derived locally in session memory.');
+      if (contractState.attachedAddress && wallet?.providers) {
+        verifyMemberAdmissionOnChain(contractState.attachedAddress);
+      }
     } catch (err: unknown) {
       setMemberImportSecretHexInput('');
       setMemberImportSaltHexInput('');
@@ -2099,6 +2232,9 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
       setMemberNotice(
         'Member secret and salt restored from encrypted backup into session memory. Note: Plaintext copy is disabled for restored backups.',
       );
+      if (contractState.attachedAddress && wallet?.providers) {
+        verifyMemberAdmissionOnChain(contractState.attachedAddress);
+      }
     } catch (err: unknown) {
       setMemberError(mapMemberOperationError(err));
     }
@@ -5108,6 +5244,12 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
                   )}
                 </div>
                 <div>
+                  <span className="field-caption">On-chain Admission</span>
+                  <strong className={`verification-badge ${memberUi.verificationStatus}`}>
+                    {getMemberVerificationStatusLabel(memberUi.verificationStatus)}
+                  </strong>
+                </div>
+                <div>
                   <span className="field-caption">Backup Recovery Status</span>
                   <strong className={`recovery-badge ${memberUi.backupRecoveryStatus}`}>
                     {memberUi.backupRecoveryStatus === 'recovery-tested'
@@ -5118,6 +5260,13 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
                   </strong>
                 </div>
               </div>
+
+              {memberUi.verificationStatus === 'failed' && memberUi.verificationErrorMessage && (
+                <div className="safe-error-banner" role="alert">
+                  <strong>Admission Verification Error</strong>
+                  <p>{memberUi.verificationErrorMessage}</p>
+                </div>
+              )}
 
               {memberNotice && (
                 <div className="safe-notice-banner" role="status">
@@ -5271,6 +5420,18 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
 
                     <button
                       type="button"
+                      onClick={handleVerifyMemberAdmission}
+                      disabled={!contractState.attachedAddress || memberUi.verificationStatus === 'pending'}
+                      className="action-button secondary"
+                      aria-label="Verify member admission on-chain"
+                    >
+                      {memberUi.verificationStatus === 'pending'
+                        ? 'Verifying Admission...'
+                        : 'Verify On-Chain Admission'}
+                    </button>
+
+                    <button
+                      type="button"
                       onClick={handleLockMemberSession}
                       className="action-button secondary"
                       aria-label="Lock member session and zeroize secret and salt"
@@ -5287,7 +5448,7 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
 
                   {!contractState.attachedAddress && (
                     <p className="form-hint-text">
-                      Attach a contract in Step 02 before generating an admission request package.
+                      Attach a contract in Step 02 before verifying on-chain admission or generating an admission request package.
                     </p>
                   )}
 

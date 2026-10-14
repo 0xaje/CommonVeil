@@ -566,12 +566,18 @@ export interface MemberBackupPackage {
   readonly createdAt: string;    // ISO timestamp
 }
 
-export type MemberVerificationStatus = 'unverified' | 'verified' | 'failed';
+export type MemberVerificationStatus =
+  | 'unverified'
+  | 'pending'
+  | 'verified'
+  | 'not-admitted'
+  | 'failed';
 
 export interface MemberSecretUiState {
   readonly hasSecret: boolean;
   readonly isLocked: boolean;
   readonly verificationStatus: MemberVerificationStatus;
+  readonly verificationErrorMessage: string | null;
   readonly memberCredentialHex: string | null; // shortened derived credential or 64-char hex
   readonly canCopyOnce: boolean;
   readonly copyStatus: 'idle' | 'pending' | 'copied' | 'failed';
@@ -582,6 +588,7 @@ export const INITIAL_MEMBER_SECRET_UI_STATE: MemberSecretUiState = {
   hasSecret: false,
   isLocked: false,
   verificationStatus: 'unverified',
+  verificationErrorMessage: null,
   memberCredentialHex: null,
   canCopyOnce: false,
   copyStatus: 'idle',
@@ -712,6 +719,7 @@ export function onMemberSecretGeneratedOrImported(
     hasSecret: true,
     isLocked: false,
     verificationStatus: 'unverified',
+    verificationErrorMessage: null,
     memberCredentialHex,
     canCopyOnce: true,
     copyStatus: 'idle',
@@ -732,6 +740,7 @@ export function onMemberSecretRestoredFromBackup(
     hasSecret: true,
     isLocked: false,
     verificationStatus: 'unverified',
+    verificationErrorMessage: null,
     memberCredentialHex,
     canCopyOnce: false,
     copyStatus: 'idle',
@@ -750,11 +759,129 @@ export function onMemberSecretClearedOrLocked(
     hasSecret: false,
     isLocked,
     verificationStatus: 'unverified',
+    verificationErrorMessage: null,
     memberCredentialHex: null,
     canCopyOnce: false,
     copyStatus: 'idle',
     backupRecoveryStatus: 'none',
   };
+}
+
+/**
+ * Pure state reducer when member admission verification is initiated.
+ */
+export function onMemberVerificationPending(
+  prevState: MemberSecretUiState,
+): MemberSecretUiState {
+  return {
+    ...prevState,
+    verificationStatus: 'pending',
+    verificationErrorMessage: null,
+  };
+}
+
+/**
+ * Pure state reducer when member admission verification confirms membership in public ledger.
+ */
+export function onMemberVerificationSuccess(
+  prevState: MemberSecretUiState,
+): MemberSecretUiState {
+  return {
+    ...prevState,
+    verificationStatus: 'verified',
+    verificationErrorMessage: null,
+  };
+}
+
+/**
+ * Pure state reducer when member admission verification determines credential is not admitted.
+ */
+export function onMemberVerificationNotAdmitted(
+  prevState: MemberSecretUiState,
+): MemberSecretUiState {
+  return {
+    ...prevState,
+    verificationStatus: 'not-admitted',
+    verificationErrorMessage: null,
+  };
+}
+
+/**
+ * Pure state reducer when member admission verification fails due to an indexer or network error.
+ */
+export function onMemberVerificationFailed(
+  prevState: MemberSecretUiState,
+  errorMessage: string,
+): MemberSecretUiState {
+  return {
+    ...prevState,
+    verificationStatus: 'failed',
+    verificationErrorMessage: errorMessage,
+  };
+}
+
+/**
+ * Pure state reducer when member verification state is reset.
+ */
+export function onMemberVerificationReset(
+  prevState: MemberSecretUiState,
+): MemberSecretUiState {
+  return {
+    ...prevState,
+    verificationStatus: 'unverified',
+    verificationErrorMessage: null,
+  };
+}
+
+/**
+ * User-facing display label for member admission verification status.
+ */
+export function getMemberVerificationStatusLabel(status: MemberVerificationStatus): string {
+  switch (status) {
+    case 'pending':
+      return 'Verification pending';
+    case 'verified':
+      return 'Verified admitted';
+    case 'not-admitted':
+      return 'Not admitted';
+    case 'failed':
+      return 'Indexer lookup failed';
+    case 'unverified':
+    default:
+      return 'Unverified';
+  }
+}
+
+/**
+ * Sanitizes any error caught during member admission on-chain verification.
+ * Strips URLs, stack traces, and local filesystem paths.
+ */
+export function mapMemberAdmissionInspectionError(error: unknown): string {
+  if (error instanceof ContractSessionError) {
+    return CONTRACT_SESSION_ERROR_MESSAGES[error.code] ?? GENERIC_SAFE_ERROR_MESSAGE;
+  }
+  if (error && typeof error === 'object' && 'code' in error && typeof (error as any).code === 'string') {
+    const code = (error as any).code as ContractSessionErrorCode;
+    if (code in CONTRACT_SESSION_ERROR_MESSAGES) {
+      return CONTRACT_SESSION_ERROR_MESSAGES[code];
+    }
+  }
+  if (error instanceof Error) {
+    const msg = error.message;
+    if (/indexer|graphql|fetch|network|timeout|connection/i.test(msg)) {
+      return 'The Midnight indexer could not complete the membership verification query.';
+    }
+    if (/not found/i.test(msg)) {
+      return 'No indexed contract state exists at the supplied address.';
+    }
+    if (/incompatible/i.test(msg)) {
+      return 'The contract at this address does not expose a compatible CommonVeil ledger.';
+    }
+    if (/https?:\/\/|\/home\/|\/usr\/|node_modules/i.test(msg)) {
+      return 'The Midnight indexer query encountered an unexpected error.';
+    }
+  }
+  return 'The Midnight indexer could not complete the membership verification query.';
 }
 
 

@@ -476,10 +476,17 @@ input:focus-visible {
   border: 1px solid #2b613c;
 }
 
-.verification-badge.failed {
+.verification-badge.failed,
+.verification-badge.not-admitted {
   background: #361714;
   color: #ff8b80;
   border: 1px solid #632a24;
+}
+
+.verification-badge.pending {
+  background: #1c2738;
+  color: #8ab4f8;
+  border: 1px solid #294770;
 }
 
 .verification-badge.unverified {

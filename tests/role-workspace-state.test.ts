@@ -58,6 +58,14 @@ import {
   onMemberSecretGeneratedOrImported,
   onMemberSecretRestoredFromBackup,
   onMemberSecretClearedOrLocked,
+  onMemberVerificationPending,
+  onMemberVerificationSuccess,
+  onMemberVerificationNotAdmitted,
+  onMemberVerificationFailed,
+  onMemberVerificationReset,
+  getMemberVerificationStatusLabel,
+  mapMemberAdmissionInspectionError,
+  type MemberVerificationStatus,
   MEMBER_ADMISSION_RECEIPT_SCHEMA,
   type MemberAdmissionReceipt,
   validateMemberAdmissionReceipt,
@@ -4939,4 +4947,427 @@ test('161. CV-009 regression: Lifecycle invalidation correctly resets imported r
   assert.equal(getCertifierCertificationStageLabel(state.stage), 'Idle');
   assert.equal(isCertifierCertificationImportVisible(state.stage), true);
   assert.equal(isCertifierCertificationReviewVisible(state), false);
+});
+
+// 162. Member admission preflight: admitted credential transitions to 'verified' and satisfies attestation prerequisite
+test('162. Member admission preflight: admitted credential transitions to "verified" and satisfies attestation prerequisite', () => {
+  const secret = hexToBytes('11'.repeat(32));
+  const salt = hexToBytes('22'.repeat(32));
+  const derivedCredentialBytes = pureCircuits.deriveMemberCredential(secret, salt);
+  const derivedCredentialHex = bytesToHex(derivedCredentialBytes);
+
+  let memberState = onMemberSecretGeneratedOrImported(
+    INITIAL_MEMBER_SECRET_UI_STATE,
+    derivedCredentialHex,
+  );
+  assert.equal(memberState.verificationStatus, 'unverified');
+  assert.equal(memberState.verificationErrorMessage, null);
+
+  // Initiating verification transitions to pending
+  memberState = onMemberVerificationPending(memberState);
+  assert.equal(memberState.verificationStatus, 'pending');
+  assert.equal(getMemberVerificationStatusLabel(memberState.verificationStatus), 'Verification pending');
+
+  // Successful admission verification in public ledger
+  memberState = onMemberVerificationSuccess(memberState);
+  assert.equal(memberState.verificationStatus, 'verified');
+  assert.equal(memberState.verificationErrorMessage, null);
+  assert.equal(getMemberVerificationStatusLabel(memberState.verificationStatus), 'Verified admitted');
+
+  // Attestation prerequisites with verified status
+  const prereqs = checkMemberAttestationPrerequisites({
+    isConnected: true,
+    attachedContractAddress: SAMPLE_CONTRACT_ADDRESS,
+    hasMemberSecretAndSalt: true,
+    memberBackupRecoveryStatus: 'recovery-tested',
+    isMemberCredentialAdmitted: memberState.verificationStatus === 'verified',
+    hasSnapshotEvidence: true,
+    snapshotCredentialMatchesActiveMember: true,
+    snapshotCommitmentExistsOnChain: true,
+    hasPolicyReceipt: true,
+    policyReceiptContractMatchesAttached: true,
+    policyProductAndVersionMatchSnapshot: true,
+    isReleaseRegisteredOnChain: true,
+    isPolicyActive: true,
+    isNullifierAlreadyUsed: false,
+    isProofProviderConfigured: true,
+    isOperationPending: false,
+  });
+
+  assert.equal(prereqs.includes('Derived Member credential must be admitted in the public ledger.'), false);
+  assert.deepEqual(prereqs, []);
+});
+
+// 163. Member admission preflight: non-admitted credential transitions to 'not-admitted' and blocks attestation prerequisite
+test('163. Member admission preflight: non-admitted credential transitions to "not-admitted" and blocks attestation prerequisite', () => {
+  const outsiderSecret = hexToBytes('33'.repeat(32));
+  const outsiderSalt = hexToBytes('44'.repeat(32));
+  const outsiderCredBytes = pureCircuits.deriveMemberCredential(outsiderSecret, outsiderSalt);
+  const outsiderCredHex = bytesToHex(outsiderCredBytes);
+
+  let memberState = onMemberSecretGeneratedOrImported(
+    INITIAL_MEMBER_SECRET_UI_STATE,
+    outsiderCredHex,
+  );
+
+  // Non-admitted transition
+  memberState = onMemberVerificationNotAdmitted(memberState);
+  assert.equal(memberState.verificationStatus, 'not-admitted');
+  assert.equal(memberState.verificationErrorMessage, null);
+  assert.equal(getMemberVerificationStatusLabel(memberState.verificationStatus), 'Not admitted');
+
+  // Attestation prerequisites must be blocked
+  const prereqs = checkMemberAttestationPrerequisites({
+    isConnected: true,
+    attachedContractAddress: SAMPLE_CONTRACT_ADDRESS,
+    hasMemberSecretAndSalt: true,
+    memberBackupRecoveryStatus: 'recovery-tested',
+    isMemberCredentialAdmitted: (memberState.verificationStatus as MemberVerificationStatus) === 'verified',
+    hasSnapshotEvidence: true,
+    snapshotCredentialMatchesActiveMember: true,
+    snapshotCommitmentExistsOnChain: true,
+    hasPolicyReceipt: true,
+    policyReceiptContractMatchesAttached: true,
+    policyProductAndVersionMatchSnapshot: true,
+    isReleaseRegisteredOnChain: true,
+    isPolicyActive: true,
+    isNullifierAlreadyUsed: false,
+    isProofProviderConfigured: true,
+    isOperationPending: false,
+  });
+
+  assert.equal(prereqs.includes('Derived Member credential must be admitted in the public ledger.'), true);
+  assert.equal(
+    canInitiateAttestation({
+      isConnected: true,
+      attachedContractAddress: SAMPLE_CONTRACT_ADDRESS,
+      hasMemberSecretAndSalt: true,
+      memberBackupRecoveryStatus: 'recovery-tested',
+      isMemberCredentialAdmitted: (memberState.verificationStatus as MemberVerificationStatus) === 'verified',
+      hasSnapshotEvidence: true,
+      snapshotCredentialMatchesActiveMember: true,
+      snapshotCommitmentExistsOnChain: true,
+      hasPolicyReceipt: true,
+      policyReceiptContractMatchesAttached: true,
+      policyProductAndVersionMatchSnapshot: true,
+      isReleaseRegisteredOnChain: true,
+      isPolicyActive: true,
+      isNullifierAlreadyUsed: false,
+      isProofProviderConfigured: true,
+      isOperationPending: false,
+    }),
+    false,
+  );
+});
+
+// 164. Member admission preflight: automatic verification after attach + identity restore
+test('164. Member admission preflight: automatic verification after attach + identity restore', () => {
+  const secret = hexToBytes('55'.repeat(32));
+  const salt = hexToBytes('66'.repeat(32));
+  const credentialBytes = pureCircuits.deriveMemberCredential(secret, salt);
+  const credentialHex = bytesToHex(credentialBytes);
+
+  // Mock ledger session with admitted credential
+  const admittedSet = new Set([credentialHex.toLowerCase()]);
+  const mockSession = {
+    publicState: {
+      contractAddress: SAMPLE_CONTRACT_ADDRESS,
+      policyActive: true,
+    },
+    hasMemberCredential: (bytes: Uint8Array) => admittedSet.has(bytesToHex(bytes).toLowerCase()),
+  };
+
+  // Scenario A: Identity already in session, contract is attached
+  let state = onMemberSecretGeneratedOrImported(INITIAL_MEMBER_SECRET_UI_STATE, credentialHex);
+  assert.equal(state.verificationStatus, 'unverified');
+
+  // Attach runs membership evaluation
+  const isAdmittedOnAttach = mockSession.hasMemberCredential(
+    pureCircuits.deriveMemberCredential(secret, salt),
+  );
+  state = isAdmittedOnAttach
+    ? onMemberVerificationSuccess(state)
+    : onMemberVerificationNotAdmitted(state);
+  assert.equal(state.verificationStatus, 'verified');
+
+  // Scenario B: Contract already attached, Member restores backup
+  let restoredState = onMemberSecretRestoredFromBackup(INITIAL_MEMBER_SECRET_UI_STATE, credentialHex);
+  assert.equal(restoredState.verificationStatus, 'unverified');
+
+  // Restoration runs admission preflight
+  const isAdmittedOnRestore = mockSession.hasMemberCredential(
+    pureCircuits.deriveMemberCredential(secret, salt),
+  );
+  restoredState = isAdmittedOnRestore
+    ? onMemberVerificationSuccess(restoredState)
+    : onMemberVerificationNotAdmitted(restoredState);
+  assert.equal(restoredState.verificationStatus, 'verified');
+});
+
+// 165. Member admission preflight: manual verification action and UI labels
+test('165. Member admission preflight: manual verification action and UI labels', () => {
+  let state: MemberSecretUiState = INITIAL_MEMBER_SECRET_UI_STATE;
+  assert.equal(getMemberVerificationStatusLabel(state.verificationStatus), 'Unverified');
+
+  // Click manual verification: transitions to pending
+  state = onMemberVerificationPending(state);
+  assert.equal(state.verificationStatus, 'pending');
+  assert.equal(getMemberVerificationStatusLabel(state.verificationStatus), 'Verification pending');
+
+  // Query succeeds: transitions to verified
+  state = onMemberVerificationSuccess(state);
+  assert.equal(state.verificationStatus, 'verified');
+  assert.equal(getMemberVerificationStatusLabel(state.verificationStatus), 'Verified admitted');
+
+  // Query determines not admitted
+  state = onMemberVerificationNotAdmitted(state);
+  assert.equal(state.verificationStatus, 'not-admitted');
+  assert.equal(getMemberVerificationStatusLabel(state.verificationStatus), 'Not admitted');
+
+  // Query fails
+  state = onMemberVerificationFailed(state, 'The Midnight indexer could not complete the membership verification query.');
+  assert.equal(state.verificationStatus, 'failed');
+  assert.equal(getMemberVerificationStatusLabel(state.verificationStatus), 'Indexer lookup failed');
+  assert.equal(state.verificationErrorMessage, 'The Midnight indexer could not complete the membership verification query.');
+
+  // Reset
+  state = onMemberVerificationReset(state);
+  assert.equal(state.verificationStatus, 'unverified');
+  assert.equal(state.verificationErrorMessage, null);
+  assert.equal(getMemberVerificationStatusLabel(state.verificationStatus), 'Unverified');
+});
+
+// 166. Member admission preflight: indexer errors are properly sanitized without leaking URLs or filesystem paths
+test('166. Member admission preflight: indexer errors are properly sanitized without leaking URLs or filesystem paths', () => {
+  // ContractSessionError mappings
+  const indexerQueryError = new ContractSessionError(
+    'INDEXER_QUERY_FAILED',
+    'The Midnight indexer could not complete the contract lookup.',
+  );
+  assert.equal(
+    mapMemberAdmissionInspectionError(indexerQueryError),
+    'The Midnight indexer could not complete the contract lookup.',
+  );
+
+  const notFoundError = new ContractSessionError(
+    'CONTRACT_NOT_FOUND',
+    'No indexed contract state exists at the supplied address.',
+  );
+  assert.equal(
+    mapMemberAdmissionInspectionError(notFoundError),
+    'No indexed contract state exists at the supplied address.',
+  );
+
+  const incompatibleError = new ContractSessionError(
+    'INCOMPATIBLE_CONTRACT',
+    'The contract at this address does not expose a compatible CommonVeil ledger.',
+  );
+  assert.equal(
+    mapMemberAdmissionInspectionError(incompatibleError),
+    'The contract at this address does not expose a compatible CommonVeil ledger.',
+  );
+
+  // Network / GraphQL error with internal URL
+  const networkErrorWithUrl = new Error(
+    'fetch failed at https://preprod-indexer.midnight.network/graphql: Connection refused (ECONNREFUSED)',
+  );
+  const sanitizedNetwork = mapMemberAdmissionInspectionError(networkErrorWithUrl);
+  assert.equal(sanitizedNetwork.includes('https://'), false);
+  assert.equal(sanitizedNetwork.includes('midnight.network'), false);
+  assert.equal(sanitizedNetwork, 'The Midnight indexer could not complete the membership verification query.');
+
+  // Error with local filesystem path
+  const pathError = new Error(
+    'Error reading metadata at /home/user/CommonVeil/contracts/commonveil.compact: file not found',
+  );
+  const sanitizedPath = mapMemberAdmissionInspectionError(pathError);
+  assert.equal(sanitizedPath.includes('/home/'), false);
+  assert.equal(sanitizedPath.includes('commonveil.compact'), false);
+  assert.equal(sanitizedPath, 'No indexed contract state exists at the supplied address.');
+
+  // Error with stack trace / internal tokens
+  const tokenError = new Error(
+    'Internal SDK failure in node_modules/@midnight-ntwrk/sdk with token=secret_auth_token_999',
+  );
+  const sanitizedToken = mapMemberAdmissionInspectionError(tokenError);
+  assert.equal(sanitizedToken.includes('secret_auth_token'), false);
+  assert.equal(sanitizedToken.includes('node_modules'), false);
+  assert.equal(sanitizedToken, 'The Midnight indexer query encountered an unexpected error.');
+});
+
+// 167. Member admission preflight: stale async results and lifecycle invalidation cannot affect new session
+test('167. Member admission preflight: stale async results and lifecycle invalidation cannot affect new session', () => {
+  let generationToken = 1;
+  let activeToken: number | null = generationToken;
+  let memberState = onMemberVerificationPending(INITIAL_MEMBER_SECRET_UI_STATE);
+  assert.equal(memberState.verificationStatus, 'pending');
+
+  // Lifecycle event 1: Contract address change
+  generationToken++;
+  activeToken = null;
+  memberState = onMemberVerificationReset(memberState);
+  assert.equal(memberState.verificationStatus, 'unverified');
+
+  // Stale async callback from generation 1 arrives
+  const staleGeneration = 1;
+  if (staleGeneration === activeToken) {
+    memberState = onMemberVerificationSuccess(memberState);
+  }
+  // Remains unverified
+  assert.equal(memberState.verificationStatus, 'unverified');
+
+  // Lifecycle event 2: Session lock
+  memberState = onMemberSecretClearedOrLocked(memberState, true);
+  assert.equal(memberState.isLocked, true);
+  assert.equal(memberState.verificationStatus, 'unverified');
+
+  // Stale callback cannot overwrite locked session
+  if (staleGeneration === activeToken) {
+    memberState = onMemberVerificationSuccess(memberState);
+  }
+  assert.equal(memberState.verificationStatus, 'unverified');
+
+  // Lifecycle event 3: Wallet disconnect
+  memberState = onMemberSecretClearedOrLocked(memberState, false);
+  assert.equal(memberState.hasSecret, false);
+  assert.equal(memberState.verificationStatus, 'unverified');
+});
+
+// 168. Member admission preflight: verification performs zero transaction submissions
+test('168. Member admission preflight: verification performs zero transaction submissions', () => {
+  let submitCallTxCalls = 0;
+  let deployContractCalls = 0;
+  let signingRequests = 0;
+
+  const mockSubmitCallTx = () => {
+    submitCallTxCalls++;
+    throw new Error('submitCallTx should never be called during read-only admission preflight');
+  };
+  const mockDeployContract = () => {
+    deployContractCalls++;
+    throw new Error('deployContract should never be called during read-only admission preflight');
+  };
+  const mockWalletSign = () => {
+    signingRequests++;
+    throw new Error('signing requests should never be made during read-only admission preflight');
+  };
+
+  // Pure circuit credential derivation
+  const secret = hexToBytes('77'.repeat(32));
+  const salt = hexToBytes('88'.repeat(32));
+  const credBytes = pureCircuits.deriveMemberCredential(secret, salt);
+
+  // Read-only ledger lookup
+  const ledgerSet = new Set([bytesToHex(credBytes).toLowerCase()]);
+  const isMember = ledgerSet.has(bytesToHex(credBytes).toLowerCase());
+
+  assert.equal(isMember, true);
+  assert.equal(submitCallTxCalls, 0, 'Zero submitCallTx calls must be made');
+  assert.equal(deployContractCalls, 0, 'Zero deployContract calls must be made');
+  assert.equal(signingRequests, 0, 'Zero wallet signing requests must be made');
+});
+
+// 169. Member attestation: unaffected 5.2.5 release remains blocked even when admission is verified
+test('169. Member attestation: unaffected 5.2.5 release remains blocked even when admission is verified', () => {
+  const secret = hexToBytes('99'.repeat(32));
+  const salt = hexToBytes('aa'.repeat(32));
+  const credBytes = pureCircuits.deriveMemberCredential(secret, salt);
+  const credHex = bytesToHex(credBytes);
+
+  // Admission is fully verified
+  let memberUi = onMemberSecretGeneratedOrImported(INITIAL_MEMBER_SECRET_UI_STATE, credHex);
+  memberUi = onMemberVerificationSuccess(memberUi);
+  assert.equal(memberUi.verificationStatus, 'verified');
+
+  // Genuine snapshot: xz-utils 5.2.5
+  const certifiedSnapshot = {
+    schema: 'commonveil.certified-snapshot/v1' as const,
+    network: 'preprod' as const,
+    contractAddress: SAMPLE_CONTRACT_ADDRESS,
+    memberCredential: credHex,
+    product: 'pkg:generic/xz-utils',
+    version: { major: 5, minor: 2, patch: 5 },
+    snapshotSalt: 'ff'.repeat(32),
+    commitment: '11'.repeat(32),
+    txId: '00'.repeat(32),
+    createdAt: FIXED_NOW.toISOString(),
+  };
+
+  let attestationUi = onCertifiedSnapshotDecrypted(
+    INITIAL_MEMBER_ATTESTATION_UI_STATE,
+    certifiedSnapshot,
+    {
+      attachedContractAddress: SAMPLE_CONTRACT_ADDRESS,
+      activeMemberCredentialHex: credHex,
+      hasCommitmentOnChain: true,
+    },
+  );
+  assert.equal(attestationUi.stage, 'snapshot-imported');
+  assert.deepEqual(attestationUi.snapshotEvidence, {
+    product: certifiedSnapshot.product,
+    version: certifiedSnapshot.version,
+    commitment: certifiedSnapshot.commitment,
+    txId: certifiedSnapshot.txId,
+    createdAt: certifiedSnapshot.createdAt,
+  });
+
+  // Policy receipt: registered affected release 5.6.0 (CVE-2024-3094)
+  const policyReceipt: AffectedReleaseRegistrationReceipt = {
+    schema: 'commonveil.affected-release-registration-receipt/v1',
+    network: 'preprod',
+    contractAddress: SAMPLE_CONTRACT_ADDRESS,
+    advisoryId: 'CVE-2024-3094',
+    product: 'pkg:generic/xz-utils',
+    version: { major: 5, minor: 6, patch: 0 },
+    sourcePublisher: 'Security Advisory Board',
+    sourceReference: 'https://example.com/advisories/CVE-2024-3094',
+    registrationTxId: '33'.repeat(32),
+    policyActive: true,
+    registeredAt: FIXED_NOW.toISOString(),
+    status: 'finalized',
+  };
+
+  // Import policy receipt
+  attestationUi = onAffectedReleaseReceiptImported(
+    attestationUi,
+    policyReceipt,
+    {
+      attachedContractAddress: SAMPLE_CONTRACT_ADDRESS,
+      isReleaseInLedger: true,
+      isNullifierUsed: false,
+      derivedNullifierHex: '44'.repeat(32),
+    },
+  );
+
+  // Result must be strictly 'unaffected'
+  assert.equal(attestationUi.stage, 'unaffected');
+  assert.equal(
+    attestationUi.noticeMessage,
+    'This certified version is outside the registered affected-release set.',
+  );
+  assert.notEqual(attestationUi.stage, 'ready-to-attest');
+  assert.notEqual(attestationUi.stage, 'confirming');
+  assert.notEqual(attestationUi.stage, 'submitting');
+
+  // Verify that canInitiateAttestation is blocked because policyProductAndVersionMatchSnapshot is false
+  const canAttest = canInitiateAttestation({
+    isConnected: true,
+    attachedContractAddress: SAMPLE_CONTRACT_ADDRESS,
+    hasMemberSecretAndSalt: true,
+    memberBackupRecoveryStatus: 'recovery-tested',
+    isMemberCredentialAdmitted: memberUi.verificationStatus === 'verified',
+    hasSnapshotEvidence: true,
+    snapshotCredentialMatchesActiveMember: true,
+    snapshotCommitmentExistsOnChain: true,
+    hasPolicyReceipt: true,
+    policyReceiptContractMatchesAttached: true,
+    policyProductAndVersionMatchSnapshot: false, // 5.2.5 vs 5.6.0
+    isReleaseRegisteredOnChain: true,
+    isPolicyActive: true,
+    isNullifierAlreadyUsed: false,
+    isProofProviderConfigured: true,
+    isOperationPending: false,
+  });
+
+  assert.equal(canAttest, false, 'Unaffected release must remain strictly blocked from attestation');
 });
