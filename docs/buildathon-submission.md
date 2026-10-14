@@ -145,7 +145,7 @@ The verification pipeline checks the required tools, compiles all four Compact c
 - Repository: https://github.com/0xaje/CommonVeil
 - Demo application: **[PENDING — add verified public URL or state local-only]**
 - Demo video: **[PENDING — add public judge-accessible URL]**
-- Pitch deck: **[PENDING — add public judge-accessible URL]**
+- Pitch deck: https://github.com/0xaje/CommonVeil/blob/main/docs/pitch/CommonVeil-Midnight-Buildathon-Deck.pptx
 - Architecture: [architecture.md](architecture.md)
 - Evidence: [evidence.md](evidence.md)
 - Judge runbook: [demo-runbook.md](demo-runbook.md)
