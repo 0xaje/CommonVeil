@@ -1,6 +1,3 @@
-Warning: truncated output (original token count: 79503)
-Total output lines: 7450
-
 import { useEffect, useRef, useState } from 'react';
 import type { ConnectedWallet } from './providers';
 import { connectProviders } from './providers';
@@ -2688,7 +2685,2760 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
       const receipt: MemberAdmissionReceipt = buildMemberAdmissionReceipt({
         contractAddress: attachedAddress,
         memberCredential: credentialHex,
-        admissionTxId: admissionUi.admis…29503 tokens truncated…             </div>
+        admissionTxId: admissionUi.admissionTxId,
+      });
+
+      setAdmissionUi((prev) => onAdmissionCompleted(prev, receipt));
+      setAdmissionNotice(
+        `Member credential ${credentialHex.slice(0, 10)}… confirmed on-chain in memberCredentials set.`,
+      );
+
+      setContractState((prev) => ({
+        ...prev,
+        inspectedState: session.publicState,
+      }));
+    } catch (inspectError: unknown) {
+      if (!isMounted.current) return;
+      const errorCode =
+        inspectError instanceof ContractSessionError
+          ? inspectError.code
+          : (inspectError as { code?: string } | null)?.code;
+
+      if (errorCode === 'CONTRACT_NOT_FOUND' || errorCode === 'INDEXER_QUERY_FAILED') {
+        // Retry query failed due to lookup/lag; stay in finalized-indexing
+        return;
+      }
+
+      // Hard failure (incompatible contract or unknown error)
+      setAdmissionUi((prev) =>
+        onAdmissionFailed(prev, mapAdmissionInspectionError(inspectError)),
+      );
+    }
+  };
+
+  const handleDownloadAdmissionReceipt = () => {
+    if (!admissionUi.receipt) return;
+    try {
+      const validated = validateMemberAdmissionReceipt(admissionUi.receipt);
+      triggerBlobDownload(
+        JSON.stringify(validated, null, 2),
+        `commonveil-member-admission-receipt-${validated.admittedMemberCredential.slice(0, 10)}.json`,
+      );
+    } catch (err: unknown) {
+      setAdmissionUi((prev) =>
+        onAdmissionFailed(prev, 'Could not create valid admission receipt.'),
+      );
+    }
+  };
+
+  const publicState: CommonVeilPublicState | null = contractState.inspectedState;
+
+  const memberCertRequestPrereqs = checkCertificationRequestPrerequisites({
+    isConnected: !!wallet,
+    attachedContractAddress: contractState.attachedAddress,
+    hasSecret: memberUi.hasSecret,
+    hasSalt: !!plaintextMemberSaltRef.current,
+    memberCredentialHex: memberUi.memberCredentialHex,
+    backupRecoveryStatus: memberUi.backupRecoveryStatus,
+    importedInventory: memberInventoryUi.importedReport,
+  });
+
+  const canExportRequest = canExportCertificationRequest({
+    isConnected: !!wallet,
+    attachedContractAddress: contractState.attachedAddress,
+    hasSecret: memberUi.hasSecret,
+    hasSalt: !!plaintextMemberSaltRef.current,
+    memberCredentialHex: memberUi.memberCredentialHex,
+    backupRecoveryStatus: memberUi.backupRecoveryStatus,
+    importedInventory: memberInventoryUi.importedReport,
+  });
+
+  // ── CV-009 Certifier Certification prerequisites ──────────────────────────
+  const isCertifying =
+    certificationUi.stage === 'requesting-wallet' ||
+    certificationUi.stage === 'submitting' ||
+    certificationUi.stage === 'finalized-indexing';
+
+  const certifierCertificationPrereqs = checkCertifierCertificationPrerequisites({
+    isConnected: !!wallet,
+    attachedContractAddress: contractState.attachedAddress,
+    hasCertifierSecret: certifierUi.hasSecret,
+    certifierBackupRecoveryStatus: certifierUi.backupRecoveryStatus,
+    certifierVerificationStatus: certifierUi.verificationStatus,
+    importedRequest: certificationUi.importedRequest,
+    isMemberAdmitted: certPreflightMemberAdmitted,
+    isProofProviderConfigured: !!wallet?.providers,
+    isOperationPending: isCertifying,
+    policyActive: publicState?.policyActive ?? false,
+  });
+
+  const canCertify = certifierCertificationPrereqs.length === 0;
+
+  // ── CV-009: Import certification request file ─────────────────────────────
+  const handleCertificationRequestFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    try {
+      const text = await file.text();
+      let raw: unknown;
+      try {
+        raw = JSON.parse(text);
+      } catch {
+        throw new Error('File content is not valid JSON.');
+      }
+      const pkg = await validateCertificationRequestPackage(raw);
+      setCertificationUi((prev) =>
+        onCertificationRequestImported(
+          prev,
+          pkg,
+          contractState.attachedAddress,
+          certifierUi.verificationStatus,
+        ),
+      );
+      setCertificationNotice(null);
+
+      // Perform preflight admitted member query immediately if connected & attached
+      if (wallet?.providers && contractState.attachedAddress) {
+        try {
+          const preflightSession = await queryCommonVeilContract(
+            wallet.providers,
+            contractState.attachedAddress,
+          );
+          const credBytes = hexToBytes(pkg.memberCredential);
+          setCertPreflightMemberAdmitted(preflightSession.hasMemberCredential(credBytes));
+        } catch {
+          setCertPreflightMemberAdmitted(null);
+        }
+      } else {
+        setCertPreflightMemberAdmitted(null);
+      }
+    } catch (err: unknown) {
+      const sanitized = sanitizeCertificationImportError(err);
+      setCertificationUi((prev) =>
+        onCertificationFailed({ ...prev, importedRequest: null }, sanitized),
+      );
+    } finally {
+      if (e.target) {
+        e.target.value = '';
+      }
+      if (certificationRequestInputRef.current) {
+        certificationRequestInputRef.current.value = '';
+      }
+    }
+  };
+
+  // ── CV-009: Initiate certifyInventory circuit ─────────────────────────────
+  const handleInitiateCertification = async () => {
+    setCertificationNotice(null);
+
+    if (
+      !wallet ||
+      !contractState.attachedAddress ||
+      !plaintextCertifierSecretRef.current ||
+      !certificationUi.importedRequest ||
+      (certificationUi.stage !== 'confirming' && certificationUi.stage !== 'reviewing')
+    ) {
+      return;
+    }
+
+    const attachedAddress = contractState.attachedAddress;
+    const pkg = certificationUi.importedRequest;
+    const certifierSecretBytes = plaintextCertifierSecretRef.current;
+    const credentialHex = pkg.memberCredential;
+
+    // Pre-flight: verify member credential is actually admitted on-chain
+    let isMemberAdmitted: boolean | null = null;
+    try {
+      const preflightSession = await queryCommonVeilContract(wallet.providers, attachedAddress);
+      const credentialBytes = hexToBytes(credentialHex);
+      isMemberAdmitted = preflightSession.hasMemberCredential(credentialBytes);
+    } catch {
+      // Indexer lag: proceed cautiously; the circuit will reject if truly not admitted
+      isMemberAdmitted = null;
+    }
+
+    if (isMemberAdmitted === false) {
+      setCertificationUi((prev) =>
+        onCertificationFailed(
+          prev,
+          CERTIFICATION_VERIFICATION_ERROR_MESSAGES.MEMBER_NOT_ADMITTED,
+        ),
+      );
+      return;
+    }
+
+    // Generate ephemeral snapshot salt — volatile memory only, zeroized on cleanup
+    const snapshotSalt = crypto.getRandomValues(new Uint8Array(32));
+    zeroizeBytes(snapshotSaltRef.current);
+    snapshotSaltRef.current = snapshotSalt;
+
+    const operationToken = ++certificationGenerationRef.current;
+    activeCertificationTokenRef.current = operationToken;
+
+    const logCertDiagnostic = (stage: string, detail?: { errorClass?: string; errorMessage?: string }) => {
+      if (typeof window !== 'undefined' && (window as unknown as { __COMMONVEIL_DEV__?: boolean }).__COMMONVEIL_DEV__) {
+        console.debug(`[certify:${stage}]`, detail ?? '');
+      }
+    };
+
+    logCertDiagnostic('prereqs-validated');
+    setCertificationUi((prev) => {
+      const confirming = prev.stage === 'reviewing' ? onCertificationConfirmationOpen(prev) : prev;
+      return onCertificationWalletRequest(confirming);
+    });
+
+    try {
+      setCertificationUi((prev) => onCertificationSubmitting(prev));
+
+      const credentialBytes = hexToBytes(credentialHex);
+
+      // productDigest: SHA-256("commonveil:product:v1:" + label) → 32 bytes ProductId
+      const productIdBytes = await productDigest(pkg.product);
+
+      logCertDiagnostic('circuit-invoke-start');
+
+      // Call genuine certifyInventory circuit via installed Midnight SDK.
+      // CommonVeil has vacant witness private state (Contract<undefined>).
+      // We omit privateStateId to invoke getContractPublicStates and avoid
+      // querying uninitialized private state store before proving.
+      const finalized = await submitCallTx(
+        wallet.providers,
+        {
+          compiledContract: CompiledCommonVeilContract,
+          contractAddress: attachedAddress,
+          circuitId: 'certifyInventory',
+          // certifyInventory(certifierSecret, credential, productId, major, minor, patch, snapshotSalt)
+          args: [
+            certifierSecretBytes,
+            credentialBytes,
+            productIdBytes,
+            BigInt(pkg.version.major),
+            BigInt(pkg.version.minor),
+            BigInt(pkg.version.patch),
+            snapshotSalt,
+          ],
+        },
+      );
+
+      logCertDiagnostic('circuit-finalized');
+
+      if (!isMounted.current || activeCertificationTokenRef.current !== operationToken) {
+        return;
+      }
+
+      // Extract genuine transaction ID from SDK FinalizedTxData
+      const rawTxId: unknown = finalized.public.txId;
+      if (!isCanonicalTransactionId(rawTxId)) {
+        throw new Error('Finalized transaction data missing canonical transaction ID');
+      }
+      const txId: string = rawTxId;
+
+      // Derive commitment exactly using CommonVeil pureCircuits.deriveInventoryCommitment
+      const derivedCommitmentBytes = CommonVeil.pureCircuits.deriveInventoryCommitment(
+        credentialBytes,
+        productIdBytes,
+        BigInt(pkg.version.major),
+        BigInt(pkg.version.minor),
+        BigInt(pkg.version.patch),
+        snapshotSalt,
+      );
+      const commitmentHex: string = bytesToHex(derivedCommitmentBytes);
+
+      // Store commitment in volatile ref for use by envelope export
+      certificationCommitmentRef.current = commitmentHex;
+
+      // Automatically inspect public ledger to verify inventoryCommitments contains commitment
+      try {
+        logCertDiagnostic('inspect-ledger-start');
+        const session = await queryCommonVeilContract(wallet.providers, attachedAddress);
+        if (!isMounted.current || activeCertificationTokenRef.current !== operationToken) {
+          return;
+        }
+
+        const commitmentBytes = hexToBytes(commitmentHex);
+        const isCommitted = session.hasInventoryCommitment(commitmentBytes);
+
+        if (!isCommitted) {
+          logCertDiagnostic('ledger-indexing-lag');
+          setCertificationUi((prev) => onCertificationFinalizedIndexing(prev, txId));
+          return;
+        }
+
+        // Build certifier key hex from the on-chain certifier key (32 bytes)
+        const certifierKeyHex = bytesToHex(
+          CommonVeil.pureCircuits.deriveCertifierKey(certifierSecretBytes),
+        );
+
+        const receipt = buildInventoryCertificationReceipt({
+          contractAddress: attachedAddress,
+          certifierKey: certifierKeyHex,
+          memberCredential: credentialHex,
+          commitment: commitmentHex,
+          certificationTxId: txId,
+        });
+
+        activeCertificationTokenRef.current = null;
+        logCertDiagnostic('certification-confirmed');
+        setCertificationUi((prev) => onCertificationCompleted(prev, receipt));
+        setCertificationNotice(
+          `Inventory commitment ${commitmentHex.slice(0, 10)}… certified on Midnight Preprod.`,
+        );
+
+        setContractState((prev) => ({
+          ...prev,
+          inspectedState: session.publicState,
+        }));
+      } catch (inspectError: unknown) {
+        if (!isMounted.current || activeCertificationTokenRef.current !== operationToken) {
+          return;
+        }
+
+        const errorCode =
+          inspectError instanceof ContractSessionError
+            ? inspectError.code
+            : (inspectError as { code?: string } | null)?.code;
+
+        logCertDiagnostic('inspect-ledger-error', {
+          errorClass: inspectError instanceof Error ? inspectError.name : typeof inspectError,
+          errorMessage: inspectError instanceof Error ? inspectError.message : String(inspectError),
+        });
+
+        if (errorCode === 'CONTRACT_NOT_FOUND' || errorCode === 'INDEXER_QUERY_FAILED') {
+          setCertificationUi((prev) => onCertificationFinalizedIndexing(prev, txId));
+        } else {
+          activeCertificationTokenRef.current = null;
+          setCertificationUi((prev) =>
+            onCertificationFailed(prev, mapCertificationInspectionError(inspectError)),
+          );
+        }
+      }
+    } catch (certError: unknown) {
+      if (!isMounted.current || activeCertificationTokenRef.current !== operationToken) {
+        return;
+      }
+      activeCertificationTokenRef.current = null;
+
+      logCertDiagnostic('circuit-invoke-error', {
+        errorClass: certError instanceof Error ? certError.name : typeof certError,
+        errorMessage: certError instanceof Error ? certError.message : String(certError),
+      });
+
+      const raw = (certError instanceof Error
+        ? certError.message
+        : typeof certError === 'string'
+          ? certError
+          : ''
+      ).toLowerCase();
+
+      if (
+        raw.includes('cancel') ||
+        raw.includes('reject') ||
+        raw.includes('denied') ||
+        raw.includes('declined') ||
+        raw.includes('user aborted')
+      ) {
+        setCertificationUi((prev) =>
+          onCertificationFailed(prev, 'Inventory certification transaction was cancelled in 1AM.', true),
+        );
+      } else {
+        setCertificationUi((prev) => onCertificationFailed(prev, mapCertificationError(certError)));
+      }
+    }
+  };
+
+  // ── CV-009: Retry commitment verification after indexer lag ───────────────
+  const handleRetryCommitmentVerification = async () => {
+    if (
+      certificationUi.stage !== 'finalized-indexing' ||
+      !wallet ||
+      !contractState.attachedAddress ||
+      !certificationCommitmentRef.current ||
+      !certificationUi.importedRequest ||
+      !plaintextCertifierSecretRef.current
+    ) {
+      return;
+    }
+
+    const attachedAddress = contractState.attachedAddress;
+    const commitmentHex = certificationCommitmentRef.current;
+    const pkg = certificationUi.importedRequest;
+    const certifierKeyHex = bytesToHex(
+      CommonVeil.pureCircuits.deriveCertifierKey(plaintextCertifierSecretRef.current),
+    );
+
+    try {
+      const session = await queryCommonVeilContract(wallet.providers, attachedAddress);
+      if (!isMounted.current) return;
+
+      const commitmentBytes = hexToBytes(commitmentHex);
+      const isCommitted = session.hasInventoryCommitment(commitmentBytes);
+
+      if (!isCommitted) {
+        // Still not indexed — stay in finalized-indexing
+        setCertificationNotice('Indexer has not yet reflected the certified commitment. Check again shortly.');
+        return;
+      }
+
+      const receipt = buildInventoryCertificationReceipt({
+        contractAddress: attachedAddress,
+        certifierKey: certifierKeyHex,
+        memberCredential: pkg.memberCredential,
+        commitment: commitmentHex,
+        certificationTxId: certificationUi.certificationTxId,
+      });
+
+      setCertificationUi((prev) => onCertificationCompleted(prev, receipt));
+      setCertificationNotice(
+        `Inventory commitment ${commitmentHex.slice(0, 10)}… confirmed in on-chain inventoryCommitments set.`,
+      );
+      setContractState((prev) => ({
+        ...prev,
+        inspectedState: session.publicState,
+      }));
+    } catch (err: unknown) {
+      if (!isMounted.current) return;
+      const errorCode =
+        err instanceof ContractSessionError
+          ? err.code
+          : (err as { code?: string } | null)?.code;
+
+      if (errorCode !== 'CONTRACT_NOT_FOUND' && errorCode !== 'INDEXER_QUERY_FAILED') {
+        setCertificationUi((prev) =>
+          onCertificationFailed(prev, mapCertificationInspectionError(err)),
+        );
+      }
+      // else: still lagging, stay in finalized-indexing
+    }
+  };
+
+  // ── CV-009: Export encrypted certified snapshot envelope ──────────────────
+  const handleExportCertifiedSnapshot = async () => {
+    if (
+      !certificationUi.importedRequest ||
+      !snapshotSaltRef.current ||
+      !certificationCommitmentRef.current ||
+      !certificationUi.certificationTxId
+    ) {
+      return;
+    }
+
+    const val = validatePasswordConfirmation(certSnapshotPassphrase, certSnapshotConfirmPassphrase);
+    if (!val.valid) {
+      setCertificationNotice(val.error);
+      return;
+    }
+
+    if (hasPasswordWhitespaceWarning(certSnapshotPassphrase) && !ackWhitespaceCertSnapshot) {
+      setCertificationNotice('Please acknowledge the leading or trailing whitespace warning before exporting snapshot.');
+      return;
+    }
+
+    const pkg = certificationUi.importedRequest;
+    const snapshotSaltHex = bytesToHex(snapshotSaltRef.current);
+
+    try {
+      const snapshot = buildCertifiedSnapshotPackage({
+        contractAddress: pkg.contractAddress,
+        memberCredential: pkg.memberCredential,
+        product: pkg.product,
+        version: pkg.version,
+        snapshotSalt: snapshotSaltHex,
+        commitment: certificationCommitmentRef.current,
+        txId: certificationUi.certificationTxId,
+      });
+
+      const envelope = await encryptToEnvelope(snapshot, certSnapshotPassphrase);
+
+      // Pre-download validation: verify envelope decrypts with exact passphrase in memory
+      const restored = await decryptAndValidateEnvelope(
+        envelope,
+        certSnapshotPassphrase,
+        validateCertifiedSnapshotPackage,
+      );
+      if (restored.schema !== 'commonveil.certified-snapshot/v1') {
+        throw new Error('Encrypted envelope self-test failed');
+      }
+
+      triggerBlobDownload(
+        JSON.stringify(envelope, null, 2),
+        `commonveil-certified-snapshot-${pkg.memberCredential.slice(0, 10)}.enc.json`,
+      );
+      setCertSnapshotPassphrase('');
+      setCertSnapshotConfirmPassphrase('');
+      setAckWhitespaceCertSnapshot(false);
+      setCertificationUi((prev) => onSnapshotExported(prev));
+      setCertificationNotice(
+        'Certified snapshot envelope downloaded. Test the downloaded envelope below to complete recovery verification.',
+      );
+    } catch {
+      setCertificationNotice('Certified snapshot export failed. Check passphrase and try again.');
+    }
+  };
+
+  // ── CV-009: Downloaded-file recovery testing for certified snapshot ────────
+  const handleCertSnapshotTestFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setCertificationNotice(null);
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const content = event.target?.result;
+      if (typeof content === 'string') {
+        setCertSnapshotTestFileContent(content);
+        setCertificationNotice('Downloaded snapshot envelope loaded. Enter passphrase to test recovery.');
+      }
+    };
+    reader.onerror = () => {
+      setCertificationNotice('Could not read the selected snapshot file.');
+    };
+    reader.readAsText(file);
+  };
+
+  const handleTestDownloadedCertSnapshot = async () => {
+    setCertificationNotice(null);
+    if (!certSnapshotTestFileContent) {
+      setCertificationNotice('The selected file is not a valid CommonVeil encrypted snapshot envelope.');
+      return;
+    }
+    if (!certificationUi.importedRequest || !certificationCommitmentRef.current || !certificationUi.certificationTxId) {
+      setCertificationNotice('No active certification in memory to verify recovery against.');
+      return;
+    }
+    if (certSnapshotTestPassphrase.length < 12) {
+      setCertificationNotice('Snapshot recovery passphrase must be at least 12 characters.');
+      return;
+    }
+
+    const pkg = certificationUi.importedRequest;
+    const expectedCommitment = certificationCommitmentRef.current;
+    const expectedTxId = certificationUi.certificationTxId;
+    const operationToken = ++snapshotRecoveryGenerationRef.current;
+    activeSnapshotRecoveryTokenRef.current = operationToken;
+
+    try {
+      let parsedEnvelope: unknown;
+      try {
+        parsedEnvelope = JSON.parse(certSnapshotTestFileContent);
+      } catch {
+        throw new Error('The selected file is not a valid CommonVeil encrypted snapshot envelope.');
+      }
+
+      const restored = await decryptAndValidateEnvelope(
+        parsedEnvelope as EncryptedEnvelope,
+        certSnapshotTestPassphrase,
+        validateCertifiedSnapshotPackage,
+      );
+
+      if (!isMounted.current || activeSnapshotRecoveryTokenRef.current !== operationToken) {
+        return;
+      }
+      activeSnapshotRecoveryTokenRef.current = null;
+
+      // Strict match against active finalized certification parameters
+      if (restored.contractAddress.toLowerCase().trim() !== pkg.contractAddress.toLowerCase().trim()) {
+        throw new Error('Recovery test failed: snapshot contract address does not match active certified contract.');
+      }
+      if (restored.memberCredential.toLowerCase().trim() !== pkg.memberCredential.toLowerCase().trim()) {
+        throw new Error('Recovery test failed: snapshot member credential does not match active certified member.');
+      }
+      if (restored.product.trim() !== pkg.product.trim()) {
+        throw new Error('Recovery test failed: snapshot product does not match active certified product.');
+      }
+      if (
+        restored.version.major !== pkg.version.major ||
+        restored.version.minor !== pkg.version.minor ||
+        restored.version.patch !== pkg.version.patch
+      ) {
+        throw new Error('Recovery test failed: snapshot version tuple does not match active certified version.');
+      }
+      if (restored.commitment.toLowerCase().trim() !== expectedCommitment.toLowerCase().trim()) {
+        throw new Error('Recovery test failed: snapshot commitment does not match on-chain certified commitment.');
+      }
+      if (restored.txId.toLowerCase().trim() !== expectedTxId.toLowerCase().trim()) {
+        throw new Error('Recovery test failed: snapshot transaction ID does not match finalized certification txId.');
+      }
+
+      setCertificationUi((prev) => onSnapshotRecoveryTested(prev));
+      setCertSnapshotTestPassphrase('');
+      setCertSnapshotTestFileContent(null);
+      if (certSnapshotTestInputRef.current) {
+        certSnapshotTestInputRef.current.value = '';
+      }
+      setCertificationNotice('Downloaded certified snapshot successfully tested and verified! Recovery Tested ✔');
+    } catch (err: unknown) {
+      if (!isMounted.current || activeSnapshotRecoveryTokenRef.current !== operationToken) {
+        return;
+      }
+      activeSnapshotRecoveryTokenRef.current = null;
+      const msg = err instanceof Error ? err.message : String(err);
+      setCertificationNotice(`Snapshot recovery test failed: ${msg.slice(0, 150)}`);
+    }
+  };
+
+  // ── CV-009: Download public certification receipt ─────────────────────────
+  const handleDownloadCertificationReceipt = () => {
+    if (!certificationUi.receipt) return;
+    try {
+      triggerBlobDownload(
+        JSON.stringify(certificationUi.receipt, null, 2),
+        `commonveil-certification-receipt-${certificationUi.receipt.commitment.slice(0, 10)}.json`,
+      );
+    } catch {
+      setCertificationNotice('Could not create valid certification receipt.');
+    }
+  };
+
+  // ── CV-010: Affected Release & Policy Activation Prerequisites ───────────
+  const registrarAffectedReleasePrereqs = checkRegistrarAffectedReleasePrerequisites({
+    isConnected: !!wallet,
+    attachedContractAddress: contractState.attachedAddress,
+    hasRegistrarSecret: registrarUi.hasSecret,
+    registrarBackupRecoveryStatus: registrarUi.backupRecoveryStatus,
+    registrarVerificationStatus: registrarUi.verificationStatus,
+    importedPolicy: affectedReleaseUi.importedPolicy,
+    isReleaseAlreadyRegistered: null,
+    isProofProviderConfigured: !!wallet?.providers,
+    isOperationPending: isRegisteringAffected,
+  });
+
+  const canRegisterAffectedRelease = canInitiateAffectedReleaseRegistration({
+    isConnected: !!wallet,
+    attachedContractAddress: contractState.attachedAddress,
+    hasRegistrarSecret: registrarUi.hasSecret,
+    registrarBackupRecoveryStatus: registrarUi.backupRecoveryStatus,
+    registrarVerificationStatus: registrarUi.verificationStatus,
+    importedPolicy: affectedReleaseUi.importedPolicy,
+    isReleaseAlreadyRegistered: null,
+    isProofProviderConfigured: !!wallet?.providers,
+    isOperationPending: isRegisteringAffected,
+  });
+
+  // ── CV-010: File selection and import of affected release policy package ───
+  const handleAffectedPolicyFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    try {
+      const text = await file.text();
+      const raw = JSON.parse(text);
+      const pkg = validateAffectedReleasePolicyPackage(raw);
+      setAffectedReleaseUi((prev) =>
+        onAffectedReleasePolicyImported(prev, pkg, contractState.attachedAddress),
+      );
+      setAffectedReleaseNotice(null);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setAffectedReleaseUi((prev) =>
+        onAffectedReleaseFailed(prev, `Invalid affected-release policy package: ${msg.slice(0, 140)}`),
+      );
+    }
+  };
+
+  // ── CV-010: Builder export for affected release policy package ─────────────
+  const handleBuildAndExportPolicy = () => {
+    if (!contractState.attachedAddress) {
+      setAffectedReleaseNotice('Please attach a CommonVeil contract before generating an affected release policy package.');
+      return;
+    }
+    const major = parseInt(policyMajorInput.trim(), 10);
+    const minor = parseInt(policyMinorInput.trim(), 10);
+    const patch = parseInt(policyPatchInput.trim(), 10);
+    if (isNaN(major) || isNaN(minor) || isNaN(patch) || major < 0 || minor < 0 || patch < 0) {
+      setAffectedReleaseNotice('Release version must consist of non-negative integers (major, minor, patch).');
+      return;
+    }
+
+    try {
+      const pkg = buildAffectedReleasePolicyPackage({
+        contractAddress: contractState.attachedAddress,
+        advisoryId: policyAdvisoryInput.trim(),
+        product: policyProductInput.trim(),
+        version: { major, minor, patch },
+        sourcePublisher: policyPublisherInput.trim(),
+        sourceReference: policyRefInput.trim(),
+        sourcePublicationDate: policyPubDateInput.trim(),
+      });
+      triggerBlobDownload(
+        JSON.stringify(pkg, null, 2),
+        `commonveil-affected-policy-${pkg.advisoryId.toLowerCase()}-${pkg.version.major}.${pkg.version.minor}.${pkg.version.patch}.json`,
+      );
+      setAffectedReleaseUi((prev) =>
+        onAffectedReleasePolicyImported(prev, pkg, contractState.attachedAddress),
+      );
+      setAffectedReleaseNotice(
+        `Generated and loaded affected-release policy for ${pkg.advisoryId} on ${pkg.product} ${pkg.version.major}.${pkg.version.minor}.${pkg.version.patch}.`,
+      );
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setAffectedReleaseNotice(`Policy creation rejected: ${msg}`);
+    }
+  };
+
+  const handleOpenAffectedReleaseConfirmation = () => {
+    setAffectedReleaseNotice(null);
+    setAffectedReleaseUi((prev) => onAffectedReleaseConfirmationOpen(prev));
+  };
+
+  const handleDismissAffectedReleaseConfirmation = () => {
+    setAffectedReleaseUi((prev) => onAffectedReleaseConfirmationDismissed(prev));
+  };
+
+  // ── CV-010: Initiate registerAffectedRelease on Midnight Preprod ───────────
+  const handleConfirmAndRegisterAffectedRelease = async () => {
+    setAffectedReleaseNotice(null);
+
+    if (
+      !wallet ||
+      !contractState.attachedAddress ||
+      !plaintextSecretRef.current ||
+      !affectedReleaseUi.importedPolicy ||
+      affectedReleaseUi.stage !== 'confirming'
+    ) {
+      return;
+    }
+
+    const attachedAddress = contractState.attachedAddress;
+    const pkg = affectedReleaseUi.importedPolicy;
+    const adminSecretBytes = plaintextSecretRef.current;
+
+    // Check authority against attached contract
+    if (registrarUi.verificationStatus !== 'verified') {
+      setAffectedReleaseUi((prev) =>
+        onAffectedReleaseFailed(
+          prev,
+          'Registrar authority must be verified against the attached contract before registering affected releases.',
+        ),
+      );
+      return;
+    }
+
+    // Verify contract address matches attached contract
+    if (pkg.contractAddress.toLowerCase().trim() !== attachedAddress.toLowerCase().trim()) {
+      setAffectedReleaseUi((prev) =>
+        onAffectedReleaseFailed(
+          prev,
+          'Policy package contract address does not match the attached contract.',
+        ),
+      );
+      return;
+    }
+
+    // Compute advisoryId (32 bytes) and productId (32 bytes)
+    let advisoryIdBytes: Uint8Array;
+    let productIdBytes: Uint8Array;
+    let releaseIdBytes: Uint8Array;
+    try {
+      advisoryIdBytes = await advisoryDigest(pkg.advisoryId);
+      productIdBytes = await productDigest(pkg.product);
+      releaseIdBytes = CommonVeil.pureCircuits.deriveReleaseId(
+        advisoryIdBytes,
+        productIdBytes,
+        BigInt(pkg.version.major),
+        BigInt(pkg.version.minor),
+        BigInt(pkg.version.patch),
+      );
+    } catch (digestErr: unknown) {
+      const msg = digestErr instanceof Error ? digestErr.message : String(digestErr);
+      setAffectedReleaseUi((prev) =>
+        onAffectedReleaseFailed(prev, `Failed to derive release digests: ${msg}`),
+      );
+      return;
+    }
+
+    // Pre-flight check: query whether release is already registered on-chain
+    try {
+      const preflightSession = await queryCommonVeilContract(wallet.providers, attachedAddress);
+      if (preflightSession.hasAffectedRelease(releaseIdBytes)) {
+        setAffectedReleaseUi((prev) =>
+          onAffectedReleaseFailed(
+            prev,
+            'This exact release is already registered on-chain in affectedReleases.',
+          ),
+        );
+        return;
+      }
+    } catch {
+      // Proceed cautiously if indexer is lagging; circuit will assert if duplicate
+    }
+
+    // Capture unique registration generation token
+    const operationToken = ++regAffectedGenerationRef.current;
+    activeRegAffectedTokenRef.current = operationToken;
+
+    const logRegDiagnostic = (stage: string, detail?: { errorClass?: string; errorMessage?: string }) => {
+      if (typeof window !== 'undefined' && (window as unknown as { __COMMONVEIL_DEV__?: boolean }).__COMMONVEIL_DEV__) {
+        console.debug(`[affected-release:${stage}]`, detail ?? '');
+      }
+    };
+
+    logRegDiagnostic('prereqs-validated');
+    setAffectedReleaseUi((prev) => onAffectedReleaseWalletRequest(prev));
+
+    try {
+      setAffectedReleaseUi((prev) => onAffectedReleaseSubmitting(prev));
+
+      logRegDiagnostic('circuit-invoke-start');
+
+      // Call genuine registerAffectedRelease circuit via installed Midnight SDK.
+      // Signature: (context, adminSecret_0, advisoryId_0, productId_0, major_0, minor_0, patch_0)
+      // Vacant witness private state -> omit privateStateId.
+      const finalized = await submitCallTx(
+        wallet.providers,
+        {
+          compiledContract: CompiledCommonVeilContract,
+          contractAddress: attachedAddress,
+          circuitId: 'registerAffectedRelease',
+          args: [
+            adminSecretBytes,
+            advisoryIdBytes,
+            productIdBytes,
+            BigInt(pkg.version.major),
+            BigInt(pkg.version.minor),
+            BigInt(pkg.version.patch),
+          ],
+        },
+      );
+
+      logRegDiagnostic('circuit-finalized');
+
+      if (!isMounted.current || activeRegAffectedTokenRef.current !== operationToken) {
+        return;
+      }
+
+      // Extract genuine transaction ID from SDK FinalizedTxData (canonical 64 or 66 hex TransactionId)
+      const rawTxId: unknown = finalized.public.txId;
+      if (!isCanonicalTransactionId(rawTxId)) {
+        throw new Error('Finalized transaction data missing valid canonical hexadecimal transaction ID');
+      }
+      const txId: string = rawTxId;
+
+      // Automatically inspect public ledger to verify affectedReleases and policyActive
+      try {
+        logRegDiagnostic('inspect-ledger-start');
+        const session = await queryCommonVeilContract(wallet.providers, attachedAddress);
+        if (!isMounted.current || activeRegAffectedTokenRef.current !== operationToken) {
+          return;
+        }
+
+        const isRegistered = session.hasAffectedRelease(releaseIdBytes);
+        if (!isRegistered || !session.publicState.policyActive) {
+          logRegDiagnostic('ledger-indexing-lag');
+          // Finalized on-chain, but indexer ledger not yet reflecting it - preserve txId
+          setAffectedReleaseUi((prev) => onAffectedReleaseFinalizedIndexing(prev, txId));
+          return;
+        }
+
+        const receipt: AffectedReleaseRegistrationReceipt = buildAffectedReleaseRegistrationReceipt({
+          contractAddress: attachedAddress,
+          advisoryId: pkg.advisoryId,
+          product: pkg.product,
+          version: pkg.version,
+          sourcePublisher: pkg.sourcePublisher,
+          sourceReference: pkg.sourceReference,
+          registrationTxId: txId,
+          policyActive: true,
+        });
+
+        activeRegAffectedTokenRef.current = null;
+        logRegDiagnostic('registration-confirmed');
+        setAffectedReleaseUi((prev) => onAffectedReleaseCompleted(prev, receipt));
+        setAffectedReleaseNotice(
+          `Affected release ${pkg.product} ${pkg.version.major}.${pkg.version.minor}.${pkg.version.patch} for ${pkg.advisoryId} registered on Midnight Preprod. Policy is now ACTIVE.`,
+        );
+
+        // Update public contract state display
+        setContractState((prev) => ({
+          ...prev,
+          inspectedState: session.publicState,
+        }));
+      } catch (inspectError: unknown) {
+        if (!isMounted.current || activeRegAffectedTokenRef.current !== operationToken) {
+          return;
+        }
+
+        const errorCode =
+          inspectError instanceof ContractSessionError
+            ? inspectError.code
+            : (inspectError as { code?: string } | null)?.code;
+
+        logRegDiagnostic('inspect-ledger-error', {
+          errorClass: inspectError instanceof Error ? inspectError.name : typeof inspectError,
+          errorMessage: inspectError instanceof Error ? inspectError.message : String(inspectError),
+        });
+
+        if (errorCode === 'CONTRACT_NOT_FOUND' || errorCode === 'INDEXER_QUERY_FAILED') {
+          // Indexer query lag after finalization: transition to finalized-indexing preserving genuine txId
+          setAffectedReleaseUi((prev) => onAffectedReleaseFinalizedIndexing(prev, txId));
+        } else {
+          activeRegAffectedTokenRef.current = null;
+          setAffectedReleaseUi((prev) =>
+            onAffectedReleaseFailed(prev, mapAffectedReleaseInspectionError(inspectError)),
+          );
+        }
+      }
+    } catch (regError: unknown) {
+      if (!isMounted.current || activeRegAffectedTokenRef.current !== operationToken) {
+        return;
+      }
+      activeRegAffectedTokenRef.current = null;
+
+      logRegDiagnostic('circuit-invoke-error', {
+        errorClass: regError instanceof Error ? regError.name : typeof regError,
+        errorMessage: regError instanceof Error ? regError.message : String(regError),
+      });
+
+      const raw = (
+        regError instanceof Error
+          ? regError.message
+          : typeof regError === 'string'
+            ? regError
+            : ''
+      ).toLowerCase();
+
+      if (
+        raw.includes('cancel') ||
+        raw.includes('reject') ||
+        raw.includes('denied') ||
+        raw.includes('declined') ||
+        raw.includes('user aborted')
+      ) {
+        setAffectedReleaseUi((prev) =>
+          onAffectedReleaseFailed(prev, 'Affected release registration transaction was cancelled in 1AM.'),
+        );
+      } else {
+        setAffectedReleaseUi((prev) =>
+          onAffectedReleaseFailed(prev, mapAffectedReleaseRegistrationError(regError)),
+        );
+      }
+    }
+  };
+
+  // ── CV-010: Read-only indexer retry for affected release registration ─────
+  const handleRetryAffectedReleaseVerification = async () => {
+    if (
+      !wallet ||
+      !contractState.attachedAddress ||
+      !affectedReleaseUi.importedPolicy ||
+      affectedReleaseUi.stage !== 'finalized-indexing'
+    ) {
+      return;
+    }
+
+    const attachedAddress = contractState.attachedAddress;
+    const pkg = affectedReleaseUi.importedPolicy;
+
+    try {
+      const advisoryIdBytes = await advisoryDigest(pkg.advisoryId);
+      const productIdBytes = await productDigest(pkg.product);
+      const releaseIdBytes = CommonVeil.pureCircuits.deriveReleaseId(
+        advisoryIdBytes,
+        productIdBytes,
+        BigInt(pkg.version.major),
+        BigInt(pkg.version.minor),
+        BigInt(pkg.version.patch),
+      );
+
+      const session = await queryCommonVeilContract(wallet.providers, attachedAddress);
+      if (!isMounted.current) return;
+
+      const isRegistered = session.hasAffectedRelease(releaseIdBytes);
+      if (!isRegistered || !session.publicState.policyActive) {
+        // Still not indexed; keep finalized-indexing without resubmitting transaction
+        setAffectedReleaseNotice('Indexer has not yet reflected the affected release registration. Check again shortly.');
+        return;
+      }
+
+      const receipt = buildAffectedReleaseRegistrationReceipt({
+        contractAddress: attachedAddress,
+        advisoryId: pkg.advisoryId,
+        product: pkg.product,
+        version: pkg.version,
+        sourcePublisher: pkg.sourcePublisher,
+        sourceReference: pkg.sourceReference,
+        registrationTxId: affectedReleaseUi.registrationTxId,
+        policyActive: session.publicState.policyActive,
+      });
+
+      setAffectedReleaseUi((prev) => onAffectedReleaseCompleted(prev, receipt));
+      setAffectedReleaseNotice(
+        `Affected release registration confirmed on-chain in affectedReleases set. Policy is active.`,
+      );
+
+      setContractState((prev) => ({
+        ...prev,
+        inspectedState: session.publicState,
+      }));
+    } catch (inspectError: unknown) {
+      if (!isMounted.current) return;
+      const errorCode =
+        inspectError instanceof ContractSessionError
+          ? inspectError.code
+          : (inspectError as { code?: string } | null)?.code;
+
+      if (errorCode === 'CONTRACT_NOT_FOUND' || errorCode === 'INDEXER_QUERY_FAILED') {
+        // Retry query failed due to lookup/lag; stay in finalized-indexing
+        return;
+      }
+
+      setAffectedReleaseUi((prev) =>
+        onAffectedReleaseFailed(prev, mapAffectedReleaseInspectionError(inspectError)),
+      );
+    }
+  };
+
+  // ── CV-010: Download affected release registration receipt ────────────────
+  const handleDownloadAffectedReleaseReceipt = () => {
+    if (!affectedReleaseUi.receipt) return;
+    try {
+      const validated = validateAffectedReleaseRegistrationReceipt(affectedReleaseUi.receipt);
+      triggerBlobDownload(
+        JSON.stringify(validated, null, 2),
+        `commonveil-affected-release-receipt-${validated.advisoryId.toLowerCase()}-${validated.version.major}.${validated.version.minor}.${validated.version.patch}.json`,
+      );
+    } catch {
+      setAffectedReleaseNotice('Could not create valid affected release registration receipt.');
+    }
+  };
+
+  const handleResetAffectedRelease = () => {
+    resetAffectedReleaseState(false);
+  };
+
+  // ── CV-011: Member Certified Snapshot Import & Decryption ─────────────────
+  const handleMemberSnapshotFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    setMemberAttestationNotice(null);
+    const file = e.target.files?.[0];
+    if (!file) {
+      setMemberSnapshotEnvelopeContent(null);
+      setMemberSnapshotSelectedFileName(null);
+      setMemberSnapshotSelectedFileSize(null);
+      return;
+    }
+    setMemberSnapshotSelectedFileName(file.name);
+    setMemberSnapshotSelectedFileSize(file.size);
+    try {
+      const text = await file.text();
+      setMemberSnapshotEnvelopeContent(text);
+    } catch {
+      setMemberSnapshotEnvelopeContent(null);
+      setMemberAttestationUi((prev) =>
+        onAttestationFailed(prev, 'Could not read encrypted snapshot file content.'),
+      );
+    }
+  };
+
+  const handleDecryptMemberSnapshot = async () => {
+    if (!wallet || !contractState.attachedAddress) {
+      setMemberAttestationUi((prev) =>
+        onAttestationFailed(prev, 'Attach a compatible CommonVeil contract before decrypting a certified snapshot.'),
+      );
+      return;
+    }
+    if (!memberSnapshotEnvelopeContent) {
+      setMemberAttestationUi((prev) =>
+        onAttestationFailed(prev, 'Select an encrypted snapshot file to import.'),
+      );
+      return;
+    }
+    if (!memberSnapshotPassphrase) {
+      setMemberAttestationUi((prev) =>
+        onAttestationFailed(prev, 'Enter the handoff password to decrypt the snapshot envelope.'),
+      );
+      return;
+    }
+    if (!plaintextMemberSecretRef.current || !plaintextMemberSaltRef.current || !memberUi.memberCredentialHex) {
+      setMemberAttestationUi((prev) =>
+        onAttestationFailed(prev, 'Active Member secret and salt must exist in volatile session memory.'),
+      );
+      return;
+    }
+
+    try {
+      let envelopeJson: unknown;
+      try {
+        envelopeJson = JSON.parse(memberSnapshotEnvelopeContent);
+      } catch {
+        throw new Error('Encrypted snapshot file does not contain valid JSON.');
+      }
+
+      // Decrypt using AES-256-GCM + PBKDF2-SHA-256 (600,000 iterations)
+      const decryptedSnapshot = await decryptAndValidateEnvelope<CertifiedSnapshotPackage>(
+        envelopeJson as EncryptedEnvelope,
+        memberSnapshotPassphrase,
+        (payload) => validateCertifiedSnapshotPackage(payload),
+      );
+
+      // Verify contract matches attached contract
+      const attachedAddress = contractState.attachedAddress;
+      if (decryptedSnapshot.contractAddress.toLowerCase().trim() !== attachedAddress.toLowerCase().trim()) {
+        throw new Error(
+          `Snapshot contract address (${decryptedSnapshot.contractAddress}) does not match attached contract (${attachedAddress}).`,
+        );
+      }
+
+      // Verify memberCredential matches active member credential
+      if (
+        decryptedSnapshot.memberCredential.toLowerCase().trim() !==
+        memberUi.memberCredentialHex.toLowerCase().trim()
+      ) {
+        throw new Error('Snapshot member credential does not match the active Member credential.');
+      }
+
+      // Verify snapshot salt is exactly 32 bytes hex
+      if (!isHex(decryptedSnapshot.snapshotSalt, 32)) {
+        throw new Error('Snapshot salt must be exactly 32 bytes hex.');
+      }
+
+      // Verify snapshot commitment reproduces the derived commitment
+      const memberCredentialBytes = hexToBytes(memberUi.memberCredentialHex);
+      const productIdBytes = await productDigest(decryptedSnapshot.product);
+      const snapshotSaltBytes = hexToBytes(decryptedSnapshot.snapshotSalt);
+
+      const derivedCommitment = CommonVeil.pureCircuits.deriveInventoryCommitment(
+        memberCredentialBytes,
+        productIdBytes,
+        BigInt(decryptedSnapshot.version.major),
+        BigInt(decryptedSnapshot.version.minor),
+        BigInt(decryptedSnapshot.version.patch),
+        snapshotSaltBytes,
+      );
+      const derivedCommitmentHex = bytesToHex(derivedCommitment).toLowerCase();
+
+      if (derivedCommitmentHex !== decryptedSnapshot.commitment.toLowerCase()) {
+        throw new Error('Snapshot commitment does not match recomputed inventory commitment.');
+      }
+
+      // Verify snapshot commitment exists in the attached on-chain public ledger
+      const session = await queryCommonVeilContract(wallet.providers, attachedAddress);
+      if (!isMounted.current) return;
+
+      const hasCommitmentOnChain = session.hasInventoryCommitment(derivedCommitment);
+      if (!hasCommitmentOnChain) {
+        throw new Error('Snapshot inventory commitment does not exist in the on-chain public ledger.');
+      }
+
+      // Keep the decrypted snapshot salt ONLY in volatile memory
+      zeroizeBytes(memberDecryptedSnapshotSaltRef.current);
+      memberDecryptedSnapshotSaltRef.current = new Uint8Array(snapshotSaltBytes);
+
+      // Clear password inputs immediately from state
+      setMemberSnapshotPassphrase('');
+
+      setMemberAttestationUi((prev) =>
+        onCertifiedSnapshotDecrypted(prev, decryptedSnapshot, {
+          attachedContractAddress: attachedAddress,
+          activeMemberCredentialHex: memberUi.memberCredentialHex,
+          hasCommitmentOnChain: true,
+        }),
+      );
+      setMemberAttestationNotice('Encrypted certified snapshot verified and bound locally.');
+    } catch (err: unknown) {
+      if (!isMounted.current) return;
+      const rawMsg = err instanceof Error ? err.message : String(err);
+      setMemberAttestationUi((prev) => onAttestationFailed(prev, rawMsg));
+    }
+  };
+
+  // ── CV-011: Public Affected-Release Policy Receipt Import ──────────────────
+  const handleMemberPolicyReceiptFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    setMemberAttestationNotice(null);
+    const file = e.target.files?.[0];
+    if (!file) {
+      setMemberPolicyReceiptContent(null);
+      setMemberPolicyReceiptSelectedFileName(null);
+      setMemberPolicyReceiptSelectedFileSize(null);
+      return;
+    }
+    setMemberPolicyReceiptSelectedFileName(file.name);
+    setMemberPolicyReceiptSelectedFileSize(file.size);
+    try {
+      const text = await file.text();
+      setMemberPolicyReceiptContent(text);
+    } catch {
+      setMemberPolicyReceiptContent(null);
+      setMemberAttestationUi((prev) =>
+        onAttestationFailed(prev, 'Could not read policy registration receipt file content.'),
+      );
+    }
+  };
+
+  const handleImportMemberPolicyReceipt = async () => {
+    if (!wallet || !contractState.attachedAddress) {
+      setMemberAttestationUi((prev) =>
+        onAttestationFailed(prev, 'Attach a compatible CommonVeil contract before importing an affected-release receipt.'),
+      );
+      return;
+    }
+    if (!memberPolicyReceiptContent) {
+      setMemberAttestationUi((prev) =>
+        onAttestationFailed(prev, 'Select an affected-release registration receipt JSON file.'),
+      );
+      return;
+    }
+    if (!memberAttestationUi.snapshotEvidence) {
+      setMemberAttestationUi((prev) =>
+        onAttestationFailed(prev, 'Import and decrypt the certified snapshot before importing the affected-release receipt.'),
+      );
+      return;
+    }
+    if (!plaintextMemberSecretRef.current) {
+      setMemberAttestationUi((prev) =>
+        onAttestationFailed(prev, 'Active Member secret must exist in volatile session memory.'),
+      );
+      return;
+    }
+
+    try {
+      let receiptJson: unknown;
+      try {
+        receiptJson = JSON.parse(memberPolicyReceiptContent);
+      } catch {
+        throw new Error('Receipt file does not contain valid JSON.');
+      }
+
+      const receipt = validateAffectedReleaseRegistrationReceipt(receiptJson);
+      const attachedAddress = contractState.attachedAddress;
+
+      if (receipt.contractAddress.toLowerCase().trim() !== attachedAddress.toLowerCase().trim()) {
+        throw new Error(
+          `Receipt contract address (${receipt.contractAddress}) does not match attached contract (${attachedAddress}).`,
+        );
+      }
+      if (!receipt.policyActive) {
+        throw new Error('Affected-release receipt indicates that the on-chain policy is not active.');
+      }
+
+      // Check whether product and version match the certified snapshot
+      const productMatches = memberAttestationUi.snapshotEvidence.product === receipt.product;
+      const versionMatches =
+        memberAttestationUi.snapshotEvidence.version.major === receipt.version.major &&
+        memberAttestationUi.snapshotEvidence.version.minor === receipt.version.minor &&
+        memberAttestationUi.snapshotEvidence.version.patch === receipt.version.patch;
+
+      if (!productMatches || !versionMatches) {
+        // Honest negative outcome: e.g. xz-utils 5.2.5 vs CVE-2024-3094 5.6.0/5.6.1
+        setMemberAttestationUi((prev) =>
+          onAffectedReleaseReceiptImported(prev, receipt, {
+            attachedContractAddress: attachedAddress,
+            isReleaseInLedger: false,
+            isNullifierUsed: false,
+            derivedNullifierHex: '',
+          }),
+        );
+        return;
+      }
+
+      // Recompute release ID and verify it exists in affectedReleases on-chain
+      const advisoryIdBytes = await advisoryDigest(receipt.advisoryId);
+      const productIdBytes = await productDigest(receipt.product);
+      const releaseIdBytes = CommonVeil.pureCircuits.deriveReleaseId(
+        advisoryIdBytes,
+        productIdBytes,
+        BigInt(receipt.version.major),
+        BigInt(receipt.version.minor),
+        BigInt(receipt.version.patch),
+      );
+
+      const session = await queryCommonVeilContract(wallet.providers, attachedAddress);
+      if (!isMounted.current) return;
+
+      const isReleaseInLedger = session.hasAffectedRelease(releaseIdBytes);
+      if (!isReleaseInLedger) {
+        throw new Error('Derived release ID does not exist in the on-chain affectedReleases set.');
+      }
+
+      // Preflight nullifier derivation: deriveNullifier(advisoryId, memberSecret)
+      const nullifierBytes = CommonVeil.pureCircuits.deriveNullifier(
+        advisoryIdBytes,
+        plaintextMemberSecretRef.current,
+      );
+      const nullifierHex = bytesToHex(nullifierBytes).toLowerCase();
+      const isNullifierUsed = session.hasUsedNullifier(nullifierBytes);
+
+      setMemberAttestationUi((prev) =>
+        onAffectedReleaseReceiptImported(prev, receipt, {
+          attachedContractAddress: attachedAddress,
+          isReleaseInLedger: true,
+          isNullifierUsed,
+          derivedNullifierHex: nullifierHex,
+        }),
+      );
+      if (isNullifierUsed) {
+        setMemberAttestationNotice('Member already attested for this advisory on-chain (nullifier recorded).');
+      } else {
+        setMemberAttestationNotice('Certified snapshot matches registered affected release. Ready to attest.');
+      }
+    } catch (err: unknown) {
+      if (!isMounted.current) return;
+      const rawMsg = err instanceof Error ? err.message : String(err);
+      setMemberAttestationUi((prev) => onAttestationFailed(prev, rawMsg));
+    }
+  };
+
+  // ── CV-011: Confirmation Dialog Controls ──────────────────────────────────
+  const handleOpenAttestConfirmation = () => {
+    setMemberAttestationUi((prev) => onAttestationConfirmationOpen(prev));
+  };
+
+  const handleDismissAttestConfirmation = () => {
+    setMemberAttestationUi((prev) => onAttestationConfirmationDismissed(prev));
+  };
+
+  // ── CV-011: Submit Genuine Attest Transaction ─────────────────────────────
+  const handleConfirmAndAttest = async () => {
+    if (
+      !wallet ||
+      !contractState.attachedAddress ||
+      !memberAttestationUi.snapshotEvidence ||
+      !memberAttestationUi.importedPolicyReceipt ||
+      !plaintextMemberSecretRef.current ||
+      !plaintextMemberSaltRef.current ||
+      !memberDecryptedSnapshotSaltRef.current
+    ) {
+      return;
+    }
+
+    const operationToken = ++attestationGenerationRef.current;
+    activeAttestationTokenRef.current = operationToken;
+
+    setMemberAttestationUi((prev) => onAttestationWalletRequest(prev));
+    setMemberAttestationNotice(null);
+
+    const attachedAddress = contractState.attachedAddress;
+    const policyReceipt = memberAttestationUi.importedPolicyReceipt;
+    const snapshotEvidence = memberAttestationUi.snapshotEvidence;
+    const memberSecretBytes = plaintextMemberSecretRef.current;
+    const memberSaltBytes = plaintextMemberSaltRef.current;
+    const snapshotSaltBytes = memberDecryptedSnapshotSaltRef.current;
+
+    try {
+      // Local Preflight check before wallet submission
+      const advisoryIdBytes = await advisoryDigest(policyReceipt.advisoryId);
+      const productIdBytes = await productDigest(snapshotEvidence.product);
+
+      // Verify nullifier not already used on-chain
+      const nullifierBytes = CommonVeil.pureCircuits.deriveNullifier(
+        advisoryIdBytes,
+        memberSecretBytes,
+      );
+      const sessionBefore = await queryCommonVeilContract(wallet.providers, attachedAddress);
+      if (!isMounted.current || activeAttestationTokenRef.current !== operationToken) return;
+
+      if (sessionBefore.hasUsedNullifier(nullifierBytes)) {
+        setMemberAttestationUi((prev) => ({
+          ...prev,
+          stage: 'already-attested',
+          noticeMessage: 'Member already attested for this advisory.',
+        }));
+        return;
+      }
+
+      const preSubmitAcceptedCount = sessionBefore.publicState.accepted;
+
+      setMemberAttestationUi((prev) => onAttestationSubmitting(prev));
+
+      // Call genuine attest circuit via Midnight SDK
+      // attest(advisoryId, memberSecret, memberSalt, productId, major, minor, patch, snapshotSalt)
+      const finalized = await submitCallTx(
+        wallet.providers,
+        {
+          compiledContract: CompiledCommonVeilContract,
+          contractAddress: attachedAddress,
+          circuitId: 'attest',
+          args: [
+            advisoryIdBytes,
+            memberSecretBytes,
+            memberSaltBytes,
+            productIdBytes,
+            BigInt(snapshotEvidence.version.major),
+            BigInt(snapshotEvidence.version.minor),
+            BigInt(snapshotEvidence.version.patch),
+            snapshotSaltBytes,
+          ],
+        },
+      );
+
+      if (!isMounted.current || activeAttestationTokenRef.current !== operationToken) return;
+
+      const rawTxId: unknown = finalized.public.txId;
+      if (!isCanonicalTransactionId(rawTxId)) {
+        throw new Error(
+          `Indexer or SDK returned non-canonical transaction ID: ${String(rawTxId)}`,
+        );
+      }
+      const canonicalTxId = (rawTxId as string).toLowerCase();
+
+      // Enter finalized-indexing state
+      setMemberAttestationUi((prev) => onAttestationFinalizedIndexing(prev, canonicalTxId));
+
+      // Inspect same contract to verify accepted increased by at least 1 and nullifier is recorded
+      try {
+        const sessionAfter = await queryCommonVeilContract(wallet.providers, attachedAddress);
+        if (!isMounted.current || activeAttestationTokenRef.current !== operationToken) return;
+
+        const nullifierRecorded = sessionAfter.hasUsedNullifier(nullifierBytes);
+        const acceptedIncreased = sessionAfter.publicState.accepted >= preSubmitAcceptedCount + 1n;
+
+        if (nullifierRecorded && acceptedIncreased) {
+          const receipt = buildPrivateAttestationReceipt({
+            contractAddress: attachedAddress,
+            advisoryId: policyReceipt.advisoryId,
+            attestationTxId: canonicalTxId,
+          });
+
+          setMemberAttestationUi((prev) => onAttestationCompleted(prev, receipt));
+          setMemberAttestationNotice(
+            'Private attestation confirmed on-chain. Public accepted report count incremented.',
+          );
+          setContractState((prev) => ({
+            ...prev,
+            inspectedState: sessionAfter.publicState,
+          }));
+        } else {
+          // Delayed indexing: stay in finalized-indexing without resubmitting
+          setMemberAttestationNotice(
+            'Attestation transaction finalized on-chain; indexer synchronization is pending. Use retry confirmation below.',
+          );
+        }
+      } catch (inspectError: unknown) {
+        if (!isMounted.current) return;
+        setMemberAttestationNotice(
+          'Attestation transaction finalized on-chain; indexer synchronization is pending. Use retry confirmation below.',
+        );
+      }
+    } catch (attestError: unknown) {
+      if (!isMounted.current || activeAttestationTokenRef.current !== operationToken) return;
+
+      const raw = (
+        attestError instanceof Error
+          ? attestError.message
+          : typeof attestError === 'string'
+            ? attestError
+            : ''
+      ).toLowerCase();
+
+      if (
+        raw.includes('cancel') ||
+        raw.includes('reject') ||
+        raw.includes('denied') ||
+        raw.includes('declined') ||
+        raw.includes('user aborted')
+      ) {
+        setMemberAttestationUi((prev) =>
+          onAttestationFailed(prev, 'Attestation transaction was cancelled in 1AM.'),
+        );
+      } else {
+        setMemberAttestationUi((prev) =>
+          onAttestationFailed(prev, mapAttestationError(attestError)),
+        );
+      }
+    }
+  };
+
+  // ── CV-011: Read-Only Indexer Retry for Attestation ────────────────────────
+  const handleRetryAttestationVerification = async () => {
+    if (
+      !wallet ||
+      !contractState.attachedAddress ||
+      !memberAttestationUi.snapshotEvidence ||
+      !memberAttestationUi.importedPolicyReceipt ||
+      !plaintextMemberSecretRef.current ||
+      memberAttestationUi.stage !== 'finalized-indexing'
+    ) {
+      return;
+    }
+
+    const attachedAddress = contractState.attachedAddress;
+    const policyReceipt = memberAttestationUi.importedPolicyReceipt;
+
+    try {
+      const advisoryIdBytes = await advisoryDigest(policyReceipt.advisoryId);
+      const nullifierBytes = CommonVeil.pureCircuits.deriveNullifier(
+        advisoryIdBytes,
+        plaintextMemberSecretRef.current,
+      );
+
+      const session = await queryCommonVeilContract(wallet.providers, attachedAddress);
+      if (!isMounted.current) return;
+
+      const nullifierRecorded = session.hasUsedNullifier(nullifierBytes);
+      if (!nullifierRecorded) {
+        setMemberAttestationNotice(
+          'Indexer has not yet recorded the derived nullifier. Check again shortly.',
+        );
+        return;
+      }
+
+      const canonicalTxId = memberAttestationUi.attestationTxId ?? '00'.repeat(32);
+      const receipt = buildPrivateAttestationReceipt({
+        contractAddress: attachedAddress,
+        advisoryId: policyReceipt.advisoryId,
+        attestationTxId: canonicalTxId,
+      });
+
+      setMemberAttestationUi((prev) => onAttestationCompleted(prev, receipt));
+      setMemberAttestationNotice(
+        'Private attestation confirmed on-chain in usedNullifiers set. Public accepted report count incremented.',
+      );
+
+      setContractState((prev) => ({
+        ...prev,
+        inspectedState: session.publicState,
+      }));
+    } catch (inspectError: unknown) {
+      if (!isMounted.current) return;
+      const errorCode =
+        inspectError instanceof ContractSessionError
+          ? inspectError.code
+          : (inspectError as { code?: string } | null)?.code;
+
+      if (errorCode === 'CONTRACT_NOT_FOUND' || errorCode === 'INDEXER_QUERY_FAILED') {
+        return;
+      }
+
+      setMemberAttestationUi((prev) =>
+        onAttestationFailed(prev, mapAttestationInspectionError(inspectError)),
+      );
+    }
+  };
+
+  // ── CV-011: Download Privacy-Preserving Attestation Receipt ─────────────────
+  const handleDownloadPrivateAttestationReceipt = () => {
+    if (!memberAttestationUi.receipt) return;
+    try {
+      const validated = validatePrivateAttestationReceipt(memberAttestationUi.receipt);
+      triggerBlobDownload(
+        JSON.stringify(validated, null, 2),
+        `commonveil-private-attestation-receipt-${validated.advisoryId.toLowerCase()}-${validated.attestationTxId.slice(0, 16)}.json`,
+      );
+    } catch {
+      setMemberAttestationNotice('Could not create valid private attestation receipt.');
+    }
+  };
+
+  const handleResetMemberAttestation = () => {
+    resetMemberAttestationState(false);
+  };
+
+  return (
+    <main className="role-workspace-main" aria-busy={walletConnecting || isBusy}>
+      <nav className="role-workspace-nav">
+        <button
+          type="button"
+          className="brand-button"
+          onClick={onNavigateOverview}
+          aria-label="Return to CommonVeil product overview"
+        >
+          <span>CV</span>
+          <strong>CommonVeil</strong>
+        </button>
+        <div className="nav-links">
+          <button
+            type="button"
+            className="secondary-nav-btn"
+            onClick={onNavigateOverview}
+            aria-label="Navigate to Product Overview"
+          >
+            ← Product Overview
+          </button>
+          <div
+            className="role-nav-switch"
+            role="navigation"
+            aria-label="Open other role workspaces"
+          >
+            {otherRoles.map((r) => (
+              <a
+                key={r}
+                href={`/?role=${r}`}
+                target="_blank"
+                rel="noreferrer"
+                className="role-tab-link"
+                title={`Open ${ROLE_DESCRIPTORS[r].label} Workspace in new tab`}
+              >
+                Open {ROLE_DESCRIPTORS[r].label} tab ↗
+              </a>
+            ))}
+          </div>
+        </div>
+      </nav>
+
+      <section className="role-header-section">
+        <div className="role-badge-row">
+          <span className="network-badge">Preprod Network</span>
+          <span className="role-active-badge">{descriptor.label} Workspace</span>
+        </div>
+        <h1>{descriptor.label} Operational Workspace</h1>
+        <p className="role-description-lead">{descriptor.description}</p>
+        <div className="session-notice-box" role="note">
+          <strong>Session Separation Notice</strong>
+          <p>
+            Role separation requires different participants to use separate browser profiles or
+            devices and keep their own encrypted role material.
+          </p>
+          <p className="authorization-disclaimer">
+            Selecting this workspace changes UI context only. Credential verification and Compact
+            circuit authorization determine on-chain permissions.
+          </p>
+        </div>
+      </section>
+
+      <div className="workspace-grid">
+        {/* Left Column: Wallet Connection & Contract Attachment Controls */}
+        <div className="workspace-column">
+          <article className="workspace-card">
+            <div className="card-header">
+              <span className="card-step">01</span>
+              <h2>Midnight Wallet</h2>
+            </div>
+            <p className="card-caption">
+              Connect an independent 1AM Midnight wallet for this role session.
+            </p>
+
+            <div aria-live="polite">
+              {wallet ? (
+                <div>
+                  <dl className="property-list">
+                    <dt>Status</dt>
+                    <dd>
+                      <span className="status-indicator active" aria-label="Wallet connected">
+                        Connected
+                      </span>
+                    </dd>
+                    <dt>Wallet Name</dt>
+                    <dd>{wallet.name}</dd>
+                    <dt>Network</dt>
+                    <dd>Preprod</dd>
+                    <dt>Address</dt>
+                    <dd title={wallet.address}>
+                      <code>{shortenAddress(wallet.address)}</code>
+                    </dd>
+                    <dt>DUST Balance</dt>
+                    <dd>{formatDust(wallet.dustBalance)} DUST</dd>
+                    <dt>Proving Mode</dt>
+                    <dd>
+                      {wallet.proofMode === 'wallet' ? 'In-wallet prover (Configured)' : 'Local proof server (Configured)'}
+                    </dd>
+                    <dt>Indexer</dt>
+                    <dd id="wallet-indexer-status">
+                      <span className="status-indicator active" aria-label={`Indexer configuration: ${wallet.indexerStatus}`}>
+                        {wallet.indexerStatus}
+                      </span>
+                    </dd>
+                  </dl>
+                  <button
+                    type="button"
+                    onClick={handleDisconnectWallet}
+                    className="action-button secondary disconnect-btn"
+                    aria-label="Disconnect 1AM wallet"
+                  >
+                    Disconnect Wallet
+                  </button>
+                </div>
+              ) : (
+                <div>
+                  <button
+                    type="button"
+                    id="connect-wallet-btn"
+                    onClick={handleConnectWallet}
+                    disabled={walletConnecting}
+                    className="action-button primary"
+                    aria-label="Connect 1AM Midnight Wallet"
+                  >
+                    {walletConnecting ? 'Connecting 1AM Wallet…' : 'Connect 1AM Wallet'}
+                  </button>
+                  {walletError && (
+                    <div className="safe-error-banner" role="alert">
+                      <p>{walletError}</p>
+                      <button
+                        type="button"
+                        className="retry-btn"
+                        onClick={handleConnectWallet}
+                        aria-label="Retry connecting 1AM wallet"
+                      >
+                        Retry connection
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </article>
+
+          <article className="workspace-card">
+            <div className="card-header">
+              <span className="card-step">02</span>
+              <h2>Contract Attachment</h2>
+            </div>
+            <p className="card-caption">
+              Inspect or attach to a deployed CommonVeil contract address on Midnight Preprod.
+            </p>
+
+            <form onSubmit={(e) => e.preventDefault()}>
+              <label htmlFor="contract-address-input">Preprod Contract Address</label>
+              <input
+                id="contract-address-input"
+                type="text"
+                value={contractState.addressInput}
+                onChange={handleAddressChange}
+                disabled={isBusy}
+                placeholder="Paste deployed CommonVeil contract address"
+                autoComplete="off"
+                spellCheck="false"
+                aria-describedby="contract-status-region"
+              />
+
+              <div className="button-row">
+                <button
+                  type="button"
+                  id="inspect-contract-btn"
+                  onClick={handleInspect}
+                  disabled={
+                    !wallet ||
+                    !contractState.addressInput.trim() ||
+                    isBusy
+                  }
+                  className="action-button secondary"
+                  aria-label="Inspect contract state without attaching"
+                >
+                  {contractState.inspectionState === 'inspecting'
+                    ? 'Inspecting…'
+                    : 'Inspect Contract'}
+                </button>
+
+                <button
+                  type="button"
+                  id="attach-contract-btn"
+                  onClick={handleAttach}
+                  disabled={
+                    !wallet ||
+                    !contractState.addressInput.trim() ||
+                    isBusy
+                  }
+                  className="action-button primary"
+                  aria-label="Attach to verified CommonVeil contract"
+                >
+                  {contractState.inspectionState === 'attaching'
+                    ? 'Attaching…'
+                    : 'Attach to Contract'}
+                </button>
+              </div>
+            </form>
+
+            <div id="contract-status-region" aria-live="polite">
+              {contractState.errorMessage && (
+                <div className="safe-error-banner" role="alert">
+                  <strong>Attachment Error</strong>
+                  <p>{contractState.errorMessage}</p>
+                </div>
+              )}
+
+              {contractState.inspectionState === 'inspected' && (
+                <div className="status-callout inspect-callout">
+                  <span className="status-indicator notice">Inspected — not attached</span>
+                  <p>Public state decoded successfully. Provider is not yet scoped to this contract.</p>
+                </div>
+              )}
+
+              {contractState.inspectionState === 'attached' && contractState.attachedAddress && (
+                <div className="status-callout attach-callout">
+                  <span className="status-indicator success">Attached</span>
+                  <p>Private-state provider is scoped to this verified CommonVeil contract.</p>
+                  <div className="attached-address-row">
+                    <code>{contractState.attachedAddress}</code>
+                    <button
+                      type="button"
+                      className="copy-button"
+                      onClick={handleCopyAttached}
+                      aria-label="Copy attached contract address to clipboard"
+                    >
+                      {contractState.copyStatus === 'copied'
+                        ? 'Copied'
+                        : contractState.copyStatus === 'failed'
+                          ? 'Retry copy'
+                          : 'Copy'}
+                    </button>
+                  </div>
+                  {contractState.copyStatus === 'failed' && (
+                    <p className="copy-fallback-notice" role="alert">
+                      Copy failed — select the address manually.
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
+          </article>
+        </div>
+
+        {/* Right Column: Role Identity & Secret Lifecycle (Registrar or Certifier) */}
+        <div className="workspace-column">
+          {role === 'certifier' && (
+            <article className="workspace-card certifier-identity-card">
+              <div className="card-header">
+                <span className="card-step">03</span>
+                <h2>Certifier Role Identity & Secrets</h2>
+              </div>
+              <p className="card-caption">
+                The Certifier secret is kept only in volatile session memory. It derives the public Certifier key and authorizes inventory certifications.
+              </p>
+
+              {/* Status Header */}
+              <div className="registrar-status-row" aria-live="polite">
+                <div>
+                  <span className="field-caption">Secret in Memory</span>
+                  <strong>
+                    {certifierUi.hasSecret ? 'Loaded in session memory' : 'None (Locked)'}
+                  </strong>
+                </div>
+                <div>
+                  <span className="field-caption">On-chain Verification</span>
+                  <strong className={`verification-badge ${certifierUi.verificationStatus}`}>
+                    {certifierUi.verificationStatus === 'verified'
+                      ? 'Verified'
+                      : certifierUi.verificationStatus === 'failed'
+                        ? 'Not verified'
+                        : 'Unverified'}
+                  </strong>
+                </div>
+                <div>
+                  <span className="field-caption">Backup Recovery Status</span>
+                  <strong className={`recovery-badge ${certifierUi.backupRecoveryStatus}`}>
+                    {certifierUi.backupRecoveryStatus === 'recovery-tested'
+                      ? 'Recovery Tested ✔'
+                      : certifierUi.backupRecoveryStatus === 'created-untested'
+                        ? 'Created (Untested)'
+                        : 'No Backup'}
+                  </strong>
+                </div>
+              </div>
+
+              {certifierNotice && (
+                <div className="safe-notice-banner" role="status">
+                  <p>{certifierNotice}</p>
+                </div>
+              )}
+
+              {certifierError && (
+                <div className="safe-error-banner" role="alert">
+                  <strong>Certifier Error</strong>
+                  <p>{certifierError}</p>
+                </div>
+              )}
+
+              {/* One-time copy confirmation banner */}
+              {certifierUi.hasSecret && certifierUi.canCopyOnce && (
+                <div className="secret-reveal-box" role="alert">
+                  <div className="secret-reveal-header">
+                    <strong>One-Time Secret Copy Available</strong>
+                  </div>
+                  <p className="secret-warning-text">
+                    The secret is kept only for this browser session and is not written to persistent storage. Export an encrypted backup immediately.
+                  </p>
+                  <div className="one-time-copy-row">
+                    <button
+                      type="button"
+                      className="action-button primary"
+                      onClick={handleOneTimeCopyCertifierSecret}
+                      disabled={certifierUi.copyStatus === 'pending'}
+                      aria-label="Copy certifier secret to clipboard (one time only)"
+                    >
+                      {certifierUi.copyStatus === 'pending'
+                        ? 'Copying...'
+                        : certifierUi.copyStatus === 'failed'
+                          ? 'Retry Secret Copy'
+                          : 'Copy Secret to Clipboard (One-Time)'}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Action Tabs / Buttons */}
+              {!certifierUi.hasSecret ? (
+                <div className="secret-setup-section">
+                  <button
+                    type="button"
+                    onClick={handleGenerateCertifierSecret}
+                    className="action-button primary"
+                    aria-label="Generate fresh random 32-byte certifier secret"
+                  >
+                    Generate New Certifier Secret
+                  </button>
+
+                  <div className="divider-row"><span>or import existing 32-byte hex</span></div>
+
+                  <form
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      handleImportCertifierSecretHex();
+                    }}
+                  >
+                    <label htmlFor="import-certifier-hex-input">
+                      32-Byte Secret Hex (64 hex characters)
+                    </label>
+                    <input
+                      id="import-certifier-hex-input"
+                      type="password"
+                      value={certifierImportHexInput}
+                      onChange={(e) => setCertifierImportHexInput(e.target.value)}
+                      placeholder="Paste 64-character hex secret"
+                      autoComplete="off"
+                      spellCheck="false"
+                    />
+                    <button
+                      type="submit"
+                      disabled={!certifierImportHexInput.trim()}
+                      className="action-button secondary"
+                      aria-label="Import plaintext certifier secret hex"
+                    >
+                      Import Hex Secret
+                    </button>
+                  </form>
+
+                  <div className="divider-row"><span>or restore encrypted backup</span></div>
+
+                  <div className="backup-import-box">
+                    <label htmlFor="certifier-backup-file-input">Encrypted Backup JSON File</label>
+                    <input
+                      id="certifier-backup-file-input"
+                      type="file"
+                      accept=".json,application/json"
+                      onChange={handleCertifierBackupFileSelect}
+                    />
+
+                    {certifierBackupFileContent && (
+                      <form
+                        onSubmit={(e) => {
+                          e.preventDefault();
+                          handleImportCertifierBackup();
+                        }}
+                      >
+                        <label htmlFor="import-certifier-passphrase-input">
+                          Backup Passphrase (min 12 chars)
+                        </label>
+                        <input
+                          id="import-certifier-passphrase-input"
+                          type="password"
+                          value={certifierImportPassphrase}
+                          onChange={(e) => setCertifierImportPassphrase(e.target.value)}
+                          placeholder="Enter passphrase"
+                          autoComplete="off"
+                        />
+                        <button
+                          type="submit"
+                          disabled={certifierImportPassphrase.length < 12}
+                          className="action-button primary"
+                          aria-label="Decrypt and restore certifier backup"
+                        >
+                          Decrypt and Restore Secret
+                        </button>
+                      </form>
+                    )}
+                  </div>
+                </div>
+              ) : (
+                <div className="secret-active-controls">
+                  <div className="button-row">
+                    <button
+                      type="button"
+                      onClick={handleExportCertifierKeyPackage}
+                      disabled={certifierUi.backupRecoveryStatus !== 'recovery-tested'}
+                      className="action-button primary"
+                      aria-label="Export public certifier key package JSON"
+                    >
+                      Export Public Certifier Key Package (.json)
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={handleVerifyCertifierSecret}
+                      disabled={!contractState.attachedAddress}
+                      className="action-button secondary"
+                      aria-label="Verify certifier secret against attached contract"
+                    >
+                      Verify On-Chain Authority
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={handleLockCertifierSession}
+                      className="action-button secondary"
+                      aria-label="Lock certifier session and zeroize secret"
+                    >
+                      Lock Session
+                    </button>
+                  </div>
+
+                  {certifierUi.backupRecoveryStatus !== 'recovery-tested' && (
+                    <p className="form-hint-text">
+                      Exporting the public Certifier key package requires testing and verifying your encrypted backup below.
+                    </p>
+                  )}
+
+                  {!contractState.attachedAddress && (
+                    <p className="form-hint-text">
+                      Attach a contract in Step 02 to run on-chain certifier verification.
+                    </p>
+                  )}
+
+                  {/* Export Backup Form */}
+                  <div className="export-backup-section">
+                    <h3>Encrypted Backup Export</h3>
+                    <p className="card-caption">
+                      Encrypts the Certifier secret with AES-256-GCM (600,000 PBKDF2 iterations) and downloads a JSON envelope.
+                    </p>
+                    <form
+                      onSubmit={(e) => {
+                        e.preventDefault();
+                        handleExportCertifierBackup();
+                      }}
+                    >
+                      <label htmlFor="export-certifier-passphrase-input">
+                        Export Passphrase (min 12 chars)
+                      </label>
+                      <div className="password-input-row">
+                        <input
+                          id="export-certifier-passphrase-input"
+                          type={certifierShowExportPassphrase ? 'text' : 'password'}
+                          value={certifierExportPassphrase}
+                          onChange={(e) => setCertifierExportPassphrase(e.target.value)}
+                          placeholder="Enter 12+ character passphrase"
+                          autoComplete="off"
+                        />
+                        <button
+                          type="button"
+                          className="toggle-visibility-btn"
+                          onClick={() => setCertifierShowExportPassphrase((prev) => !prev)}
+                          aria-label={certifierShowExportPassphrase ? 'Hide password' : 'Show password'}
+                        >
+                          {certifierShowExportPassphrase ? 'Hide' : 'Show'}
+                        </button>
+                      </div>
+
+                      <label htmlFor="export-certifier-passphrase-confirm-input" style={{ marginTop: '8px', display: 'block' }}>
+                        Confirm Backup Passphrase
+                      </label>
+                      <input
+                        id="export-certifier-passphrase-confirm-input"
+                        type={certifierShowExportPassphrase ? 'text' : 'password'}
+                        value={certifierExportConfirmPassphrase}
+                        onChange={(e) => setCertifierExportConfirmPassphrase(e.target.value)}
+                        placeholder="Re-enter passphrase exactly"
+                        autoComplete="off"
+                      />
+
+                      {hasPasswordWhitespaceWarning(certifierExportPassphrase) && (
+                        <div className="whitespace-warning-box">
+                          <p>⚠ Passphrase contains leading or trailing whitespace.</p>
+                          <label className="whitespace-ack-label">
+                            <input
+                              type="checkbox"
+                              checked={ackWhitespaceCertifier}
+                              onChange={(e) => setAckWhitespaceCertifier(e.target.checked)}
+                            />
+                            <span>I confirm leading or trailing spaces are intentional</span>
+                          </label>
+                        </div>
+                      )}
+
+                      <button
+                        type="submit"
+                        disabled={
+                          !validatePasswordConfirmation(certifierExportPassphrase, certifierExportConfirmPassphrase).valid ||
+                          (hasPasswordWhitespaceWarning(certifierExportPassphrase) && !ackWhitespaceCertifier)
+                        }
+                        className="action-button secondary"
+                        style={{ marginTop: '10px' }}
+                        aria-label="Export encrypted certifier backup"
+                      >
+                        Download Encrypted Backup
+                      </button>
+                    </form>
+
+                    {/* Independent Downloaded Backup Testing */}
+                    <div className="test-backup-box">
+                      <h4>Test Downloaded Backup</h4>
+                      <p>
+                        Verify your downloaded backup file before proceeding. Select the downloaded file and enter the passphrase to confirm recovery.
+                      </p>
+                      <label htmlFor="certifier-test-file-input">Select Downloaded Backup File</label>
+                      <input
+                        id="certifier-test-file-input"
+                        type="file"
+                        accept=".json,application/json"
+                        onChange={handleCertifierTestBackupFileSelect}
+                      />
+
+                      {certifierTestBackupFileContent && (
+                        <div style={{ marginTop: '10px' }}>
+                          <label htmlFor="certifier-test-passphrase-input">Backup Passphrase</label>
+                          <div className="password-input-row">
+                            <input
+                              id="certifier-test-passphrase-input"
+                              type={certifierShowTestPassphrase ? 'text' : 'password'}
+                              value={certifierTestBackupPassphrase}
+                              onChange={(e) => setCertifierTestBackupPassphrase(e.target.value)}
+                              placeholder="Enter passphrase used for export"
+                              autoComplete="off"
+                            />
+                            <button
+                              type="button"
+                              className="toggle-visibility-btn"
+                              onClick={() => setCertifierShowTestPassphrase((prev) => !prev)}
+                            >
+                              {certifierShowTestPassphrase ? 'Hide' : 'Show'}
+                            </button>
+                          </div>
+                          <button
+                            type="button"
+                            className="action-button primary"
+                            style={{ marginTop: '8px' }}
+                            disabled={certifierTestBackupPassphrase.length < 12}
+                            onClick={handleTestDownloadedCertifierBackup}
+                            aria-label="Verify and test downloaded certifier backup"
+                          >
+                            Verify and Test Backup
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </article>
+          )}
+
+          {/* Certifier Inventory Review & Certification Workflow Section (Step 04) */}
+          {role === 'certifier' && (
+            <article className="workspace-card certifier-certification-card">
+              <div className="card-header">
+                <span className="card-step">04</span>
+                <h2>Review Inventory & Certify via Midnight</h2>
+              </div>
+              <p className="card-caption">
+                Import and review restricted Member certification request packages, verify they target this exact contract, verify active admission, and invoke <code>certifyInventory</code> on-chain via 1AM.
+              </p>
+
+              {/* Status Header */}
+              <div className="registrar-status-row" aria-live="polite">
+                <div>
+                  <span className="field-caption">Attached Contract</span>
+                  <strong>
+                    {contractState.attachedAddress
+                      ? shortenAddress(contractState.attachedAddress)
+                      : 'None (Required)'}
+                  </strong>
+                </div>
+                <div>
+                  <span className="field-caption">Certification Stage</span>
+                  <strong className={`verification-badge ${certificationUi.stage === 'certified' ? 'verified' : 'unverified'}`}>
+                    {getCertifierCertificationStageLabel(certificationUi.stage)}
+                  </strong>
+                </div>
+              </div>
+
+              {certificationNotice && (
+                <div className="safe-notice-banner" role="status">
+                  <p>{certificationNotice}</p>
+                </div>
+              )}
+
+              {certificationUi.errorMessage && (
+                <div className="safe-error-banner" role="alert">
+                  <strong>Certification Error</strong>
+                  <p>{certificationUi.errorMessage}</p>
+                </div>
+              )}
+
+              {/* Import Request Box */}
+              {isCertifierCertificationImportVisible(certificationUi.stage) && (
+                <div className="admission-import-box">
+                  <label htmlFor="certification-request-file-input">
+                    Import Certification Request Package (.json)
+                  </label>
+                  <p className="form-hint-text">
+                    Package must contain a valid <code>commonveil.certification-request/v1</code> schema with genuine <code>live-host-scan</code> provenance targeting the attached contract address.
+                  </p>
+                  <input
+                    ref={certificationRequestInputRef}
+                    id="certification-request-file-input"
+                    type="file"
+                    accept=".json,application/json"
+                    disabled={isCertifying}
+                    onChange={handleCertificationRequestFileSelect}
+                  />
+
+                  {(!wallet ||
+                    !contractState.attachedAddress ||
+                    !certifierUi.hasSecret ||
+                    certifierUi.verificationStatus !== 'verified') && (
+                    <p className="form-hint-text warning-text">
+                      Requires a connected 1AM wallet on Preprod, an attached contract, and an active verified Certifier secret before certifying inventory requests.
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {/* Review / Confirmation Box */}
+              {isCertifierCertificationReviewVisible(certificationUi) && certificationUi.importedRequest && (
+                <div className="admission-confirmation-box" role="dialog" aria-labelledby="cert-confirm-heading">
+                  <h3 id="cert-confirm-heading">Confirm Inventory Certification</h3>
+                  <div className="admission-review-details">
+                    <p>
+                      <strong>Target Contract:</strong>{' '}
+                      <code>{shortenAddress(certificationUi.importedRequest.contractAddress)}</code>{' '}
+                      {contractState.attachedAddress &&
+                      certificationUi.importedRequest.contractAddress.toLowerCase().trim() ===
+                        contractState.attachedAddress.toLowerCase().trim() ? (
+                        <span className="verification-badge verified" style={{ marginLeft: '8px' }}>
+                          Matches Attached Contract
+                        </span>
+                      ) : (
+                        <span className="verification-badge unverified" style={{ marginLeft: '8px' }}>
+                          Contract Mismatch
+                        </span>
+                      )}
+                    </p>
+                    <p>
+                      <strong>Member Credential:</strong>{' '}
+                      <code title={certificationUi.importedRequest.memberCredential}>
+                        {shortenAddress(certificationUi.importedRequest.memberCredential)}
+                      </code>
+                    </p>
+                    <p>
+                      <strong>Provenance:</strong>{' '}
+                      <span className="verification-badge verified">
+                        {certificationUi.importedRequest.provenance} (validated)
+                      </span>
+                    </p>
+                    <p>
+                      <strong>Product & Version:</strong>{' '}
+                      <code>
+                        {certificationUi.importedRequest.product} @ {certificationUi.importedRequest.rawVersion}{' '}
+                        (v{certificationUi.importedRequest.version.major}.{certificationUi.importedRequest.version.minor}.{certificationUi.importedRequest.version.patch})
+                      </code>
+                    </p>
+                    <p>
+                      <strong>Measurement Digest:</strong>{' '}
+                      <code title={certificationUi.importedRequest.measurementDigest}>
+                        {shortenAddress(certificationUi.importedRequest.measurementDigest)}
+                      </code>
+                    </p>
+                    <p>
+                      <strong>Observed At:</strong> {certificationUi.importedRequest.observedAt}
+                    </p>
+                    <p>
+                      <strong>Admitted Member Preflight:</strong>{' '}
+                      {certPreflightMemberAdmitted === true ? (
+                        <span className="verification-badge verified">Verified Admitted</span>
+                      ) : certPreflightMemberAdmitted === false ? (
+                        <span className="verification-badge unverified">Not Admitted on-chain</span>
+                      ) : (
+                        <span className="verification-badge unverified">Preflight Pending / Unverified</span>
+                      )}
+                    </p>
+                    <p>
+                      <strong>Policy Status:</strong>{' '}
+                      <span className={`verification-badge ${publicState && !publicState.policyActive ? 'verified' : 'unverified'}`}>
+                        {publicState
+                          ? !publicState.policyActive
+                            ? 'Open for certification'
+                            : 'Policy active (Certification closed)'
+                          : 'Unknown'}
+                      </span>
+                    </p>
+                    <p className="card-caption">
+                      This action will invoke the genuine <code>certifyInventory</code> circuit. DUST transaction fees will be paid by your connected 1AM wallet.
+                    </p>
+                  </div>
+
+                  {certifierCertificationPrereqs.length > 0 && (
+                    <div className="form-hint-text warning-text" style={{ marginBottom: '12px' }}>
+                      Prerequisites not met: {certifierCertificationPrereqs.join(', ')}
+                    </div>
+                  )}
+
+                  <div className="button-row">
+                    <button
+                      type="button"
+                      className="action-button primary"
+                      disabled={!canCertify}
+                      onClick={handleInitiateCertification}
+                      aria-label="Confirm inventory certification and submit transaction via 1AM"
+                    >
+                      Confirm and Certify via 1AM
+                    </button>
+                    <button
+                      type="button"
+                      className="action-button secondary"
+                      disabled={isCertifying}
+                      onClick={resetCertificationState}
+                      aria-label="Cancel certification review"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* In-Flight States */}
+              {certificationUi.stage === 'requesting-wallet' && (
+                <div className="status-callout warning">
+                  <span className="status-indicator warning">Preparing 1AM Transaction</span>
+                  <p>Preparing zero-knowledge proof and transaction. Review 1AM when the approval request appears.</p>
+                </div>
+              )}
+
+              {certificationUi.stage === 'submitting' && (
+                <div className="status-callout notice">
+                  <span className="status-indicator notice">Submitting Certification</span>
+                  <p>Generating proof and broadcasting <code>certifyInventory</code> transaction to Midnight Preprod...</p>
+                </div>
+              )}
+
+              {/* Indexer Lag / Waiting with manual retry that never resubmits */}
+              {certificationUi.stage === 'finalized-indexing' && (
+                <div className="status-callout notice indexer-lag-box">
+                  <span className="status-indicator notice">Finalized On-Chain</span>
+                  <p>
+                    The certification transaction was finalized on Midnight Preprod, but the public indexer has not yet indexed the updated <code>inventoryCommitments</code> set.
+                  </p>
+                  <p className="card-caption">
+                    Click below to retry on-chain confirmation without resubmitting any transaction.
+                  </p>
+                  <button
+                    type="button"
+                    className="action-button primary"
+                    onClick={handleRetryCommitmentVerification}
+                    aria-label="Retry indexer confirmation without resubmitting transaction"
+                  >
+                    Retry Indexer Confirmation
+                  </button>
+                </div>
+              )}
+
+              {/* Certified Success State, Receipt & Snapshot Envelope Export */}
+              {certificationUi.stage === 'certified' && certificationUi.receipt && (
+                <div className="admission-success-box">
+                  <span className="status-indicator success">Inventory Certified</span>
+                  <p>
+                    Inventory commitment{' '}
+                    <code>{shortenAddress(certificationUi.receipt.commitment)}</code> has been confirmed in the contract commitments set.
+                  </p>
+                  <dl className="receipt-details-list">
+                    <dt>Contract Address</dt>
+                    <dd><code>{shortenAddress(certificationUi.receipt.contractAddress)}</code></dd>
+                    <dt>Member Credential</dt>
+                    <dd><code>{shortenAddress(certificationUi.receipt.memberCredential)}</code></dd>
+                    {certificationUi.receipt.certificationTxId && (
+                      <>
+                        <dt>Transaction ID</dt>
+                        <dd><code>{shortenAddress(certificationUi.receipt.certificationTxId)}</code></dd>
+                      </>
+                    )}
+                    <dt>Certified At</dt>
+                    <dd>{certificationUi.receipt.certifiedAt}</dd>
+                  </dl>
+
+                  <div className="button-row" style={{ marginBottom: '16px' }}>
+                    <button
+                      type="button"
+                      className="action-button primary"
+                      onClick={handleDownloadCertificationReceipt}
+                      aria-label="Download public certification receipt JSON"
+                    >
+                      Download Certification Receipt (.json)
+                    </button>
+                  </div>
+
+                  {/* Certified Snapshot Envelope Export (Private to Member) */}
+                  <div className="backup-creation-box" style={{ marginTop: '16px', borderTop: '1px solid var(--border-color, #333)', paddingTop: '16px' }}>
+                    <h3>Export Certified Snapshot Envelope</h3>
+                    <p className="form-hint-text">
+                      Encrypts the member product, version, snapshot salt, commitment, and transaction ID using AES-256-GCM + PBKDF2 (600,000 iterations). Provide a shared passphrase (min 12 chars) to deliver privately to the Member.
+                    </p>
+
+                    <div className="input-field-group">
+                      <label htmlFor="cert-snapshot-passphrase">Snapshot Passphrase (min 12 chars)</label>
+                      <input
+                        id="cert-snapshot-passphrase"
+                        type={certSnapshotShowPassphrase ? 'text' : 'password'}
+                        value={certSnapshotPassphrase}
+                        placeholder="Passphrase to encrypt snapshot..."
+                        onChange={(e) => setCertSnapshotPassphrase(e.target.value)}
+                      />
+                    </div>
+
+                    <div className="input-field-group">
+                      <label htmlFor="cert-snapshot-confirm-passphrase">Confirm Snapshot Passphrase</label>
+                      <input
+                        id="cert-snapshot-confirm-passphrase"
+                        type={certSnapshotShowPassphrase ? 'text' : 'password'}
+                        value={certSnapshotConfirmPassphrase}
+                        placeholder="Confirm passphrase..."
+                        onChange={(e) => setCertSnapshotConfirmPassphrase(e.target.value)}
+                      />
+                    </div>
+
+                    <div className="checkbox-row" style={{ marginBottom: '8px' }}>
+                      <label>
+                        <input
+                          type="checkbox"
+                          checked={certSnapshotShowPassphrase}
+                          onChange={(e) => setCertSnapshotShowPassphrase(e.target.checked)}
+                        />
+                        Show passphrase
+                      </label>
+                    </div>
+
+                    {hasPasswordWhitespaceWarning(certSnapshotPassphrase) && (
+                      <div className="warning-notice-box" style={{ marginBottom: '8px' }}>
+                        <p>Warning: Passphrase contains leading or trailing whitespace.</p>
+                        <label>
+                          <input
+                            type="checkbox"
+                            checked={ackWhitespaceCertSnapshot}
+                            onChange={(e) => setAckWhitespaceCertSnapshot(e.target.checked)}
+                          />
+                          I acknowledge leading/trailing whitespace is intentional
+                        </label>
+                      </div>
+                    )}
+
+                    <div className="button-row">
+                      <button
+                        type="button"
+                        className="action-button primary"
+                        disabled={
+                          !validatePasswordConfirmation(certSnapshotPassphrase, certSnapshotConfirmPassphrase).valid ||
+                          (hasPasswordWhitespaceWarning(certSnapshotPassphrase) && !ackWhitespaceCertSnapshot)
+                        }
+                        onClick={handleExportCertifiedSnapshot}
+                        aria-label="Export encrypted certified snapshot envelope"
+                      >
+                        Export Encrypted Snapshot (.enc.json)
+                      </button>
+                    </div>
+
+                    {/* Downloaded Snapshot Envelope Recovery Testing */}
+                    <div className="test-backup-box" style={{ marginTop: '20px', borderTop: '1px dashed var(--border-color, #444)', paddingTop: '16px' }}>
+                      <h4>Test Downloaded Snapshot Envelope</h4>
+                      <p className="card-caption">
+                        Verify your downloaded envelope file before delivering to Member. Select the downloaded file and enter the passphrase to confirm decryption and parameters match.
+                      </p>
+
+                      <div className="status-row" style={{ marginBottom: '10px' }}>
+                        <span className="field-caption">Snapshot Recovery Status: </span>
+                        <strong className={`recovery-badge ${certificationUi.snapshotRecoveryStatus}`}>
+                          {certificationUi.snapshotRecoveryStatus === 'recovery-tested'
+                            ? 'Recovery Tested ✔'
+                            : certificationUi.snapshotRecoveryStatus === 'created-untested'
+                              ? 'Created (Untested)'
+                              : 'Not Created'}
+                        </strong>
+                      </div>
+
+                      <label htmlFor="cert-snapshot-test-file-input">Select Downloaded Snapshot File (.enc.json)</label>
+                      <input
+                        ref={certSnapshotTestInputRef}
+                        id="cert-snapshot-test-file-input"
+                        type="file"
+                        accept=".json,.enc.json,application/json"
+                        onChange={handleCertSnapshotTestFileSelect}
+                      />
+
+                      {certSnapshotTestFileContent && (
+                        <div style={{ marginTop: '12px' }}>
+                          <div className="input-field-group">
+                            <label htmlFor="cert-snapshot-test-passphrase-input">Snapshot Passphrase</label>
+                            <input
+                              id="cert-snapshot-test-passphrase-input"
+                              type={certSnapshotShowTestPassphrase ? 'text' : 'password'}
+                              value={certSnapshotTestPassphrase}
+                              placeholder="Enter passphrase to verify recovery..."
+                              onChange={(e) => setCertSnapshotTestPassphrase(e.target.value)}
+                            />
+                          </div>
+                          <div className="checkbox-row" style={{ marginBottom: '10px' }}>
+                            <label>
+                              <input
+                                type="checkbox"
+                                checked={certSnapshotShowTestPassphrase}
+                                onChange={(e) => setCertSnapshotShowTestPassphrase(e.target.checked)}
+                              />
+                              Show passphrase
+                            </label>
+                          </div>
+                          <button
+                            type="button"
+                            className="action-button primary"
+                            disabled={certSnapshotTestPassphrase.length < 12}
+                            onClick={handleTestDownloadedCertSnapshot}
+                            aria-label="Verify and test downloaded snapshot envelope"
+                          >
+                            Verify and Test Snapshot Envelope
+                          </button>
+                        </div>
+                      )}
+
+                      <div className="status-row" style={{ marginTop: '14px', marginBottom: '10px' }}>
+                        <span className="field-caption">Private Handoff Status: </span>
+                        {certificationUi.snapshotRecoveryStatus === 'recovery-tested' ? (
+                          <strong className="recovery-badge recovery-tested" style={{ color: '#4ade80' }}>
+                            Private Handoff Ready ✔ (Envelope Tested & Safe to Deliver)
+                          </strong>
+                        ) : certificationUi.snapshotRecoveryStatus === 'created-untested' ? (
+                          <strong className="recovery-badge created-untested" style={{ color: '#fbbf24' }}>
+                            Snapshot Downloaded (Handoff Blocked: Recovery Verification Pending)
+                          </strong>
+                        ) : (
+                          <strong className="recovery-badge none" style={{ color: '#9ca3af' }}>
+                            On-Chain Finalized (Snapshot Export & Recovery Pending)
+                          </strong>
+                        )}
+                      </div>
+
+                      <div className="button-row" style={{ marginTop: '16px' }}>
+                        <button
+                          type="button"
+                          className="action-button secondary"
+                          onClick={resetCertificationState}
+                          aria-label="Certify another inventory report"
+                        >
+                          Certify Another Request
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </article>
+          )}
+
+          {role === 'member' && (
+            <article className="workspace-card member-identity-card">
+              <div className="card-header">
+                <span className="card-step">03</span>
+                <h2>Member Role Identity & Credential</h2>
+              </div>
+              <p className="card-caption">
+                The member secret and salt are kept only in volatile session memory. JavaScript runtime cannot guarantee absolute memory scrubbing. Secrets are never exposed to Registrar or on-chain.
+              </p>
+
+              {/* Status Header */}
+              <div className="registrar-status-row" aria-live="polite">
+                <div>
+                  <span className="field-caption">Secret & Salt in Memory</span>
+                  <strong>
+                    {memberUi.hasSecret ? 'Loaded in session memory' : 'None (Locked)'}
+                  </strong>
+                </div>
+                <div>
+                  <span className="field-caption">Derived Credential</span>
+                  {memberUi.memberCredentialHex ? (
+                    <strong className="verification-badge verified" title={memberUi.memberCredentialHex}>
+                      {shortenAddress(memberUi.memberCredentialHex)}
+                    </strong>
+                  ) : (
+                    <strong className="verification-badge unverified">Not derived</strong>
+                  )}
+                </div>
+                <div>
+                  <span className="field-caption">On-chain Admission</span>
+                  <strong className={`verification-badge ${memberUi.verificationStatus}`}>
+                    {getMemberVerificationStatusLabel(memberUi.verificationStatus)}
+                  </strong>
+                </div>
+                <div>
+                  <span className="field-caption">Backup Recovery Status</span>
+                  <strong className={`recovery-badge ${memberUi.backupRecoveryStatus}`}>
+                    {memberUi.backupRecoveryStatus === 'recovery-tested'
+                      ? 'Recovery Tested ✔'
+                      : memberUi.backupRecoveryStatus === 'created-untested'
+                        ? 'Created (Untested)'
+                        : 'No Backup'}
+                  </strong>
+                </div>
+              </div>
+
+              {memberUi.verificationStatus === 'failed' && memberUi.verificationErrorMessage && (
+                <div className="safe-error-banner" role="alert">
+                  <strong>Admission Verification Error</strong>
+                  <p>{memberUi.verificationErrorMessage}</p>
+                </div>
+              )}
+
+              {memberNotice && (
+                <div className="safe-notice-banner" role="status">
+                  <p>{memberNotice}</p>
+                </div>
+              )}
+
+              {memberError && (
+                <div className="safe-error-banner" role="alert">
+                  <strong>Member Error</strong>
+                  <p>{memberError}</p>
+                </div>
+              )}
+
+              {/* One-time copy confirmation banner */}
+              {memberUi.hasSecret && memberUi.canCopyOnce && (
+                <div className="secret-reveal-box" role="alert">
+                  <div className="secret-reveal-header">
+                    <strong>One-Time Secret Copy Available</strong>
+                  </div>
+                  <p className="secret-warning-text">
+                    The secret is kept only for this browser session and is not written to persistent storage. Export an encrypted backup immediately.
+                  </p>
+                  <div className="one-time-copy-row">
+                    <button
+                      type="button"
+                      className="action-button primary"
+                      onClick={handleOneTimeCopyMemberSecret}
+                      disabled={memberUi.copyStatus === 'pending'}
+                      aria-label="Copy member secret to clipboard (one time only)"
+                    >
+                      {memberUi.copyStatus === 'pending'
+                        ? 'Copying...'
+                        : memberUi.copyStatus === 'failed'
+                          ? 'Retry Secret Copy'
+                          : 'Copy Secret to Clipboard (One-Time)'}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Action Tabs / Buttons */}
+              {!memberUi.hasSecret ? (
+                <div className="secret-setup-section">
+                  <button
+                    type="button"
+                    onClick={handleGenerateMemberIdentity}
+                    className="action-button primary"
+                    aria-label="Generate fresh random 32-byte member secret and independent salt"
+                  >
+                    Generate New Member Identity
+                  </button>
+
+                  <div className="divider-row"><span>or import existing 32-byte hex pair</span></div>
+
+                  <form
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      handleImportMemberIdentityHex();
+                    }}
+                  >
+                    <label htmlFor="import-member-secret-hex-input">
+                      32-Byte Member Secret Hex (64 hex characters)
+                    </label>
+                    <input
+                      id="import-member-secret-hex-input"
+                      type="password"
+                      value={memberImportSecretHexInput}
+                      onChange={(e) => setMemberImportSecretHexInput(e.target.value)}
+                      placeholder="Paste 64-character hex secret"
+                      autoComplete="off"
+                      spellCheck="false"
+                    />
+
+                    <label htmlFor="import-member-salt-hex-input" style={{ marginTop: '0.75rem' }}>
+                      32-Byte Independent Member Salt Hex (64 hex characters)
+                    </label>
+                    <input
+                      id="import-member-salt-hex-input"
+                      type="password"
+                      value={memberImportSaltHexInput}
+                      onChange={(e) => setMemberImportSaltHexInput(e.target.value)}
+                      placeholder="Paste 64-character independent hex salt"
+                      autoComplete="off"
+                      spellCheck="false"
+                    />
+
+                    <button
+                      type="submit"
+                      disabled={!memberImportSecretHexInput.trim() || !memberImportSaltHexInput.trim()}
+                      className="action-button secondary"
+                      aria-label="Import plaintext member secret and salt hex"
+                    >
+                      Import Hex Identity
+                    </button>
+                  </form>
+
+                  <div className="divider-row"><span>or restore encrypted backup</span></div>
+
+                  <div className="backup-import-box">
+                    <label htmlFor="member-backup-file-input">Encrypted Backup JSON File</label>
+                    <input
+                      id="member-backup-file-input"
+                      type="file"
+                      accept=".json,application/json"
+                      onChange={handleMemberBackupFileSelect}
+                    />
+
+                    {memberBackupFileContent && (
+                      <form
+                        onSubmit={(e) => {
+                          e.preventDefault();
+                          handleImportMemberBackup();
+                        }}
+                      >
+                        <label htmlFor="import-member-passphrase-input">
+                          Backup Passphrase (min 12 chars)
+                        </label>
+                        <input
+                          id="import-member-passphrase-input"
+                          type="password"
+                          value={memberImportPassphrase}
+                          onChange={(e) => setMemberImportPassphrase(e.target.value)}
+                          placeholder="Enter passphrase"
+                          autoComplete="off"
+                        />
+                        <button
+                          type="submit"
+                          disabled={memberImportPassphrase.length < 12}
+                          className="action-button primary"
+                          aria-label="Decrypt and restore member backup"
+                        >
+                          Decrypt and Restore Identity
+                        </button>
+                      </form>
+                    )}
+                  </div>
+                </div>
+              ) : (
+                <div className="secret-active-controls">
+                  <div className="button-row">
+                    <button
+                      type="button"
+                      onClick={handleExportMemberAdmissionPackage}
+                      disabled={!contractState.attachedAddress || memberUi.backupRecoveryStatus !== 'recovery-tested'}
+                      className="action-button primary"
+                      aria-label="Export restricted member admission package JSON"
+                    >
+                      Export Admission Package (.json)
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={handleVerifyMemberAdmission}
+                      disabled={!contractState.attachedAddress || memberUi.verificationStatus === 'pending'}
+                      className="action-button secondary"
+                      aria-label="Verify member admission on-chain"
+                    >
+                      {memberUi.verificationStatus === 'pending'
+                        ? 'Verifying Admission...'
+                        : 'Verify On-Chain Admission'}
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={handleLockMemberSession}
+                      className="action-button secondary"
+                      aria-label="Lock member session and zeroize secret and salt"
+                    >
+                      Lock Session
+                    </button>
+                  </div>
 
                   {memberUi.backupRecoveryStatus !== 'recovery-tested' && (
                     <p className="form-hint-text">
