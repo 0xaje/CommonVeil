@@ -1,8 +1,8 @@
 # CommonVeil — confidential exposure coordination
 
-CommonVeil is progressing through measured Midnight Preprod milestones. CV-005 adds a cryptographically separate authorized certifier that must originate the private inventory commitment before the affected-release policy activates.
+CommonVeil is a multi-role Midnight application for coordinating vulnerability exposure without publishing a member identity or private inventory. The latest operational run separates Registrar, Certifier, and Member workspaces and carries a genuine host measurement through admission, pre-policy certification, policy activation, and private Member evaluation.
 
-## What CV-005 proves
+## What the protocol proves
 
 - A registrar admitted the reporting credential.
 - An authorized certifier committed the private inventory before policy activation.
@@ -10,7 +10,7 @@ CommonVeil is progressing through measured Midnight Preprod milestones. CV-005 a
 - The member has not already reported for that advisory.
 - The accepted count can increase without publishing member identity or inventory value.
 
-The final CV-005 flow is verified by six genuine Midnight Preprod transactions. See [docs/evidence.md](docs/evidence.md).
+The earlier CV-005 reference flow is verified by six genuine Midnight Preprod transactions. The 2026-10-14 operational run additionally records a genuine `live-host-scan` of XZ Utils 5.2.5 and an honest negative evaluation against a registered 5.6.0 affected-release policy. See [docs/evidence.md](docs/evidence.md).
 
 ## Run in Linux or WSL
 
@@ -58,9 +58,9 @@ Never upload wallet seeds, mnemonics, private inventory, or private state. A Pre
 
 CV-001 through CV-005 established the verified on-chain Preprod cryptographic baseline. CV-006 through CV-011 complete the multi-role operational protocol across Registrar, Certifier, and Member.
 
-Preprod operational build with locally verified workflows; final live end-to-end policy and attestation validation remains pending network availability.
+The multi-role operational workflow has now been exercised on Midnight Preprod through deployment, Member admission, authorized inventory certification, affected-release registration, policy activation, encrypted snapshot handoff, read-only admission verification, and final Member evaluation. The genuine host was not affected, so CommonVeil correctly blocked attestation and requested no attestation transaction.
 
-Automated Compact execution evidence validates all core protocol circuits locally without network dependency. Prior genuine Preprod deployment and admission evidence (CV-001 through CV-005) is preserved in `docs/status.md` and `docs/evidence.md`. Final live submission of CV-008 through CV-011 transactions remains pending indexer availability on Midnight Preprod.
+Automated Compact execution validates the positive and negative protocol paths locally without network dependency. Earlier genuine positive Preprod evidence (CV-001 through CV-005) remains preserved separately from the 2026-10-14 genuine negative operational run.
 
 Honest scanning: scanning the genuine host measures `xz-utils 5.2.5`, which is honestly evaluated as outside the registered `CVE-2024-3094` affected-release set (5.6.0 and 5.6.1). CommonVeil does not fabricate a positive exposure claim for `xz-utils 5.2.5`.
 
@@ -81,5 +81,7 @@ Official references: https://docs.midnight.network/relnotes/support-matrix and h
 - [Architecture and circuit flow](docs/architecture.md)
 - [Threat model and claim boundary](docs/threat-model.md)
 - [Verified Preprod evidence](docs/evidence.md)
+- [2026-10-14 operational evidence](docs/evidence/live-preprod-2026-10-14/README.md)
 - [Judge demo runbook](docs/demo-runbook.md)
 - [Measured milestone history](docs/status.md)
+- [Submission checklist](docs/submission-checklist.md)

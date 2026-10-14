@@ -101,4 +101,18 @@ References inspected: official example-hello-world commit fa01af37511e955672f484
 - Privacy-preserving public receipt (`commonveil.private-attestation-receipt/v1`) whitelists only non-linking metadata (`schema`, `network`, `contractAddress`, `advisoryId`, `attestationTxId`, `acceptedAt`, `status`). Member credentials, secrets, salts, and host measurements are strictly excluded.
 - Total test suite: 208 passing tests across 6 MJS and 202 TypeScript tests, validating all protocol invariants, prerequisite gating, encryption/decryption, error sanitization, lifecycle zeroization, and authentic Compact circuit execution.
 
-Preprod operational build with locally verified workflows; final live end-to-end policy and attestation validation remains pending network availability.
+The CV-011 implementation was locally verified at this milestone. Subsequent operational evidence is recorded below.
+
+## Multi-role Preprod operational run — 2026-10-14 (Africa/Lagos)
+
+- Deployed contract: `b62b97709f7629cede3bcbcd52ecda4fe2ad204ceac2946fda484789d104d23b`.
+- A Member credential was admitted and later confirmed through a read-only on-chain admission lookup.
+- The genuine host scan measured `pkg:generic/xz-utils` raw version `5.2.5-2ubuntu1.1`, normalized version 5.2.5, with `live-host-scan` provenance and measurement digest `e1d39a145e334c3664c1128f45d915c446dd3b718a6867d0fb23262778d25483`.
+- An authorized Certifier committed the Member snapshot before policy activation; the encrypted snapshot was transferred, decrypted, recovery-tested, and matched to the admitted Member locally.
+- The Registrar registered `CVE-2024-3094` / `pkg:generic/xz-utils` / 5.6.0 and activated the contract policy.
+- All Member evaluation prerequisites were verified, including admission, snapshot commitment, receipt, and active policy.
+- CommonVeil returned `Unaffected Release Evaluation` because certified version 5.2.5 is outside the registered 5.6.0 set.
+- No attestation transaction was requested or submitted; no nullifier was created and the accepted counter was not incremented by this evaluation.
+- Full current-run transaction IDs not present in the supplied artifacts are recorded as `not captured`, never inferred from the contract address or earlier CV-005 transactions.
+
+This completes the genuine negative operational path. A live positive attestation remains deliberately unclaimed.

@@ -1,6 +1,6 @@
 # Verified Midnight Preprod evidence
 
-This index contains the final CV-005 demonstration only. Every identifier below was returned from a transaction submitted through the connected wallet and captured by the DApp. Earlier milestone evidence remains in [status.md](status.md).
+This index separates two genuine Preprod evidence sets. Do not combine their identifiers: the table below is the earlier CV-005 positive reference run, while the [2026-10-14 operational run](evidence/live-preprod-2026-10-14/README.md) used a different contract and produced an honest unaffected result.
 
 | Operation | Finalized transaction ID |
 |---|---|
@@ -19,11 +19,8 @@ Measured public result after finalization:
 
 These transactions demonstrate protocol behavior on Preprod. The controlled XZ Utils 5.6.1 input is not a claim that the test computer was exposed.
 
-## CV-006 through CV-011 Operational Status
+## Multi-role operational evidence — 2026-10-14
 
-Preprod operational build with locally verified workflows; final live end-to-end policy and attestation validation remains pending network availability.
+The separate Registrar, Certifier, and Member workflow was executed against contract `b62b97709f7629cede3bcbcd52ecda4fe2ad204ceac2946fda484789d104d23b`. The genuine host scan measured `pkg:generic/xz-utils` 5.2.5 with `live-host-scan` provenance. The Member was admitted, the snapshot was certified before policy activation, and the 5.6.0 policy was registered. The Member then verified all prerequisites and received the correct unaffected result.
 
-- **Automated Compact Execution Evidence**: Full end-to-end multi-role workflows and circuit execution (admission, inventory certification, policy registration, and private attestation) are tested and verified locally using authentic Compact circuit execution.
-- **Prior Genuine Preprod Evidence**: The deployment, admission, certification, policy registration, and private attestation transactions listed above represent genuine finalized transactions on Midnight Preprod from milestone CV-005.
-- **Pending Live Transactions**: Live on-chain execution of the multi-role split workflows (CV-008 through CV-011) remains pending until the Midnight Preprod indexer returns to availability.
-- **Genuine Host Measurement**: Scanning the host machine yields `xz-utils 5.2.5`, which correctly and honestly evaluates as unaffected by `CVE-2024-3094`.
+No attestation transaction exists for this run: 5.2.5 is outside the registered 5.6.0 affected-release set. This is a successful negative protocol outcome, not a failed transaction. Full transaction identifiers that were not retained in the supplied evidence are explicitly marked `not captured` in the run manifest.

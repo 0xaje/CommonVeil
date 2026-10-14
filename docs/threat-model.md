@@ -26,7 +26,7 @@ The generated-circuit test exercises each of these negative paths against the co
 
 ## Explicit non-goals
 
-- The demo does not prove that a real scanner measured a real host.
+- Package validation alone does not cryptographically prove that a scanner measured the claimed host. The 2026-10-14 evidence is a genuine local package-manager scan, but it is not hardware-backed remote attestation.
 - It does not provide hardware-backed device identity or remote attestation.
 - It does not prove inventory completeness or absence of exposure.
 - It does not prove that admitted credentials represent distinct organizations.
@@ -46,6 +46,6 @@ The generated-circuit test exercises each of these negative paths against the co
 
 A production deployment needs independently operated registrar and certifier services, secure key custody, authenticated credential handoff, scanner-to-host binding, durable encrypted private state, recovery and rotation procedures, monitoring, and an audited enrollment policy.
 
-## Operational Status
+## Operational status
 
-Preprod operational build with locally verified workflows; final live end-to-end policy and attestation validation remains pending network availability.
+The multi-role Preprod workflow reached an honest negative evaluation on 2026-10-14. It does not claim a successful live exposure attestation for that run. Demonstrating the positive path with live host provenance requires a genuinely affected isolated environment whose snapshot is certified before policy activation; changing the observed version or relabelling a test vector is prohibited.

@@ -1,75 +1,77 @@
 # Judge demo runbook
 
-## Prerequisites
+This runbook presents completed live evidence without pretending to submit fresh transactions during recording.
 
-- Ubuntu or WSL2
-- Node.js 22 or newer
-- Compact compiler 0.31.1
-- Docker with the 8.1.0 proof server
-- Chrome with a funded Connector v4 wallet on Midnight Preprod
-
-Never enter or share a wallet seed, mnemonic, or private key in this repository or demo page.
-
-## Verify the repository
+## 1. Verify the build
 
 ```sh
 npm ci
 npm run verify
+npm run --silent scan:json > inventory-report.json
+node -e "JSON.parse(require('fs').readFileSync('inventory-report.json','utf8')); console.log('VALID JSON')"
+rm inventory-report.json
 ```
 
-Expected compiler circuits:
+Explain that generated Compact circuit tests exercise the protocol locally, while the evidence directory records the separate live Preprod run.
 
-- `attest` — k=15, 19,049 rows
-- `certifyInventory` — k=14, 9,061 rows
-- `registerAffectedRelease` — k=13, 6,872 rows
-- `registerMember` — k=13, 2,605 rows
+## 2. Introduce the problem
 
-The generated-circuit test must report one pass and zero failures.
+“Organizations need to coordinate vulnerability exposure without publishing which organization is affected or what software it operates. CommonVeil separates enrollment, certification, policy publication, and private proof across Registrar, Certifier, and Member roles.”
 
-## Scan the actual host
+## 3. Show the live contract read-only
 
-```sh
-npm run scan
-```
+1. Open the Member workspace on Midnight Preprod.
+2. Connect 1AM.
+3. Inspect or attach contract `b62b97709f7629cede3bcbcd52ecda4fe2ad204ceac2946fda484789d104d23b`.
+4. State clearly that attachment is a read-only lookup and is not a new transaction.
+5. Show public counts and `policyActive` exactly as returned by the indexer.
 
-Record the JSON exactly as produced. `provenance` must be `live-host-scan`. If the installed version is not 5.6.0 or 5.6.1, say that the host is not a positive CVE-2024-3094 demonstration target. Do not alter the output or claim the controlled browser test vector came from this scan.
+Do not redeploy, re-admit, recertify, or reregister policy during a normal recording.
 
-## Start proving and the DApp
+## 4. Show role separation and recovery
 
-```sh
-docker run -d --name commonveil-proof-server -p 127.0.0.1:6300:6300 midnightntwrk/proof-server:8.1.0 midnight-proof-server -v
-curl http://localhost:6300/health
-npm run dev
-```
+Briefly show the three independent workspaces and the encrypted-backup/recovery-test controls. Never display passwords, secrets, salts, wallet seed phrases, private certification requests, or decrypted snapshot files.
 
-If the named container already exists, start it with `docker start commonveil-proof-server` instead of creating another one.
+## 5. Show the genuine measurement
 
-Open `http://localhost:3000` and keep the wallet unlocked during each operation.
+Show the terminal output or sanitized report summary:
 
-## Live flow
+- provenance: `live-host-scan`;
+- product: `pkg:generic/xz-utils`;
+- raw version: `5.2.5-2ubuntu1.1`;
+- normalized version: `5.2.5`; and
+- digest: `e1d39a145e334c3664c1128f45d915c446dd3b718a6867d0fb23262778d25483`.
 
-1. Connect the Preprod wallet.
-2. Deploy CV-005 with distinct derived registrar and certifier keys.
-3. Admit the demo member's opaque credential.
-4. Select XZ Utils 5.6.1 as the clearly labelled protocol test vector and certify the private snapshot.
-5. Enter exactly `CVE-2024-3094` and register the exact policy. Approve both release-registration transactions.
-6. Generate and submit the private certified-exposure proof.
+Do not display the report's host fingerprint publicly.
 
-The successful final view must show `Verified`, accepted reports `1`, used nullifiers `1`, inventory value `Not published`, and six transaction identifiers.
+## 6. Show the completed Member evaluation
 
-> [!NOTE]
-> **Manual Live Runbook Status**: Marked pending until the Midnight Preprod indexer is available.
-> Preprod operational build with locally verified workflows; final live end-to-end policy and attestation validation remains pending network availability.
-> Local verification runs complete Compact circuit proofs locally.
+Use the committed screenshots or reproduce the read-only UI state:
 
-## Host measurement and honest negative evaluation
+1. `Verified admitted` and `Recovery Tested`.
+2. `Encrypted Snapshot Verified` with Member credential matched locally.
+3. Every evaluation prerequisite checked.
+4. `Unaffected Release Evaluation — This certified version is outside the registered affected-release set.`
 
-When `npm run scan` is run on the genuine host, it detects `xz-utils 5.2.5`. When imported by the Member:
-- CommonVeil verifies the measurement honestly.
-- Because registered CVE-2024-3094 releases are 5.6.0 and 5.6.1, CommonVeil blocks attestation and reports:
-  *"This certified version is outside the registered affected-release set."*
-- CommonVeil never fabricates a positive match or alters genuine scan data.
+Say explicitly: “The real host measured 5.2.5. The Registrar registered 5.6.0. CommonVeil therefore blocks attestation. No wallet approval, nullifier, or accepted report is created.”
 
-## What to say during the demo
+## 7. Explain why the negative result matters
 
-“CommonVeil lets an admitted organization prove that an authorized pre-policy inventory snapshot falls within an exact affected-release set. Midnight verifies membership, certification timing, affected-version matching, and duplicate prevention without publishing the organization or its inventory value. This Preprod demo uses distinct role secrets in one browser; production scanner isolation and hardware-backed measurement remain explicit future work.”
+The value is not manufacturing a positive alert. The system preserves private evidence, checks the exact certified tuple against public policy, and refuses to create a blockchain claim when the tuple is outside the affected set.
+
+## 8. Separate prior positive evidence
+
+The six transaction IDs in [evidence.md](evidence.md) belong to the earlier CV-005 positive reference run using a controlled protocol-demonstration input. Present them as prior protocol evidence, never as transactions from the 2026-10-14 genuine-host run.
+
+## 9. Close with the honest boundary
+
+“This run proves the genuine negative operational path on Preprod. A live positive host attestation would require a genuinely affected isolated environment certified before policy activation. We do not change scan results or relabel test vectors to manufacture exposure.”
+
+## Recording safety checklist
+
+- Hide browser downloads and filesystem paths containing private packages.
+- Hide wallet balances if they are not needed.
+- Do not show secrets, passphrases, salts, seed phrases, or host fingerprints.
+- Distinguish a read-only lookup from a submitted transaction.
+- Never claim an uncaptured transaction ID.
+- Never call the genuine unaffected result a failed transaction.

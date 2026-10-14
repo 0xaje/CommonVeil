@@ -1,4 +1,4 @@
-# CommonVeil CV-005 architecture
+# CommonVeil architecture
 
 ## Purpose
 
@@ -22,7 +22,7 @@ flowchart TD
 | Member | `memberSecret`, `memberSalt`, `snapshotSalt`, product/version | Prove the certified snapshot matches an affected release |
 | Observer | None | Read public counts, commitments, nullifiers, and submitted transaction IDs |
 
-The Preprod demonstration generates all three private roles inside one browser session. Their keys are cryptographically distinct, but the demo is not evidence of organizational or device isolation.
+The operational interface provides separate Registrar, Certifier, and Member workspaces. Role secrets are cryptographically distinct and exchanged data is constrained by typed packages, but a single operator exercising the three workspaces is not evidence of organizational or device isolation.
 
 ## Contract state
 
@@ -65,8 +65,8 @@ Out-of-band communication between roles is partitioned into strictly typed packa
 - `commonveil.affected-release-registration-receipt/v1`: Public affected-release registration receipt.
 - `commonveil.private-attestation-receipt/v1`: Public attestation receipt containing only safe, non-linking transaction and scope fields.
 
-## Operational Status
+## Operational status
 
-Preprod operational build with locally verified workflows; final live end-to-end policy and attestation validation remains pending network availability.
+The 2026-10-14 Preprod run completed the multi-role flow through final evaluation. Because the genuine host measured XZ Utils 5.2.5 and the active policy registered 5.6.0, the Member was correctly classified as unaffected and no attestation transaction was created. The positive attestation path remains covered by authentic generated Compact circuit execution and the earlier CV-005 Preprod reference run.
 
 See [threat-model.md](threat-model.md) for non-goals and residual risks.
