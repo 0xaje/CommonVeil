@@ -1,40 +1,39 @@
 import { useEffect, useState } from 'react';
+import { PublicSite, type PublicRoute } from './PublicSite';
 import { parseRoleQuery, type RoleType } from './role-workspace-state';
 import { RoleWorkspace } from './RoleWorkspace';
-import { LegacyDemo } from './LegacyDemo';
+
+const parsePublicRoute = (pathname: string): PublicRoute => {
+  const normalized = pathname.replace(/\/+$/, '') || '/';
+  if (normalized === '/how-it-works') return 'how-it-works';
+  if (normalized === '/evidence') return 'evidence';
+  if (normalized === '/docs') return 'docs';
+  if (normalized === '/app') return 'app';
+  return 'home';
+};
 
 export default function App() {
-  const [currentRole, setCurrentRole] = useState<RoleType | null>(() => {
-    if (typeof window !== 'undefined') {
-      return parseRoleQuery(window.location.search);
-    }
-    return null;
+  const readLocation = () => ({
+    role: parseRoleQuery(window.location.search),
+    route: parsePublicRoute(window.location.pathname),
   });
+  const [location, setLocation] = useState<{ role: RoleType | null; route: PublicRoute }>(readLocation);
 
   useEffect(() => {
-    const handlePopState = () => {
-      setCurrentRole(parseRoleQuery(window.location.search));
-    };
+    const handlePopState = () => setLocation(readLocation());
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
   }, []);
 
-  const navigateToOverview = () => {
-    if (typeof window !== 'undefined' && window.location.search) {
-      window.history.pushState({}, '', window.location.pathname);
-    }
-    setCurrentRole(null);
+  const navigate = (href: string) => {
+    window.history.pushState({}, '', href);
+    setLocation(readLocation());
+    window.scrollTo({ top: 0, behavior: 'auto' });
   };
 
-  if (currentRole) {
-    return (
-      <RoleWorkspace
-        key={currentRole}
-        role={currentRole}
-        onNavigateOverview={navigateToOverview}
-      />
-    );
+  if (location.role) {
+    return <RoleWorkspace key={location.role} role={location.role} onNavigateOverview={() => navigate('/app')} />;
   }
 
-  return <LegacyDemo />;
+  return <PublicSite route={location.route} onNavigate={navigate} />;
 }
