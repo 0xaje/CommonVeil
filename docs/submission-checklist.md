@@ -6,7 +6,7 @@ This checklist tracks the requirements shown on the official AKINDO Buildathon p
 
 - [x] Public GitHub repository: `https://github.com/0xaje/CommonVeil`.
 - [x] Repository default branch contains the complete current product.
-- [x] Feature branch and `main` are identical at commit `412b5a40c90602c2c7e0abd16b69e76a4cfe7804`.
+- [x] Feature branch and `main` were synchronized before submission preparation; keep them synchronized after final documentation changes.
 - [x] At least one Compact contract compiles; CommonVeil contains four state-changing circuits.
 - [x] Midnight functionality is material to the product rather than a superficial integration.
 - [x] Midnight-related code is licensed under Apache License 2.0.
