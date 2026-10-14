@@ -135,6 +135,10 @@ export function validateBlockfrostOverride(
 /**
  * Determines indexer endpoints using either validated Blockfrost overrides
  * or wallet-provided configuration fallback.
+ *
+ * NOTE: Production deployments should always rely on wallet-provided indexer configuration.
+ * Client-side VITE_* overrides are strictly for local developer use, as any VITE_* variable
+ * is bundled directly into the public client application bundle.
  */
 export function resolveIndexerEndpoints(
   envHttp: string | undefined,
@@ -146,6 +150,12 @@ export function resolveIndexerEndpoints(
 
   if (hasHttp || hasWs) {
     const validated = validateBlockfrostOverride(envHttp, envWs);
+    if (typeof window !== 'undefined' && import.meta.env.PROD) {
+      console.warn(
+        'SECURITY WARNING: Client-side indexer override detected in production build. ' +
+        'Prefer wallet-provided indexer endpoints to avoid baking credentials into client bundles.',
+      );
+    }
     return {
       httpUri: validated.httpUri,
       wsUri: validated.wsUri,

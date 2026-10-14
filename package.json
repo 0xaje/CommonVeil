@@ -10,8 +10,8 @@
     "scan": "node scripts/scan-inventory.mjs",
     "scan:json": "node scripts/scan-inventory.mjs",
     "verify": "npm run doctor && npm run compile && npm test && npm run build",
-    "dev": "mkdir -p public/keys public/zkir && cp -r contracts/managed/commonveil/keys/* public/keys/ && cp -r contracts/managed/commonveil/zkir/* public/zkir/ && vite",
-    "build": "mkdir -p public/keys public/zkir && cp -r contracts/managed/commonveil/keys/* public/keys/ && cp -r contracts/managed/commonveil/zkir/* public/zkir/ && tsc --noEmit && vite build && mkdir -p dist/keys dist/zkir && cp -r contracts/managed/commonveil/keys/* dist/keys/ && cp -r contracts/managed/commonveil/zkir/* dist/zkir/"
+    "dev": "node scripts/sync-assets.mjs public && vite",
+    "build": "node scripts/sync-assets.mjs public && tsc --noEmit && vite build && node scripts/sync-assets.mjs dist"
   },
   "dependencies": {
     "@midnight-ntwrk/compact-js": "2.5.1",
