@@ -303,6 +303,7 @@ For assumptions, adversaries, residual risks, and non-goals, read the [threat mo
 - [2026-10-14 live operational evidence](docs/evidence/live-preprod-2026-10-14/README.md)
 - [Judge demonstration runbook](docs/demo-runbook.md)
 - [Measured milestone history](docs/status.md)
+- [Buildathon pitch deck](docs/pitch/CommonVeil-Midnight-Buildathon-Deck.pptx)
 - [Buildathon submission draft](docs/buildathon-submission.md)
 - [Submission checklist](docs/submission-checklist.md)
 
