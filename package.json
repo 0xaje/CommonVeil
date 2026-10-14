@@ -12,7 +12,7 @@
     "scan:json": "node scripts/scan-inventory.mjs",
     "verify": "npm run doctor && npm run compile && npm test && npm run build",
     "dev": "node scripts/sync-assets.mjs public && vite",
-    "build": "node scripts/sync-assets.mjs public && tsc --noEmit && vite build && node scripts/sync-assets.mjs dist"
+    "build": "node scripts/prebuild-check.mjs && node scripts/sync-assets.mjs public && tsc --noEmit && vite build && node scripts/sync-assets.mjs dist"
   },
   "dependencies": {
     "@midnight-ntwrk/compact-js": "2.5.1",
