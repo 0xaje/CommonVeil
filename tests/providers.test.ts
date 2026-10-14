@@ -18,13 +18,35 @@ const WALLET_CONFIG = {
   indexerWsUri: 'wss://indexer.preprod.midnight.network/api/v1/graphql/ws',
 };
 
-// 1. Valid Blockfrost HTTP and WebSocket pair
-test('1. Valid Blockfrost HTTP and WebSocket pair resolves to Blockfrost override', () => {
-  const result = resolveIndexerEndpoints(VALID_HTTP_URL, VALID_WS_URL, WALLET_CONFIG);
+// 1. Valid Blockfrost HTTP and WebSocket pair in development
+test('1. Valid Blockfrost HTTP and WebSocket pair resolves to Blockfrost override in dev mode', () => {
+  const result = resolveIndexerEndpoints(VALID_HTTP_URL, VALID_WS_URL, WALLET_CONFIG, false);
 
   assert.equal(result.httpUri, VALID_HTTP_URL);
   assert.equal(result.wsUri, VALID_WS_URL);
   assert.equal(result.status, 'Blockfrost override configured');
+});
+
+// 1b. Production build strictly rejects client-side environment overrides
+test('1b. Production build strictly rejects client-side environment overrides', () => {
+  assert.throws(
+    () => resolveIndexerEndpoints(VALID_HTTP_URL, VALID_WS_URL, WALLET_CONFIG, true),
+    (err: any) => {
+      assert.equal(err instanceof IndexerConfigurationError, true);
+      assert.match(err.message, /strictly forbidden in production builds/);
+      return true;
+    },
+  );
+
+  // Even with invalid or placeholder values, production reject policy triggers
+  assert.throws(
+    () => resolveIndexerEndpoints('any-override', 'any-override', WALLET_CONFIG, true),
+    (err: any) => {
+      assert.equal(err instanceof IndexerConfigurationError, true);
+      assert.match(err.message, /strictly forbidden in production builds/);
+      return true;
+    },
+  );
 });
 
 // 2. Fallback to wallet configuration when env overrides are absent or empty

@@ -10,19 +10,19 @@ test('Vercel CSP and security headers configuration', () => {
   const globalHeaderGroup = vercelConfig.headers.find((h: any) => h.source === '/(.*)');
   assert.ok(globalHeaderGroup, 'Global headers must be defined for /(.*)');
 
-  const headerMap = new Map(
-    globalHeaderGroup.headers.map((h: any) => [h.key.toLowerCase(), h.value])
+  const headerMap = new Map<string, string>(
+    globalHeaderGroup.headers.map((h: any) => [String(h.key).toLowerCase(), String(h.value)])
   );
 
   // 1. Mandatory security headers
   assert.equal(headerMap.get('x-content-type-options'), 'nosniff');
   assert.equal(headerMap.get('x-frame-options'), 'DENY');
   assert.equal(headerMap.get('referrer-policy'), 'strict-origin-when-cross-origin');
-  assert.match(headerMap.get('strict-transport-security'), /max-age=31536000/);
+  assert.match(headerMap.get('strict-transport-security') ?? '', /max-age=31536000/);
 
   // 2. CSP analysis
-  const csp = headerMap.get('content-security-policy');
-  assert.ok(csp, 'Content-Security-Policy must be set');
+  const csp = headerMap.get('content-security-policy') ?? '';
+  assert.ok(csp.length > 0, 'Content-Security-Policy must be set');
 
   // Must allow wasm-unsafe-eval for client-side WASM crypto/circuits
   assert.match(csp, /script-src[^;]*'wasm-unsafe-eval'/, 'CSP must allow wasm-unsafe-eval for Midnight WASM');
@@ -47,9 +47,13 @@ test('Vercel CSP and security headers configuration', () => {
   assert.ok(keysHeader, 'Keys header must be configured');
   const keysType = keysHeader.headers.find((h: any) => h.key === 'Content-Type')?.value;
   assert.equal(keysType, 'application/octet-stream');
+  const keysCache = String(keysHeader.headers.find((h: any) => h.key === 'Cache-Control')?.value ?? '');
+  assert.match(keysCache, /must-revalidate/, 'Keys must not be cached immutably without revalidation');
 
   const zkirHeader = vercelConfig.headers.find((h: any) => h.source.includes('zkir'));
   assert.ok(zkirHeader, 'ZKIR header must be configured');
   const zkirType = zkirHeader.headers.find((h: any) => h.key === 'Content-Type')?.value;
   assert.equal(zkirType, 'application/octet-stream');
+  const zkirCache = String(zkirHeader.headers.find((h: any) => h.key === 'Cache-Control')?.value ?? '');
+  assert.match(zkirCache, /must-revalidate/, 'ZKIR must not be cached immutably without revalidation');
 });

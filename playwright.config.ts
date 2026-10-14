@@ -1,4 +1,4 @@
-import { defineConfig } from '@playwright/test';
+import { defineConfig, devices } from '@playwright/test';
 
 export default defineConfig({
   testDir: './tests/e2e',
@@ -8,9 +8,12 @@ export default defineConfig({
   },
   use: {
     baseURL: 'http://localhost:3001',
-    launchOptions: {
-      executablePath: '/usr/bin/google-chrome',
-      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu'],
-    },
+    trace: 'on-first-retry',
   },
+  projects: [
+    {
+      name: 'chromium',
+      use: { ...devices['Desktop Chrome'] },
+    },
+  ],
 });

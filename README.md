@@ -201,11 +201,15 @@ Verify it separately:
 curl http://localhost:6300/health
 ```
 
-The application prefers the wallet’s proving provider. It falls back to the configured or local HTTP proof server when the wallet prover is unavailable.
+The application prefers the wallet’s proving provider (such as 1AM’s built-in proof service). When running in local development (`http://localhost`), it can fall back to the local HTTP proof server (`http://localhost:6300`).
+
+> [!WARNING]
+> **Production Proving Limitation:**
+> When deployed to a public HTTPS origin (such as Vercel), modern web browsers enforce strict Private Network Access (PNA) and Mixed Content policies that block web pages loaded over public HTTPS from initiating unencrypted requests to private IP addresses or loopback (`http://localhost:6300`). Therefore, public production visitors **must** use a compatible Midnight wallet that provides proving via the Midnight Connector API (e.g. 1AM with wallet prover enabled) unless a secure, publicly accessible HTTPS proof server is configured.
 
 ### Configure the Preprod indexer when required
 
-CommonVeil normally uses the indexer configuration supplied by 1AM. If that endpoint is unavailable, copy `.env.example` to an untracked `.env` file and supply a valid paired Midnight Preprod Blockfrost HTTPS/WSS configuration. The application rejects incomplete pairs, placeholder credentials, unsafe protocols, and unexpected hosts. Never commit the resulting `.env` file or expose its project token.
+CommonVeil in production derives its indexer endpoints directly from the user's connected wallet (e.g. 1AM / Lace on Midnight Preprod). For security, client-side `VITE_*` environment overrides are disabled in production builds to prevent leaking Blockfrost project tokens in browser bundles. For local development only, an untracked `.env.local` file may be used.
 
 ### Start the application
 
