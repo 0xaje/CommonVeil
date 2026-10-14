@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { PublicSite, type PublicRoute } from './PublicSite';
-import { parseRoleQuery, type RoleType } from './role-workspace-state';
+import { connectProviders, type ConnectedWallet } from './providers';
+import { mapWalletError, parseRoleQuery, type RoleType } from './role-workspace-state';
 import { RoleWorkspace } from './RoleWorkspace';
 
 const parsePublicRoute = (pathname: string): PublicRoute => {
@@ -18,6 +19,9 @@ export default function App() {
     route: parsePublicRoute(window.location.pathname),
   });
   const [location, setLocation] = useState<{ role: RoleType | null; route: PublicRoute }>(readLocation);
+  const [wallet, setWallet] = useState<ConnectedWallet | null>(null);
+  const [walletConnecting, setWalletConnecting] = useState(false);
+  const [walletError, setWalletError] = useState<string | null>(null);
 
   useEffect(() => {
     const handlePopState = () => setLocation(readLocation());
@@ -31,9 +35,27 @@ export default function App() {
     window.scrollTo({ top: 0, behavior: 'auto' });
   };
 
+  const connectWallet = async () => {
+    if (wallet || walletConnecting) return;
+    setWalletConnecting(true);
+    setWalletError(null);
+    try {
+      setWallet(await connectProviders(() => {}));
+    } catch (reason: unknown) {
+      setWalletError(mapWalletError(reason));
+    } finally {
+      setWalletConnecting(false);
+    }
+  };
+
+  const disconnectWallet = () => {
+    setWallet(null);
+    setWalletError(null);
+  };
+
   if (location.role) {
-    return <RoleWorkspace key={location.role} role={location.role} onNavigateOverview={() => navigate('/app')} />;
+    return <RoleWorkspace key={location.role} role={location.role} wallet={wallet} walletConnecting={walletConnecting} walletError={walletError} onConnectWallet={connectWallet} onDisconnectWallet={disconnectWallet} onNavigateOverview={() => navigate('/app')} onNavigateRole={(role) => navigate(`/?role=${role}`)} />;
   }
 
-  return <PublicSite route={location.route} onNavigate={navigate} />;
+  return <PublicSite route={location.route} onNavigate={navigate} wallet={wallet} walletConnecting={walletConnecting} walletError={walletError} onConnectWallet={connectWallet} onDisconnectWallet={disconnectWallet} />;
 }

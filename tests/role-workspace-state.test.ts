@@ -395,33 +395,33 @@ test('12. Address and DUST formatting utilities', () => {
 
 // 13. Safe wallet error mapping for wallet missing
 test('13. Safe wallet error mapping for wallet missing', () => {
-  const missingError = new Error('No compatible Midnight wallet found. Open 1AM, unlock it, then reload this page.');
+  const missingError = new Error('No compatible Midnight wallet found. Open and unlock a supported wallet, then reload this page.');
   const msg = mapWalletError(missingError);
-  assert.equal(msg, 'No compatible Midnight wallet found. Open 1AM, unlock it on Preprod, and try again.');
+  assert.equal(msg, 'No compatible Midnight wallet found. Open and unlock a supported wallet on Preprod, then try again.');
 });
 
 // 14. Safe wallet error mapping for wrong network
 test('14. Safe wallet error mapping for wrong network', () => {
   const netError = new Error("Wallet connected to 'testnet'. Switch 1AM to Preprod and reconnect.");
   const msg = mapWalletError(netError);
-  assert.equal(msg, 'Wallet is not connected to Preprod. Switch 1AM network to Preprod and try again.');
+  assert.equal(msg, 'Wallet is not connected to Preprod. Switch the wallet network to Preprod and try again.');
 });
 
 // 15. Safe wallet error mapping for user cancellation/rejection
 test('15. Safe wallet error mapping for user cancellation or rejection', () => {
   const rejectError = new Error('User rejected the connection request in 1AM popup');
   const msg = mapWalletError(rejectError);
-  assert.equal(msg, 'Wallet connection request was cancelled or declined in 1AM.');
+  assert.equal(msg, 'Wallet connection request was cancelled or declined in the wallet.');
 
   const declinedError = new Error('Connection declined by user');
-  assert.equal(mapWalletError(declinedError), 'Wallet connection request was cancelled or declined in 1AM.');
+  assert.equal(mapWalletError(declinedError), 'Wallet connection request was cancelled or declined in the wallet.');
 });
 
 // 16. Unknown wallet error sanitization without leaking internals
 test('16. Unknown wallet error sanitization without leaking internals', () => {
   const rawDappError = new Error('Internal WebSocket failure at wss://subsquid.mainnet.example.org/v1/graphql with auth bearer secret_12345');
   const msg = mapWalletError(rawDappError);
-  assert.equal(msg, 'Wallet connection was not completed. Unlock 1AM on Preprod and try again.');
+  assert.equal(msg, 'Wallet connection was not completed. Unlock a compatible wallet on Preprod and try again.');
   assert.ok(!msg.includes('WebSocket'));
   assert.ok(!msg.includes('secret_12345'));
   assert.ok(!msg.includes('subsquid'));
@@ -1185,11 +1185,11 @@ test('43. Finalized-but-not-indexed state and retry inspection without redeployi
 test('44. Safe deployment error mapping without leaks', () => {
   assert.equal(
     mapDeploymentError(new Error('User aborted wallet request')),
-    'Deployment transaction was cancelled in 1AM.',
+    'Deployment transaction was cancelled in the wallet.',
   );
   assert.equal(
     mapDeploymentError(new Error('Insufficient balance or dust capacity')),
-    'Insufficient DUST or balance in connected 1AM wallet to cover deployment fees.',
+    'Insufficient DUST or balance in the connected wallet to cover deployment fees.',
   );
   assert.equal(
     mapDeploymentError(new Error('Prover connection error at http://internal.prover:6300')),
@@ -1698,7 +1698,7 @@ test('62. Transaction double-click prevention and cancellation', () => {
   assert.equal(duplicateSubmitting.stage, 'submitting');
 
   // User cancellation in 1AM
-  const cancelledState = onAdmissionFailed(state, 'Member admission transaction was cancelled in 1AM.', true);
+  const cancelledState = onAdmissionFailed(state, 'Member admission transaction was cancelled in the wallet.', true);
   assert.equal(cancelledState.stage, 'cancelled');
   assert.match(cancelledState.errorMessage ?? '', /cancelled/i);
 });
@@ -1794,7 +1794,7 @@ test('66. Raw error sanitization for member and admission operations', () => {
   // Insufficient DUST
   const dustErr = new Error('Insufficient balance: account has 0 DUST');
   const sanitizedDust = mapAdmissionError(dustErr);
-  assert.equal(sanitizedDust, 'Insufficient DUST or balance in connected 1AM wallet to cover transaction fees.');
+  assert.equal(sanitizedDust, 'Insufficient DUST or balance in the connected wallet to cover transaction fees.');
 
   // Prover failure
   const proverErr = new Error('Prover failed at http://127.0.0.1:6300/prove: exit 1');
@@ -1804,7 +1804,7 @@ test('66. Raw error sanitization for member and admission operations', () => {
 
   // Wallet cancellation
   const cancelErr = new Error('User cancelled transaction in 1AM wallet');
-  assert.equal(mapAdmissionError(cancelErr), 'Member admission transaction was cancelled in 1AM.');
+  assert.equal(mapAdmissionError(cancelErr), 'Member admission transaction was cancelled in the wallet.');
 });
 
 // 67. Constructor / deployment parameters remain unchanged
@@ -3129,7 +3129,7 @@ test('102. Certifier certification workflow prerequisites gating', () => {
     isOperationPending: false,
     policyActive: false,
   });
-  assert.equal(noWallet.includes('1AM wallet must be connected on Midnight Preprod.'), true);
+  assert.equal(noWallet.includes('A compatible wallet must be connected on Midnight Preprod.'), true);
 
   // Untested backup blocks certification
   const untestedBackup = checkCertifierCertificationPrerequisites({
@@ -3248,7 +3248,7 @@ test('104. User cancellation and sanitized error mapping for certification', () 
   state = onCertificationWalletRequest(state);
 
   // User cancellation in wallet
-  state = onCertificationFailed(state, 'Inventory certification transaction was cancelled in 1AM.', true);
+  state = onCertificationFailed(state, 'Inventory certification transaction was cancelled in the wallet.', true);
   assert.equal(state.stage, 'cancelled');
   assert.match(state.errorMessage ?? '', /cancelled/i);
 
@@ -3598,7 +3598,7 @@ test('134. CV-010: checkRegistrarAffectedReleasePrerequisites comprehensive prer
   // 2. Disconnected wallet
   assert.equal(
     checkRegistrarAffectedReleasePrerequisites({ ...validParams, isConnected: false }).includes(
-      '1AM wallet must be connected on Midnight Preprod.',
+      'A compatible wallet must be connected on Midnight Preprod.',
     ),
     true,
   );
@@ -3771,11 +3771,11 @@ test('139. CV-010: mapAffectedReleaseRegistrationError sanitizes errors accurate
   // Cancellation in wallet
   assert.equal(
     mapAffectedReleaseRegistrationError(new Error('User rejected the transaction request in 1AM')),
-    'Affected release registration transaction was cancelled in 1AM.',
+    'Affected release registration transaction was cancelled in the wallet.',
   );
   assert.equal(
     mapAffectedReleaseRegistrationError('User denied transaction'),
-    'Affected release registration transaction was cancelled in 1AM.',
+    'Affected release registration transaction was cancelled in the wallet.',
   );
 
   // Duplicate release
@@ -3793,7 +3793,7 @@ test('139. CV-010: mapAffectedReleaseRegistrationError sanitizes errors accurate
   // Insufficient DUST balance
   assert.equal(
     mapAffectedReleaseRegistrationError(new Error('Insufficient balance or dust to cover transaction fees')),
-    'Insufficient DUST or balance in connected 1AM wallet to cover transaction fees.',
+    'Insufficient DUST or balance in the connected wallet to cover transaction fees.',
   );
 
   // Prover failure
@@ -4000,7 +4000,7 @@ test('143. CV-011: checkMemberAttestationPrerequisites comprehensive prerequisit
   });
 
   assert.ok(missingAll.length >= 13, `Expected at least 13 missing prereqs, got ${missingAll.length}`);
-  assert.ok(missingAll.some((m) => m.includes('1AM wallet')));
+  assert.ok(missingAll.some((m) => m.includes('compatible wallet')));
   assert.ok(missingAll.some((m) => m.includes('CommonVeil contract')));
   assert.ok(missingAll.some((m) => m.includes('Member secret and salt')));
   assert.ok(missingAll.some((m) => m.includes('recovery-tested')));
@@ -4309,7 +4309,7 @@ test('149. CV-011: mapAttestationError and mapAttestationInspectionError error s
   // Cancellation
   assert.equal(
     mapAttestationError(new Error('User rejected the transaction in 1AM')),
-    'Attestation transaction was cancelled in 1AM.',
+    'Attestation transaction was cancelled in the wallet.',
   );
   // Replay
   assert.equal(
@@ -4796,7 +4796,7 @@ test('159. CV-009 regression: Invalid certification request import displays a sa
   // 5. User cancellation in wallet
   const cancelledState = onCertificationFailed(
     initialState,
-    'Inventory certification transaction was cancelled in 1AM.',
+    'Inventory certification transaction was cancelled in the wallet.',
     true,
   );
   assert.equal(cancelledState.stage, 'cancelled');

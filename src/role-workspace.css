@@ -1339,7 +1339,7 @@ input:focus-visible {
 .role-workspace-main .workspace-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  align-items: start;
+  align-items: stretch;
   gap: 22px;
   margin: 0;
 }
@@ -1358,9 +1358,71 @@ input:focus-visible {
 .role-workspace-main .workspace-card {
   display: block;
   min-height: 0;
+  height: 100%;
   width: 100%;
   overflow: hidden;
   background: #0c1812e8;
+}
+
+.role-wallet-strip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 22px;
+  border: 1px solid #63423a;
+  border-radius: 13px;
+  background: #1b100d;
+  padding: 15px 17px;
+  margin: -12px 0 24px;
+}
+
+.role-wallet-strip.connected {
+  border-color: #315340;
+  background: #0d1c14;
+}
+
+.role-wallet-strip > div {
+  min-width: 0;
+}
+
+.role-wallet-strip-label {
+  display: block;
+  color: #789182;
+  font-size: .68rem;
+  font-weight: 800;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  margin-bottom: 4px;
+}
+
+.role-wallet-strip strong {
+  color: #e5eee8;
+  font-size: .88rem;
+}
+
+.role-wallet-strip p {
+  color: #ffaaa3;
+  font-size: .8rem;
+  margin: 6px 0 0;
+}
+
+.role-wallet-strip-action {
+  flex: 0 0 auto;
+  width: auto;
+  min-width: 142px;
+  border: 0;
+  border-radius: 9px;
+  background: #86f3a8;
+  color: #07100a;
+  padding: 10px 15px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.role-wallet-strip-action.secondary {
+  border: 1px solid #315340;
+  background: transparent;
+  color: #cad8ce;
 }
 
 .role-workspace-main .workspace-card p,
@@ -1543,6 +1605,16 @@ input:focus-visible {
   .role-workspace-main .workspace-card {
     padding: 18px;
     border-radius: 13px;
+  }
+
+  .role-wallet-strip {
+    align-items: stretch;
+    flex-direction: column;
+    margin-top: -4px;
+  }
+
+  .role-wallet-strip-action {
+    width: 100%;
   }
 
   .role-workspace-main .card-header {

@@ -175,7 +175,7 @@ const waitForWallet = async (): Promise<InitialAPI> => {
     if (wallet) return wallet;
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
-  throw new Error('No compatible Midnight wallet found. Open 1AM, unlock it, then reload this page.');
+  throw new Error('No compatible Midnight wallet found. Open and unlock a supported wallet, then reload this page.');
 };
 
 export const connectProviders = async (
@@ -196,7 +196,7 @@ export const connectProviders = async (
 
   const config = await connectedAPI.getConfiguration();
   if (!config.networkId.toLowerCase().includes('preprod')) {
-    throw new Error(`Wallet connected to '${config.networkId}'. Switch 1AM to Preprod and reconnect.`);
+    throw new Error(`Wallet connected to '${config.networkId}'. Switch the wallet to Preprod and reconnect.`);
   }
 
   const [shielded, unshielded, dust] = await Promise.all([

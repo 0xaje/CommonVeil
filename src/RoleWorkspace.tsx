@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ConnectedWallet } from './providers';
-import { connectProviders } from './providers';
 import {
   queryCommonVeilContract,
   attachCommonVeilContract,
@@ -60,9 +59,7 @@ import {
   handleAddressInputChange,
   isResponseCurrent,
   mapWorkspaceError,
-  mapWalletError,
   shortenAddress,
-  formatDust,
   parseRegistrarSecretHex,
   generateRegistrarSecret,
   buildRegistrarBackupPackage,
@@ -210,13 +207,16 @@ import './role-workspace.css';
 
 interface RoleWorkspaceProps {
   readonly role: RoleType;
+  readonly wallet: ConnectedWallet | null;
+  readonly walletConnecting: boolean;
+  readonly walletError: string | null;
+  readonly onConnectWallet: () => void;
+  readonly onDisconnectWallet: () => void;
   readonly onNavigateOverview: () => void;
+  readonly onNavigateRole: (role: RoleType) => void;
 }
 
-export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) {
-  const [wallet, setWallet] = useState<ConnectedWallet | null>(null);
-  const [walletConnecting, setWalletConnecting] = useState(false);
-  const [walletError, setWalletError] = useState<string | null>(null);
+export function RoleWorkspace({ role, wallet, walletConnecting, walletError, onConnectWallet, onDisconnectWallet, onNavigateOverview, onNavigateRole }: RoleWorkspaceProps) {
 
   const [contractState, setContractState] = useState<WorkspaceContractState>(
     INITIAL_WORKSPACE_CONTRACT_STATE,
@@ -660,28 +660,7 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
     clearMemberSecret(false);
   }, [role]);
 
-  const handleConnectWallet = async () => {
-    setWalletConnecting(true);
-    setWalletError(null);
-    try {
-      const connected = await connectProviders(() => {});
-      if (isMounted.current) {
-        setWallet(connected);
-      }
-    } catch (err: unknown) {
-      if (isMounted.current) {
-        setWalletError(mapWalletError(err));
-      }
-    } finally {
-      if (isMounted.current) {
-        setWalletConnecting(false);
-      }
-    }
-  };
-
   const handleDisconnectWallet = () => {
-    setWallet(null);
-    setWalletError(null);
     clearRegistrarSecret(false);
     clearCertifierSecret(false);
     clearMemberSecret(false);
@@ -691,6 +670,7 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
     resetAffectedReleaseState(false);
     resetCertificationState();
     resetMemberAttestationState(false);
+    onDisconnectWallet();
   };
 
   const handleAddressChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1899,7 +1879,7 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
       return;
     }
     if (!wallet?.providers) {
-      setMemberError('Connect 1AM wallet on Midnight Preprod before verifying Member admission.');
+      setMemberError('Connect Midnight wallet on Midnight Preprod before verifying Member admission.');
       return;
     }
     if (!plaintextMemberSecretRef.current || !plaintextMemberSaltRef.current) {
@@ -2368,7 +2348,7 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
       setMemberInventoryUi((prev) =>
         onMemberInventoryError(
           prev,
-          'All prerequisites must be satisfied (connected 1AM wallet on Preprod, attached contract, active recovery-tested identity, and validated report) before exporting.',
+          'All prerequisites must be satisfied (connected Midnight wallet on Preprod, attached contract, active recovery-tested identity, and validated report) before exporting.',
         ),
       );
       return;
@@ -2648,7 +2628,7 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
         raw.includes('declined') ||
         raw.includes('user aborted')
       ) {
-        setAdmissionUi((prev) => onAdmissionFailed(prev, 'Member admission transaction was cancelled in 1AM.', true));
+        setAdmissionUi((prev) => onAdmissionFailed(prev, 'Member admission transaction was cancelled in Midnight wallet.', true));
       } else {
         setAdmissionUi((prev) =>
           onAdmissionFailed(prev, mapAdmissionError(admitError)),
@@ -3039,7 +3019,7 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
         raw.includes('user aborted')
       ) {
         setCertificationUi((prev) =>
-          onCertificationFailed(prev, 'Inventory certification transaction was cancelled in 1AM.', true),
+          onCertificationFailed(prev, 'Inventory certification transaction was cancelled in Midnight wallet.', true),
         );
       } else {
         setCertificationUi((prev) => onCertificationFailed(prev, mapCertificationError(certError)));
@@ -3605,7 +3585,7 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
         raw.includes('user aborted')
       ) {
         setAffectedReleaseUi((prev) =>
-          onAffectedReleaseFailed(prev, 'Affected release registration transaction was cancelled in 1AM.'),
+          onAffectedReleaseFailed(prev, 'Affected release registration transaction was cancelled in Midnight wallet.'),
         );
       } else {
         setAffectedReleaseUi((prev) =>
@@ -4127,7 +4107,7 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
         raw.includes('user aborted')
       ) {
         setMemberAttestationUi((prev) =>
-          onAttestationFailed(prev, 'Attestation transaction was cancelled in 1AM.'),
+          onAttestationFailed(prev, 'Attestation transaction was cancelled in Midnight wallet.'),
         );
       } else {
         setMemberAttestationUi((prev) =>
@@ -4252,12 +4232,14 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
               <a
                 key={r}
                 href={`/?role=${r}`}
-                target="_blank"
-                rel="noreferrer"
                 className="role-tab-link"
-                title={`Open ${ROLE_DESCRIPTORS[r].label} Workspace in new tab`}
+                onClick={(event) => {
+                  event.preventDefault();
+                  onNavigateRole(r);
+                }}
+                title={`Switch to ${ROLE_DESCRIPTORS[r].label} Workspace`}
               >
-                Open {ROLE_DESCRIPTORS[r].label} tab ↗
+                {ROLE_DESCRIPTORS[r].label} Workspace
               </a>
             ))}
           </div>
@@ -4284,91 +4266,25 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
         </div>
       </section>
 
+      <section className={`role-wallet-strip ${wallet ? 'connected' : ''}`} aria-live="polite">
+        <div>
+          <span className="role-wallet-strip-label">Wallet session</span>
+          <strong>{wallet ? `${wallet.name} connected on Preprod` : 'Connect a compatible Midnight wallet to continue'}</strong>
+          {walletError && <p role="alert">{walletError}</p>}
+        </div>
+        {wallet ? (
+          <button type="button" className="role-wallet-strip-action secondary" onClick={handleDisconnectWallet}>Disconnect</button>
+        ) : (
+          <button type="button" className="role-wallet-strip-action" onClick={onConnectWallet} disabled={walletConnecting}>{walletConnecting ? 'Connecting…' : 'Connect Wallet'}</button>
+        )}
+      </section>
+
       <div className="workspace-grid">
-        {/* Left Column: Wallet Connection & Contract Attachment Controls */}
+        {/* Shared numbered workflow. Wallet connection is owned by the app shell. */}
         <div className="workspace-column">
           <article className="workspace-card">
             <div className="card-header">
               <span className="card-step">01</span>
-              <h2>Midnight Wallet</h2>
-            </div>
-            <p className="card-caption">
-              Connect an independent 1AM Midnight wallet for this role session.
-            </p>
-
-            <div aria-live="polite">
-              {wallet ? (
-                <div>
-                  <dl className="property-list">
-                    <dt>Status</dt>
-                    <dd>
-                      <span className="status-indicator active" aria-label="Wallet connected">
-                        Connected
-                      </span>
-                    </dd>
-                    <dt>Wallet Name</dt>
-                    <dd>{wallet.name}</dd>
-                    <dt>Network</dt>
-                    <dd>Preprod</dd>
-                    <dt>Address</dt>
-                    <dd title={wallet.address}>
-                      <code>{shortenAddress(wallet.address)}</code>
-                    </dd>
-                    <dt>DUST Balance</dt>
-                    <dd>{formatDust(wallet.dustBalance)} DUST</dd>
-                    <dt>Proving Mode</dt>
-                    <dd>
-                      {wallet.proofMode === 'wallet' ? 'In-wallet prover (Configured)' : 'Local proof server (Configured)'}
-                    </dd>
-                    <dt>Indexer</dt>
-                    <dd id="wallet-indexer-status">
-                      <span className="status-indicator active" aria-label={`Indexer configuration: ${wallet.indexerStatus}`}>
-                        {wallet.indexerStatus}
-                      </span>
-                    </dd>
-                  </dl>
-                  <button
-                    type="button"
-                    onClick={handleDisconnectWallet}
-                    className="action-button secondary disconnect-btn"
-                    aria-label="Disconnect 1AM wallet"
-                  >
-                    Disconnect Wallet
-                  </button>
-                </div>
-              ) : (
-                <div>
-                  <button
-                    type="button"
-                    id="connect-wallet-btn"
-                    onClick={handleConnectWallet}
-                    disabled={walletConnecting}
-                    className="action-button primary"
-                    aria-label="Connect 1AM Midnight Wallet"
-                  >
-                    {walletConnecting ? 'Connecting 1AM Wallet…' : 'Connect 1AM Wallet'}
-                  </button>
-                  {walletError && (
-                    <div className="safe-error-banner" role="alert">
-                      <p>{walletError}</p>
-                      <button
-                        type="button"
-                        className="retry-btn"
-                        onClick={handleConnectWallet}
-                        aria-label="Retry connecting 1AM wallet"
-                      >
-                        Retry connection
-                      </button>
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          </article>
-
-          <article className="workspace-card">
-            <div className="card-header">
-              <span className="card-step">02</span>
               <h2>Contract Attachment</h2>
             </div>
             <p className="card-caption">
@@ -4476,7 +4392,7 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
           {role === 'certifier' && (
             <article className="workspace-card certifier-identity-card">
               <div className="card-header">
-                <span className="card-step">03</span>
+                <span className="card-step">02</span>
                 <h2>Certifier Role Identity & Secrets</h2>
               </div>
               <p className="card-caption">
@@ -4812,11 +4728,11 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
           {role === 'certifier' && (
             <article className="workspace-card certifier-certification-card">
               <div className="card-header">
-                <span className="card-step">04</span>
+                <span className="card-step">03</span>
                 <h2>Review Inventory & Certify via Midnight</h2>
               </div>
               <p className="card-caption">
-                Import and review restricted Member certification request packages, verify they target this exact contract, verify active admission, and invoke <code>certifyInventory</code> on-chain via 1AM.
+                Import and review restricted Member certification request packages, verify they target this exact contract, verify active admission, and invoke <code>certifyInventory</code> on-chain via Midnight wallet.
               </p>
 
               {/* Status Header */}
@@ -4873,7 +4789,7 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
                     !certifierUi.hasSecret ||
                     certifierUi.verificationStatus !== 'verified') && (
                     <p className="form-hint-text warning-text">
-                      Requires a connected 1AM wallet on Preprod, an attached contract, and an active verified Certifier secret before certifying inventory requests.
+                      Requires a connected Midnight wallet on Preprod, an attached contract, and an active verified Certifier secret before certifying inventory requests.
                     </p>
                   )}
                 </div>
@@ -4948,7 +4864,7 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
                       </span>
                     </p>
                     <p className="card-caption">
-                      This action will invoke the genuine <code>certifyInventory</code> circuit. DUST transaction fees will be paid by your connected 1AM wallet.
+                      This action will invoke the genuine <code>certifyInventory</code> circuit. DUST transaction fees will be paid by your connected Midnight wallet.
                     </p>
                   </div>
 
@@ -4964,9 +4880,9 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
                       className="action-button primary"
                       disabled={!canCertify}
                       onClick={handleInitiateCertification}
-                      aria-label="Confirm inventory certification and submit transaction via 1AM"
+                      aria-label="Confirm inventory certification and submit transaction via Midnight wallet"
                     >
-                      Confirm and Certify via 1AM
+                      Confirm and Certify via Midnight wallet
                     </button>
                     <button
                       type="button"
@@ -4984,8 +4900,8 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
               {/* In-Flight States */}
               {certificationUi.stage === 'requesting-wallet' && (
                 <div className="status-callout warning">
-                  <span className="status-indicator warning">Preparing 1AM Transaction</span>
-                  <p>Preparing zero-knowledge proof and transaction. Review 1AM when the approval request appears.</p>
+                  <span className="status-indicator warning">Preparing Midnight wallet Transaction</span>
+                  <p>Preparing zero-knowledge proof and transaction. Review Midnight wallet when the approval request appears.</p>
                 </div>
               )}
 
@@ -5218,7 +5134,7 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
           {role === 'member' && (
             <article className="workspace-card member-identity-card">
               <div className="card-header">
-                <span className="card-step">03</span>
+                <span className="card-step">02</span>
                 <h2>Member Role Identity & Credential</h2>
               </div>
               <p className="card-caption">
@@ -5582,7 +5498,7 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
           {role === 'member' && (
             <article className="workspace-card member-inventory-card">
               <div className="card-header">
-                <span className="card-step">04</span>
+                <span className="card-step">03</span>
                 <h2>Import Live Inventory Report</h2>
               </div>
               <p className="card-caption">
@@ -5601,7 +5517,7 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
                 <span className="field-caption">Certification Request Prerequisites</span>
                 <ul className="prerequisites-list">
                   <li className={memberCertRequestPrereqs.isWalletConnected ? 'met' : 'unmet'}>
-                    {memberCertRequestPrereqs.isWalletConnected ? '✔' : '○'} Connected 1AM wallet on Preprod
+                    {memberCertRequestPrereqs.isWalletConnected ? '✔' : '○'} Connected Midnight wallet on Preprod
                   </li>
                   <li className={memberCertRequestPrereqs.isContractAttached ? 'met' : 'unmet'}>
                     {memberCertRequestPrereqs.isContractAttached ? '✔' : '○'} Attached compatible CommonVeil contract
@@ -5731,7 +5647,7 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
           {role === 'member' && (
             <article className="workspace-card member-snapshot-import-card">
               <div className="card-header">
-                <span className="card-step">05</span>
+                <span className="card-step">04</span>
                 <h2>Import Certified Snapshot</h2>
               </div>
               <p className="card-caption">
@@ -5849,7 +5765,7 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
           {role === 'member' && (
             <article className="workspace-card member-attestation-card">
               <div className="card-header">
-                <span className="card-step">06</span>
+                <span className="card-step">05</span>
                 <h2>Private Affected-Release Attestation</h2>
               </div>
               <p className="card-caption">
@@ -5909,7 +5825,7 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
                     <span className="field-caption">Attestation Prerequisites Status</span>
                     <ul className="prerequisites-list">
                       <li className={wallet ? 'met' : 'unmet'}>
-                        {wallet ? '✔' : '○'} 1AM connected on Midnight Preprod
+                        {wallet ? '✔' : '○'} Midnight wallet connected on Midnight Preprod
                       </li>
                       <li className={contractState.attachedAddress ? 'met' : 'unmet'}>
                         {contractState.attachedAddress ? '✔' : '○'} Compatible CommonVeil contract attached
@@ -6079,7 +5995,7 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
               {/* Progress and Indexer Lag State */}
               {memberAttestationUi.stage === 'requesting-wallet' && (
                 <div className="progress-banner" aria-live="polite">
-                  <p>Awaiting authorization in 1AM wallet...</p>
+                  <p>Awaiting authorization in Midnight wallet...</p>
                 </div>
               )}
 
@@ -6152,7 +6068,7 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
           {role === 'registrar' && (
             <article className="workspace-card registrar-identity-card">
               <div className="card-header">
-                <span className="card-step">03</span>
+                <span className="card-step">02</span>
                 <h2>Registrar Role Identity & Secrets</h2>
               </div>
               <p className="card-caption">
@@ -6472,7 +6388,7 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
           {role === 'registrar' && (
             <article className="workspace-card registrar-deploy-card">
               <div className="card-header">
-                <span className="card-step">04</span>
+                <span className="card-step">03</span>
                 <h2>Deploy CommonVeil Contract</h2>
               </div>
               <p className="card-caption">
@@ -6483,7 +6399,7 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
               <div className="deploy-prereq-list">
                 <div className={`prereq-item ${wallet ? 'met' : 'unmet'}`}>
                   <span>{wallet ? '✔' : '○'}</span>
-                  <span>1AM Wallet connected on Midnight Preprod</span>
+                  <span>Midnight Wallet connected on Midnight Preprod</span>
                 </div>
                 <div className={`prereq-item ${registrarUi.hasSecret ? 'met' : 'unmet'}`}>
                   <span>{registrarUi.hasSecret ? '✔' : '○'}</span>
@@ -6540,7 +6456,7 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
                   <div className="status-callout waiting-wallet-callout" role="status">
                     <span className="status-indicator notice">Waiting for wallet approval</span>
                     <p>
-                      Review and approve the deployment transaction in your connected 1AM wallet window.
+                      Review and approve the deployment transaction in your connected Midnight wallet window.
                     </p>
                   </div>
                 )}
@@ -6557,7 +6473,7 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
                 {deploymentUi.stage === 'cancelled' && (
                   <div className="safe-notice-banner" role="status">
                     <strong>Transaction Cancelled</strong>
-                    <p>Deployment transaction was cancelled in 1AM. You may review parameters and try again.</p>
+                    <p>Deployment transaction was cancelled in Midnight wallet. You may review parameters and try again.</p>
                   </div>
                 )}
 
@@ -6646,13 +6562,13 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
                       <strong>Constructor Arguments:</strong> Derived Registrar Public Key and Validated Certifier Public Key.
                     </p>
                     <p>
-                      <strong>Resource Consumption:</strong> DUST and network transaction fees will be consumed from your 1AM wallet.
+                      <strong>Resource Consumption:</strong> DUST and network transaction fees will be consumed from your Midnight wallet.
                     </p>
                     <p>
                       <strong>Key Permanence:</strong> The Registrar and Certifier keys cannot be replaced once the contract is deployed.
                     </p>
                     <p>
-                      <strong>Wallet Review:</strong> You must review and approve the transaction in the 1AM popup.
+                      <strong>Wallet Review:</strong> You must review and approve the transaction in the Midnight wallet popup.
                     </p>
                   </div>
 
@@ -6671,9 +6587,9 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
                       className="action-button primary"
                       disabled={!deploymentUi.backupConfirmed || !deploymentUi.certifierPublicKey || isDeploying}
                       onClick={handleDeployContract}
-                      aria-label="Confirm and submit deployment transaction to 1AM wallet"
+                      aria-label="Confirm and submit deployment transaction to Midnight wallet"
                     >
-                      Confirm and Deploy via 1AM
+                      Confirm and Deploy via Midnight wallet
                     </button>
                     <button
                       type="button"
@@ -6737,11 +6653,11 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
           {role === 'registrar' && (
             <article className="workspace-card registrar-admission-card">
               <div className="card-header">
-                <span className="card-step">05</span>
+                <span className="card-step">04</span>
                 <h2>Member Admission Review & Registration</h2>
               </div>
               <p className="card-caption">
-                Import and review restricted Member Admission packages, verify they target this exact contract, and register member credentials on-chain via genuine 1AM approval.
+                Import and review restricted Member Admission packages, verify they target this exact contract, and register member credentials on-chain via genuine Midnight wallet approval.
               </p>
 
               {/* Status Header */}
@@ -6762,7 +6678,7 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
                       : admissionUi.stage === 'confirming'
                         ? 'Reviewing package'
                         : admissionUi.stage === 'requesting-wallet'
-                          ? '1AM Approval'
+                          ? 'Midnight wallet Approval'
                           : admissionUi.stage === 'submitting'
                             ? 'Proving & Submitting'
                             : admissionUi.stage === 'finalized-indexing'
@@ -6821,7 +6737,7 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
                     !registrarUi.hasSecret ||
                     registrarUi.verificationStatus !== 'verified') && (
                     <p className="form-hint-text warning-text">
-                      Requires a connected 1AM wallet on Preprod, an attached contract, and an active verified Registrar secret before importing admission packages.
+                      Requires a connected Midnight wallet on Preprod, an attached contract, and an active verified Registrar secret before importing admission packages.
                     </p>
                   )}
                 </div>
@@ -6846,7 +6762,7 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
                       <strong>Package Created At:</strong> {admissionUi.importedPackage.createdAt}
                     </p>
                     <p className="card-caption">
-                      This action will invoke the genuine <code>registerMember</code> circuit. DUST transaction fees will be paid by your connected 1AM wallet. Member secret is not requested or known.
+                      This action will invoke the genuine <code>registerMember</code> circuit. DUST transaction fees will be paid by your connected Midnight wallet. Member secret is not requested or known.
                     </p>
                   </div>
 
@@ -6864,9 +6780,9 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
                         })
                       }
                       onClick={handleConfirmAndAdmitMember}
-                      aria-label="Confirm member registration and submit transaction via 1AM"
+                      aria-label="Confirm member registration and submit transaction via Midnight wallet"
                     >
-                      Confirm and Admit via 1AM
+                      Confirm and Admit via Midnight wallet
                     </button>
                     <button
                       type="button"
@@ -6884,8 +6800,8 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
               {/* In-Flight States */}
               {admissionUi.stage === 'requesting-wallet' && (
                 <div className="status-callout warning">
-                  <span className="status-indicator warning">Preparing 1AM Transaction</span>
-                  <p>Preparing proof and transaction. Review 1AM when the approval request appears.</p>
+                  <span className="status-indicator warning">Preparing Midnight wallet Transaction</span>
+                  <p>Preparing proof and transaction. Review Midnight wallet when the approval request appears.</p>
                 </div>
               )}
 
@@ -6965,7 +6881,7 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
           {role === 'registrar' && (
             <article className="workspace-card registrar-affected-release-card">
               <div className="card-header">
-                <span className="card-step">06</span>
+                <span className="card-step">05</span>
                 <h2>Register Affected Release & Activate Policy</h2>
               </div>
               <p className="card-caption">
@@ -6997,7 +6913,7 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
                         : affectedReleaseUi.stage === 'confirming'
                           ? 'Confirmation Required'
                           : affectedReleaseUi.stage === 'requesting-wallet'
-                            ? '1AM Approval'
+                            ? 'Midnight wallet Approval'
                             : affectedReleaseUi.stage === 'submitting'
                               ? 'Proving & Submitting'
                               : affectedReleaseUi.stage === 'finalized-indexing'
@@ -7248,9 +7164,9 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
                       className="action-button primary danger-button"
                       disabled={!canRegisterAffectedRelease}
                       onClick={handleConfirmAndRegisterAffectedRelease}
-                      aria-label="Confirm registration and submit via 1AM"
+                      aria-label="Confirm registration and submit via Midnight wallet"
                     >
-                      Confirm Registration & Activate Policy via 1AM
+                      Confirm Registration & Activate Policy via Midnight wallet
                     </button>
                     <button
                       type="button"
@@ -7268,8 +7184,8 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
               {/* In-Flight States */}
               {affectedReleaseUi.stage === 'requesting-wallet' && (
                 <div className="status-callout warning">
-                  <span className="status-indicator warning">Preparing 1AM Transaction</span>
-                  <p>Preparing proof and registration transaction. Approve the transaction in your 1AM wallet window.</p>
+                  <span className="status-indicator warning">Preparing Midnight wallet Transaction</span>
+                  <p>Preparing proof and registration transaction. Approve the transaction in your Midnight wallet window.</p>
                 </div>
               )}
 
@@ -7366,7 +7282,7 @@ export function RoleWorkspace({ role, onNavigateOverview }: RoleWorkspaceProps) 
           {/* Public State Panel */}
           <article className="workspace-card public-state-card">
             <div className="card-header">
-              <span className="card-step">{role === 'registrar' ? '07' : role === 'member' ? '07' : '05'}</span>
+              <span className="card-step">{role === 'registrar' ? '06' : role === 'member' ? '06' : '04'}</span>
               <h2>Public Contract State</h2>
             </div>
             <p className="privacy-guarantee-notice">

@@ -137,7 +137,7 @@ export function mapWorkspaceError(error: unknown): string {
  */
 export function mapWalletError(error: unknown): string {
   if (!error) {
-    return 'Wallet connection was not completed. Unlock 1AM on Preprod and try again.';
+    return 'Wallet connection was not completed. Unlock a compatible wallet on Preprod and try again.';
   }
 
   const rawMessage = (
@@ -156,7 +156,7 @@ export function mapWalletError(error: unknown): string {
     rawMessage.includes('wallet not found') ||
     rawMessage.includes('unlock')
   ) {
-    return 'No compatible Midnight wallet found. Open 1AM, unlock it on Preprod, and try again.';
+    return 'No compatible Midnight wallet found. Open and unlock a supported wallet on Preprod, then try again.';
   }
 
   if (
@@ -164,7 +164,7 @@ export function mapWalletError(error: unknown): string {
     rawMessage.includes('network') ||
     rawMessage.includes('wrong network')
   ) {
-    return 'Wallet is not connected to Preprod. Switch 1AM network to Preprod and try again.';
+    return 'Wallet is not connected to Preprod. Switch the wallet network to Preprod and try again.';
   }
 
   if (
@@ -176,14 +176,14 @@ export function mapWalletError(error: unknown): string {
     if (rawMessage.includes('blockfrost') || rawMessage.includes('indexer configuration') || rawMessage.includes('override')) {
       return error instanceof Error ? error.message : 'Invalid indexer override configuration.';
     }
-    return 'Wallet connection request was cancelled or declined in 1AM.';
+    return 'Wallet connection request was cancelled or declined in the wallet.';
   }
 
   if (rawMessage.includes('blockfrost') || rawMessage.includes('indexer configuration') || rawMessage.includes('vite_indexer')) {
     return error instanceof Error ? error.message : 'Invalid indexer override configuration.';
   }
 
-  return 'Wallet connection was not completed. Unlock 1AM on Preprod and try again.';
+  return 'Wallet connection was not completed. Unlock a compatible wallet on Preprod and try again.';
 }
 
 export type InspectionState = 'none' | 'inspecting' | 'inspected' | 'attaching' | 'attached';
@@ -1339,7 +1339,7 @@ export const INITIAL_REGISTRAR_DEPLOYMENT_UI_STATE: RegistrarDeploymentUiState =
 /**
  * Pure helper checking if the registrar deployment flow can be initiated.
  * Requires:
- * - Connected 1AM wallet on Midnight Preprod
+ * - Connected compatible wallet on Midnight Preprod
  * - Active Registrar secret in volatile memory
  * - Confirmed encrypted Registrar backup
  * - Imported and validated non-zero Certifier public-key package (32-byte hex)
@@ -1462,7 +1462,7 @@ export function onDeploymentConfirmCancel(
 }
 
 /**
- * Pure state reducer when deployment is initiated and waiting for 1AM wallet approval.
+ * Pure state reducer when deployment is initiated and waiting for wallet approval.
  */
 export function onDeploymentWalletRequest(
   prevState: RegistrarDeploymentUiState,
@@ -1590,11 +1590,11 @@ export function mapDeploymentError(error: unknown): string {
     raw.includes('declined') ||
     raw.includes('user aborted')
   ) {
-    return 'Deployment transaction was cancelled in 1AM.';
+    return 'Deployment transaction was cancelled in the wallet.';
   }
 
   if (raw.includes('dust') || raw.includes('balance') || raw.includes('insufficient funds')) {
-    return 'Insufficient DUST or balance in connected 1AM wallet to cover deployment fees.';
+    return 'Insufficient DUST or balance in the connected wallet to cover deployment fees.';
   }
 
   if (raw.includes('proof') || raw.includes('prover') || raw.includes('proving')) {
@@ -1776,7 +1776,7 @@ export const INITIAL_REGISTRAR_ADMISSION_UI_STATE: RegistrarAdmissionUiState = {
 /**
  * Pure helper checking if member admission workflow or transaction submission can be initiated.
  * Requires all of:
- * - Connected 1AM wallet on Midnight Preprod
+ * - Connected compatible wallet on Midnight Preprod
  * - Attached verified CommonVeil contract
  * - Active Registrar secret in volatile memory
  * - registrarUi.verificationStatus === 'verified'
@@ -2014,7 +2014,7 @@ export function mapAdmissionError(error: unknown): string {
     raw.includes('declined') ||
     raw.includes('user aborted')
   ) {
-    return 'Member admission transaction was cancelled in 1AM.';
+    return 'Member admission transaction was cancelled in the wallet.';
   }
 
   if (raw.includes('duplicate') || raw.includes('already admitted') || raw.includes('already a member')) {
@@ -2022,7 +2022,7 @@ export function mapAdmissionError(error: unknown): string {
   }
 
   if (raw.includes('dust') || raw.includes('balance') || raw.includes('insufficient funds')) {
-    return 'Insufficient DUST or balance in connected 1AM wallet to cover transaction fees.';
+    return 'Insufficient DUST or balance in the connected wallet to cover transaction fees.';
   }
 
   if (raw.includes('proof') || raw.includes('prover') || raw.includes('proving')) {
@@ -2073,7 +2073,7 @@ export const INITIAL_MEMBER_INVENTORY_UI_STATE: MemberInventoryUiState = {
 /**
  * Pure helper checking if Member live-inventory certification request export can be initiated.
  * Requires all of:
- * - Connected 1AM wallet on Midnight Preprod
+ * - Connected compatible wallet on Midnight Preprod
  * - Attached compatible CommonVeil contract
  * - Active Member secret and salt in volatile memory
  * - Locally derived Member credential
@@ -2137,7 +2137,7 @@ export function checkCertificationRequestPrerequisites(params: {
     params.importedInventory.provenance === 'live-host-scan';
 
   const missing: string[] = [];
-  if (!isWalletConnected) missing.push('Connected 1AM wallet on Preprod');
+  if (!isWalletConnected) missing.push('Connected Midnight wallet on Preprod');
   if (!isContractAttached) missing.push('Attached compatible CommonVeil contract');
   if (!isMemberIdentityActive) missing.push('Active Member secret and salt in session memory');
   if (!isBackupRecoveryTested) missing.push('Recovery-tested Member encrypted backup');
@@ -2362,7 +2362,7 @@ export function checkCertifierCertificationPrerequisites(params: {
 }): string[] {
   const missing: string[] = [];
   if (!params.isConnected) {
-    missing.push('1AM wallet must be connected on Midnight Preprod.');
+    missing.push('A compatible wallet must be connected on Midnight Preprod.');
   }
   if (!params.attachedContractAddress) {
     missing.push('A verified CommonVeil contract must be attached.');
@@ -2562,7 +2562,7 @@ export function getCertifierCertificationStageLabel(stage: CertifierCertificatio
     case 'confirming':
       return 'Reviewing request';
     case 'requesting-wallet':
-      return '1AM Approval';
+      return 'Wallet Approval';
     case 'submitting':
       return 'Proving & Submitting';
     case 'finalized-indexing':
@@ -2654,7 +2654,7 @@ export function mapCertificationError(error: unknown): string {
           : ''
   ).toLowerCase();
   if (raw.includes('cancel') || raw.includes('reject') || raw.includes('denied') || raw.includes('declined') || raw.includes('user aborted')) {
-    return 'Inventory certification transaction was cancelled in 1AM.';
+    return 'Inventory certification transaction was cancelled in the wallet.';
   }
   if (raw.includes('already committed') || raw.includes('snapshot already committed') || raw.includes('already certified')) {
     return 'This inventory snapshot has already been committed on-chain.';
@@ -2669,7 +2669,7 @@ export function mapCertificationError(error: unknown): string {
     return 'Inventory certification window is closed: policy is already active on-chain.';
   }
   if (raw.includes('dust') || raw.includes('balance') || raw.includes('insufficient funds')) {
-    return 'Insufficient DUST or balance in connected 1AM wallet to cover transaction fees.';
+    return 'Insufficient DUST or balance in the connected wallet to cover transaction fees.';
   }
   if (raw.includes('proof') || raw.includes('prover') || raw.includes('proving')) {
     return 'ZK proof generation failed. Ensure your local proof server is reachable and responsive.';
@@ -2740,7 +2740,7 @@ export function checkRegistrarAffectedReleasePrerequisites(params: {
 }): string[] {
   const missing: string[] = [];
   if (!params.isConnected) {
-    missing.push('1AM wallet must be connected on Midnight Preprod.');
+    missing.push('A compatible wallet must be connected on Midnight Preprod.');
   }
   if (!params.attachedContractAddress) {
     missing.push('A verified CommonVeil contract must be attached.');
@@ -2909,7 +2909,7 @@ export function mapAffectedReleaseRegistrationError(error: unknown): string {
           : ''
   ).toLowerCase();
   if (raw.includes('cancel') || raw.includes('reject') || raw.includes('denied') || raw.includes('declined') || raw.includes('user aborted')) {
-    return 'Affected release registration transaction was cancelled in 1AM.';
+    return 'Affected release registration transaction was cancelled in the wallet.';
   }
   if (raw.includes('already registered')) {
     return 'This affected release is already registered on-chain.';
@@ -2918,7 +2918,7 @@ export function mapAffectedReleaseRegistrationError(error: unknown): string {
     return 'Registrar secret does not match the on-chain authorized registrar key.';
   }
   if (raw.includes('dust') || raw.includes('balance') || raw.includes('insufficient funds')) {
-    return 'Insufficient DUST or balance in connected 1AM wallet to cover transaction fees.';
+    return 'Insufficient DUST or balance in the connected wallet to cover transaction fees.';
   }
   if (raw.includes('proof') || raw.includes('prover') || raw.includes('proving')) {
     return 'ZK proof generation failed. Ensure your local proof server is reachable and responsive.';
@@ -3010,7 +3010,7 @@ export function checkMemberAttestationPrerequisites(params: {
 }): string[] {
   const missing: string[] = [];
   if (!params.isConnected) {
-    missing.push('1AM wallet must be connected on Midnight Preprod.');
+    missing.push('A compatible wallet must be connected on Midnight Preprod.');
   }
   if (!params.attachedContractAddress) {
     missing.push('A verified CommonVeil contract must be attached.');
@@ -3344,7 +3344,7 @@ export function mapAttestationError(error: unknown): string {
           : ''
   ).toLowerCase();
   if (raw.includes('cancel') || raw.includes('reject') || raw.includes('denied') || raw.includes('declined') || raw.includes('user aborted')) {
-    return 'Attestation transaction was cancelled in 1AM.';
+    return 'Attestation transaction was cancelled in the wallet.';
   }
   if (raw.includes('already attested') || (raw.includes('nullifier') && raw.includes('used'))) {
     return 'Member already attested for this advisory.';
@@ -3359,7 +3359,7 @@ export function mapAttestationError(error: unknown): string {
     return 'Product version is not registered as an affected release on-chain.';
   }
   if (raw.includes('dust') || raw.includes('balance') || raw.includes('insufficient funds')) {
-    return 'Insufficient DUST or balance in connected 1AM wallet to cover transaction fees.';
+    return 'Insufficient DUST or balance in the connected wallet to cover transaction fees.';
   }
   if (raw.includes('proof') || raw.includes('prover') || raw.includes('proving')) {
     return 'ZK proof generation failed. Ensure your local proof server is reachable and responsive.';
