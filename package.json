@@ -6,6 +6,7 @@
   "scripts": {
     "compile": "compact compile contracts/commonveil.compact contracts/managed/commonveil",
     "test": "node --test tests/*.test.mjs && tsx --test tests/*.test.ts",
+    "test:e2e": "playwright test",
     "doctor": "node scripts/doctor.mjs",
     "scan": "node scripts/scan-inventory.mjs",
     "scan:json": "node scripts/scan-inventory.mjs",
@@ -35,6 +36,7 @@
     "semver": "^7.7.4"
   },
   "devDependencies": {
+    "@playwright/test": "^1.64.1",
     "@types/node": "^26.6.4",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
