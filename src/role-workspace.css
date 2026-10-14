@@ -1344,6 +1344,17 @@ input:focus-visible {
   margin: 0;
 }
 
+/* The JSX groups cards by responsibility, but visually they belong to one
+   numbered sequence. Flatten the wrappers so Steps 01/02, 03/04 and 05/06
+   form balanced rows instead of two unrelated vertical stacks. */
+.role-workspace-main .workspace-column {
+  display: contents;
+}
+
+.role-workspace-main .public-state-card {
+  grid-column: 1 / -1;
+}
+
 .role-workspace-main .workspace-card {
   display: block;
   min-height: 0;
@@ -1382,6 +1393,72 @@ input:focus-visible {
 .role-workspace-main select,
 .role-workspace-main textarea {
   max-width: 100%;
+}
+
+.role-workspace-main input:not([type='checkbox']):not([type='radio']),
+.role-workspace-main select,
+.role-workspace-main textarea {
+  width: 100%;
+  min-height: 46px;
+  border: 1px solid #315340;
+  border-radius: 10px;
+  background: #08110d;
+  color: #eef5f0;
+  padding: 11px 13px;
+  margin: 0 0 11px;
+  outline: none;
+  box-shadow: inset 0 1px 0 #ffffff05;
+  color-scheme: dark;
+}
+
+.role-workspace-main textarea {
+  min-height: 110px;
+  resize: vertical;
+}
+
+.role-workspace-main input::placeholder,
+.role-workspace-main textarea::placeholder {
+  color: #617568;
+  opacity: 1;
+}
+
+.role-workspace-main input:not([type='checkbox']):not([type='radio']):focus,
+.role-workspace-main select:focus,
+.role-workspace-main textarea:focus {
+  border-color: #86f3a8;
+  box-shadow: 0 0 0 3px #86f3a814, inset 0 1px 0 #ffffff08;
+}
+
+.role-workspace-main input:disabled,
+.role-workspace-main select:disabled,
+.role-workspace-main textarea:disabled {
+  color: #819087;
+  background: #0a120e;
+  opacity: .68;
+  cursor: not-allowed;
+}
+
+.role-workspace-main input[type='file'] {
+  min-height: 50px;
+  padding: 7px;
+}
+
+.role-workspace-main input[type='file']::file-selector-button {
+  border: 1px solid #315340;
+  border-radius: 7px;
+  background: #13251b;
+  color: #dce9e0;
+  padding: 7px 10px;
+  margin-right: 10px;
+  cursor: pointer;
+}
+
+.role-workspace-main label {
+  display: block;
+  color: #9bada1;
+  font-size: .79rem;
+  font-weight: 650;
+  margin: 0 0 7px;
 }
 
 .role-workspace-main .button-row,
@@ -1431,6 +1508,10 @@ input:focus-visible {
 
   .role-workspace-main .workspace-grid {
     grid-template-columns: 1fr;
+  }
+
+  .role-workspace-main .public-state-card {
+    grid-column: auto;
   }
 }
 
