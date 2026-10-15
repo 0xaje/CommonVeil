@@ -149,12 +149,15 @@ vite.config.ts.timestamp-*
 .turbo
 
 # CommonVeil generated/private artifacts
-contracts/managed/
 .env*
 !.env.example
 private-state/
 out/
-public/keys/
-public/zkir/
 dist/
 .vite/
+
+# Playwright
+test-results/
+playwright-report/
+blob-report/
+playwright/.cache/

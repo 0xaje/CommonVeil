@@ -1,0 +1,83 @@
+{
+  "version": "0.31.1",
+  "circuits": [
+    "attest",
+    "certifyInventory",
+    "registerAffectedRelease",
+    "registerMember"
+  ],
+  "files": {
+    "keys/attest.prover": {
+      "size": 9956300,
+      "sha256": "e9fb950f60254659fdd1a2e35083f0762b5707b5a77c9f6e8efc41980cb0b82a"
+    },
+    "keys/attest.verifier": {
+      "size": 2119,
+      "sha256": "699e41e1b2c20dda8ef19e341ecddc684cd00a4d48f56ff295c6b84790683855"
+    },
+    "zkir/attest.zkir": {
+      "size": 9055,
+      "sha256": "0f46b47ab005d1cb9a21af6b7cbade669ef9969e5d896a60eda1d8d343b326ab"
+    },
+    "zkir/attest.bzkir": {
+      "size": 576,
+      "sha256": "0ad3aa340519fc470a316220f32b85d82d8efca333610dcae97de49dce36c2b6"
+    },
+    "keys/certifyInventory.prover": {
+      "size": 5202054,
+      "sha256": "3b5eac977afed8194dbd9762399886deb7184430c654522be452039a2f87437e"
+    },
+    "keys/certifyInventory.verifier": {
+      "size": 2119,
+      "sha256": "bae688ad212f27b29ecd9bb5ef16ad1e0c21ef9eaf41dcaf03b30b963df02007"
+    },
+    "zkir/certifyInventory.zkir": {
+      "size": 6897,
+      "sha256": "a51a6c0bee5a6992acceeb89a8c760b2af626d1bcf2874362842d6fbafba9d4a"
+    },
+    "zkir/certifyInventory.bzkir": {
+      "size": 432,
+      "sha256": "7b077fbd3625b7334cedef2958b8aab622222288c8bc5c73420131bdaef96b0f"
+    },
+    "keys/registerAffectedRelease.prover": {
+      "size": 2824355,
+      "sha256": "21263366c35e8fcbf3aead10b5823af9ac4527766d0ad10553f5c722260feab2"
+    },
+    "keys/registerAffectedRelease.verifier": {
+      "size": 2119,
+      "sha256": "5105f6e28999084808beaf3deb724beed9c1bcd7ebbed029d5df08e097016e29"
+    },
+    "zkir/registerAffectedRelease.zkir": {
+      "size": 5518,
+      "sha256": "caaea780ab76c6b1bd0d3bf343ddc7446be101d15aba0504b5b552bfd5597e07"
+    },
+    "zkir/registerAffectedRelease.bzkir": {
+      "size": 353,
+      "sha256": "4245f0ec58e965b3e7fb78872f97a0702a68377d436ef152ad66abce816b6b1a"
+    },
+    "keys/registerMember.prover": {
+      "size": 2817666,
+      "sha256": "dce1e9ff29d2b557eed309aa00f4fe923ce6b7a3380c28d5720a239b83e811e5"
+    },
+    "keys/registerMember.verifier": {
+      "size": 2119,
+      "sha256": "c4d4b1d98a8384dad52ac4b91764ae90624aa8ca8d2aa8898e1364fa7508e8e6"
+    },
+    "zkir/registerMember.zkir": {
+      "size": 4014,
+      "sha256": "19421eedc30e91b1a49a26f244aa9151b4b71964bea0ae7371709f796257be73"
+    },
+    "zkir/registerMember.bzkir": {
+      "size": 259,
+      "sha256": "b30ddfc090607d310b61746b1ec4a6f9c5df9466d048ced9c9597e8ae3e743a3"
+    },
+    "contract/index.js": {
+      "size": 117862,
+      "sha256": "fb36d4089e1ae0697cd7ab4d848dc509d138ee5682c8090608829fe2dfa5449f"
+    },
+    "contract/index.d.ts": {
+      "size": 8482,
+      "sha256": "11a65fb96dd55ebbef07938578ca9076cb4b9a78b61ad00b92fe07a0b8dd4630"
+    }
+  }
+}

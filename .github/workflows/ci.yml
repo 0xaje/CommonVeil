@@ -1,0 +1,98 @@
+name: CI
+
+on:
+  push:
+    branches: [main, post-audit-remediation]
+  pull_request:
+    branches: [main]
+
+jobs:
+  validate:
+    name: Build & Test (Node ${{ matrix.node-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [20.x, 22.x]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers with system dependencies
+        run: npx playwright install --with-deps chromium
+
+      - name: Run environment doctor & artifact manifest validation
+        run: npm run doctor
+
+      - name: Run full test suite (contract, crypto, state, and pre-build tests)
+        run: npm test
+
+      - name: Run Playwright browser E2E tests
+        run: npm run test:e2e
+
+      - name: Build production bundle & verify output
+        run: npm run build
+
+      - name: Verify all required published circuit assets
+        run: |
+          test -f dist/index.html
+          test -f dist/keys/attest.verifier
+          test -f dist/keys/attest.prover
+          test -f dist/zkir/attest.bzkir
+          test -f dist/keys/certifyInventory.verifier
+          test -f dist/keys/certifyInventory.prover
+          test -f dist/zkir/certifyInventory.bzkir
+          test -f dist/keys/registerAffectedRelease.verifier
+          test -f dist/keys/registerAffectedRelease.prover
+          test -f dist/zkir/registerAffectedRelease.bzkir
+          test -f dist/keys/registerMember.verifier
+          test -f dist/keys/registerMember.prover
+          test -f dist/zkir/registerMember.bzkir
+          test -d dist/assets
+
+  compile-compact:
+    name: Compact 0.31.1 Clean Compilation & Manifest Comparison
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Compact CLI via official installer
+        run: |
+          curl --proto '=https' --tlsv1.2 -LsSf https://github.com/midnightntwrk/compact/releases/latest/download/compact-installer.sh | sh
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+          echo "$HOME/.compact/bin" >> $GITHUB_PATH
+
+      - name: Install Compact compiler 0.31.1
+        run: |
+          export PATH="$HOME/.local/bin:$HOME/.compact/bin:$PATH"
+          compact update 0.31.1
+          compact compile --version
+
+      - name: Clean re-compilation from source
+        run: |
+          export PATH="$HOME/.local/bin:$HOME/.compact/bin:$PATH"
+          rm -rf contracts/managed/commonveil/keys contracts/managed/commonveil/zkir contracts/managed/commonveil/contract
+          npm run compile
+
+      - name: Compare generated artifacts with committed manifest checksums
+        run: node scripts/doctor.mjs
