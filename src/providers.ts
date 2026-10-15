@@ -13,7 +13,10 @@ export const PRIVATE_STATE_ID = 'commonveilPrivateState';
 export type CommonVeilCircuit = 'registerMember' | 'certifyInventory' | 'registerAffectedRelease' | 'attest';
 export type CommonVeilProviders = MidnightProviders<CommonVeilCircuit, typeof PRIVATE_STATE_ID, Record<string, never>>;
 
-export type IndexerConfigurationStatus = 'Wallet-provided indexer' | 'Blockfrost override configured';
+export type IndexerConfigurationStatus =
+  | 'Wallet-provided indexer'
+  | 'Blockfrost override configured'
+  | 'Secure server-side indexer fallback active';
 
 export interface ConnectedWallet {
   readonly name: string;
@@ -240,20 +243,43 @@ export const connectProviders = async (
     config,
   );
 
+  // In production builds, if the wallet supplies a private or legacy endpoint (such as api-preprod.1am.xyz
+  // or indexer.preprod.midnight.network), route GraphQL HTTP queries via the secure server-side fallback /api/indexer.
+  // The server-side function injects the project credential without exposing secrets to client bundles.
+  let activeHttpUri = indexerEndpoints.httpUri;
+  let activeWsUri = indexerEndpoints.wsUri;
+  let activeStatus = indexerEndpoints.status;
+
+  if (
+    typeof window !== 'undefined' &&
+    typeof import.meta !== 'undefined' &&
+    !!import.meta.env?.PROD
+  ) {
+    const isPrivateOrDecommissioned =
+      activeHttpUri.includes('1am.xyz') ||
+      activeHttpUri.includes('indexer.preprod.midnight.network');
+
+    if (isPrivateOrDecommissioned) {
+      activeHttpUri = `${window.location.origin}/api/indexer`;
+      activeWsUri = 'wss://midnight-preprod.blockfrost.io/api/v0/ws';
+      activeStatus = 'Secure server-side indexer fallback active';
+    }
+  }
+
   return {
     name: initialAPI.name,
     address: unshielded.unshieldedAddress,
     dustBalance: dust.balance,
     dustCap: dust.cap,
     proofMode,
-    indexerStatus: indexerEndpoints.status,
+    indexerStatus: activeStatus,
     providers: {
       privateStateProvider: inMemoryPrivateStateProvider<typeof PRIVATE_STATE_ID, Record<string, never>>(),
       zkConfigProvider,
       proofProvider,
       publicDataProvider: indexerPublicDataProvider(
-        indexerEndpoints.httpUri,
-        indexerEndpoints.wsUri,
+        activeHttpUri,
+        activeWsUri,
       ),
       walletProvider: {
         getCoinPublicKey: () => shielded.shieldedCoinPublicKey,
