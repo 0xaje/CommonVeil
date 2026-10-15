@@ -161,3 +161,8 @@ test-results/
 playwright-report/
 blob-report/
 playwright/.cache/
+
+# Video production artifacts
+video/out/
+video/.remotion/
+*.mp4

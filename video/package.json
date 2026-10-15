@@ -1,0 +1,24 @@
+{
+  "name": "commonveil-video",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "studio": "remotion studio",
+    "preview": "remotion studio",
+    "render:draft": "remotion render CommonVeilBuildathonFilm out/commonveil-draft.mp4 --scale=0.5",
+    "render:final": "remotion render CommonVeilBuildathonFilm out/commonveil-final.mp4",
+    "render:scene01": "remotion render CommonVeilBuildathonFilm out/scene01.mp4 --frames=0-599",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@remotion/cli": "^4.0.250",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "remotion": "^4.0.250"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "typescript": "^5.7.0"
+  }
+}
