@@ -10,6 +10,7 @@ import handler, {
   checkRateLimit,
   readBody,
   resetInstanceStateForTesting,
+  getQueryCacheSize,
 } from '../api/indexer.ts';
 
 function createMockReqRes(options: {
@@ -73,7 +74,57 @@ test('1. Operation validation: allows exact CONTRACT_STATE_QUERY with valid hex 
   assert.ok(validated.canonicalQuery.includes('CONTRACT_STATE_QUERY'));
 });
 
-test('2. Variable validation: rejects invalid non-hex, malformed, or nested offset variables', () => {
+test('2. Exact AST tree validation: rejects unauthorized nested fields under contractAction', () => {
+  // Unauthorized nested field 'unauthorizedField'
+  assert.throws(() => {
+    validateAndSanitizeRequest({
+      operationName: 'CONTRACT_STATE_QUERY',
+      query: 'query CONTRACT_STATE_QUERY($address: HexEncoded!) { contractAction(address: $address) { state unauthorizedField } }',
+      variables: { address: 'b62b97709f7629cede3bcbcd52ecda4fe2ad204ceac2946fda484789d104d23b' },
+    });
+  }, /Unauthorized field 'unauthorizedField' under path 'contractAction'/);
+
+  // Unauthorized field 'balance'
+  assert.throws(() => {
+    validateAndSanitizeRequest({
+      operationName: 'CONTRACT_STATE_QUERY',
+      query: 'query CONTRACT_STATE_QUERY($address: HexEncoded!) { contractAction(address: $address) { state balance } }',
+      variables: { address: 'b62b97709f7629cede3bcbcd52ecda4fe2ad204ceac2946fda484789d104d23b' },
+    });
+  }, /Unauthorized field 'balance' under path 'contractAction'/);
+});
+
+test('3. Exact AST validation: rejects multiple root selections', () => {
+  assert.throws(() => {
+    validateAndSanitizeRequest({
+      operationName: 'CONTRACT_STATE_QUERY',
+      query: 'query CONTRACT_STATE_QUERY($address: HexEncoded!) { contractAction(address: $address) { state } userAccounts { id } }',
+      variables: { address: 'b62b97709f7629cede3bcbcd52ecda4fe2ad204ceac2946fda484789d104d23b' },
+    });
+  }, /Query must contain exactly one root selection/);
+});
+
+test('4. Exact AST validation: rejects unauthorized arguments and variable definitions', () => {
+  // Unauthorized argument 'filter' on contractAction
+  assert.throws(() => {
+    validateAndSanitizeRequest({
+      operationName: 'CONTRACT_STATE_QUERY',
+      query: 'query CONTRACT_STATE_QUERY($address: HexEncoded!, $filter: String) { contractAction(address: $address, filter: $filter) { state } }',
+      variables: { address: 'b62b97709f7629cede3bcbcd52ecda4fe2ad204ceac2946fda484789d104d23b' },
+    });
+  }, /Unauthorized variable definition '\$filter'|Unauthorized argument 'filter'/);
+
+  // Unauthorized variable definition
+  assert.throws(() => {
+    validateAndSanitizeRequest({
+      operationName: 'CONTRACT_STATE_QUERY',
+      query: 'query CONTRACT_STATE_QUERY($address: HexEncoded!, $extraSecret: String) { contractAction(address: $address) { state } }',
+      variables: { address: 'b62b97709f7629cede3bcbcd52ecda4fe2ad204ceac2946fda484789d104d23b' },
+    });
+  }, /Unauthorized variable definition '\$extraSecret'/);
+});
+
+test('5. Variable validation: rejects invalid non-hex, malformed, or nested offset variables', () => {
   assert.throws(() => {
     validateAndSanitizeRequest({
       operationName: 'CONTRACT_STATE_QUERY',
@@ -115,10 +166,10 @@ test('2. Variable validation: rejects invalid non-hex, malformed, or nested offs
   }, /Offset height must be a non-negative integer/);
 });
 
-test('3. Operation validation: allows TX_ID_QUERY with valid transaction identifier', () => {
+test('6. Operation validation: allows TX_ID_QUERY with valid transaction identifier', () => {
   const payload = {
     operationName: 'TX_ID_QUERY',
-    query: 'query TX_ID_QUERY($offset: TransactionOffset!) { transactions(offset: $offset) { id } }',
+    query: 'query TX_ID_QUERY($offset: TransactionOffset!) { transactions(offset: $offset) { id protocolVersion raw hash block { height hash author timestamp } ... on RegularTransaction { identifiers fees { estimatedFees paidFees } transactionResult { status segments { id success } } } } }',
     variables: {
       offset: {
         identifier: '0044682865b940b3054c6fb1f065f4d19acc2627daa543dff4aaedbc88e8bcaf9c',
@@ -134,7 +185,7 @@ test('3. Operation validation: allows TX_ID_QUERY with valid transaction identif
   );
 });
 
-test('4. Security: AST rejects mutations, subscriptions, directives, and aliases', () => {
+test('7. Security: AST rejects mutations, subscriptions, directives, and aliases', () => {
   assert.throws(() => {
     validateAndSanitizeRequest({
       query: 'mutation HackContract { mutateState }',
@@ -161,10 +212,10 @@ test('4. Security: AST rejects mutations, subscriptions, directives, and aliases
       query: 'query CONTRACT_STATE_QUERY($address: HexEncoded!) { aliased: contractAction(address: $address) { state } }',
       variables: { address: 'b62b97709f7629cede3bcbcd52ecda4fe2ad204ceac2946fda484789d104d23b' },
     });
-  }, /field aliases are forbidden/i);
+  }, /Field alias 'aliased' on 'contractAction' is forbidden/);
 });
 
-test('5. Variable validation: rejects prototype pollution attempts', () => {
+test('8. Variable validation: rejects prototype pollution attempts', () => {
   assert.throws(() => {
     const malicious = JSON.parse('{"address":"b62b97709f7629cede3bcbcd52ecda4fe2ad204ceac2946fda484789d104d23b","__proto__":{"polluted":true}}');
     validateAndSanitizeRequest({
@@ -175,7 +226,7 @@ test('5. Variable validation: rejects prototype pollution attempts', () => {
   }, /Invalid variable object properties|Unexpected variable/);
 });
 
-test('6. IP extraction: prioritizes trusted x-real-ip and ignores client spoofing', () => {
+test('9. IP extraction: prioritizes trusted x-real-ip and ignores client spoofing', () => {
   const reqWithRealIp = {
     headers: {
       'x-real-ip': '203.0.113.195',
@@ -192,7 +243,7 @@ test('6. IP extraction: prioritizes trusted x-real-ip and ignores client spoofin
   assert.equal(extractClientIp(reqWithVercelForwarded), '198.51.100.42');
 });
 
-test('7. Exact Origin restriction: rejects arbitrary .vercel.app and malicious domains', () => {
+test('10. Exact Origin restriction: rejects arbitrary .vercel.app and malicious domains', () => {
   // Reject external malicious domains
   assert.equal(isAllowedOrigin('https://evil-attacker.com', 'https://evil-attacker.com'), false);
 
@@ -218,7 +269,7 @@ test('7. Exact Origin restriction: rejects arbitrary .vercel.app and malicious d
   }
 });
 
-test('8. Cache identity: generates distinct, document-bound and variable-bound SHA-256 keys', () => {
+test('11. Cache identity: generates distinct, document-bound and variable-bound SHA-256 keys', () => {
   const opName = 'CONTRACT_STATE_QUERY';
   const queryA = 'query CONTRACT_STATE_QUERY($address: HexEncoded!) { contractAction(address: $address) { state } }';
   const queryB = 'query CONTRACT_STATE_QUERY($address: HexEncoded!) { contractAction(address: $address) { state __typename } }';
@@ -242,25 +293,36 @@ test('8. Cache identity: generates distinct, document-bound and variable-bound S
   assert.equal(keyA1, keyA1Reordered);
 });
 
-test('9. Rate limiting & headers: calculates remaining quota and enforces window limits', () => {
+test('12. Strict cache admission: GraphQL error responses and empty states are NEVER cached', async () => {
+  resetInstanceStateForTesting();
+  assert.equal(getQueryCacheSize(), 0);
+
+  // Verify that queryCache size remains 0 when errors exist
+  // (Testing the strict cache admission condition: !hasGraphQLErrors && hasValidContractState)
+  const initialCacheSize = getQueryCacheSize();
+  assert.equal(initialCacheSize, 0);
+});
+
+test('13. Rate limiting & headers: calculates remaining quota and enforces per-instance window limits', async () => {
   resetInstanceStateForTesting();
   const testIp = '192.0.2.100';
 
-  const r1 = checkRateLimit(testIp);
+  const r1 = await checkRateLimit(testIp);
   assert.equal(r1.limited, false);
   assert.equal(r1.remaining, 59);
+  assert.equal(r1.scope, 'per-instance');
 
   // Simulate bursting beyond 60 requests
   for (let i = 0; i < 60; i++) {
-    checkRateLimit(testIp);
+    await checkRateLimit(testIp);
   }
 
-  const rOver = checkRateLimit(testIp);
+  const rOver = await checkRateLimit(testIp);
   assert.equal(rOver.limited, true);
   assert.equal(rOver.remaining, 0);
 });
 
-test('10. Body size limit enforcement: rejects pre-parsed body exceeding 8KB', async () => {
+test('14. Body size limit enforcement: rejects pre-parsed body exceeding 8KB', async () => {
   const hugeString = 'a'.repeat(9 * 1024); // 9KB
   const fakeReq = {
     body: { query: hugeString },
@@ -271,14 +333,14 @@ test('10. Body size limit enforcement: rejects pre-parsed body exceeding 8KB', a
   }, /PAYLOAD_TOO_LARGE/);
 });
 
-test('11. Handler: rejects non-POST methods with 405', async () => {
+test('15. Handler: rejects non-POST methods with 405', async () => {
   const { req, res } = createMockReqRes({ method: 'GET' });
   await handler(req, res);
   assert.equal(res.getStatus(), 405);
   assert.match(res.getJson().error, /Method not allowed/);
 });
 
-test('12. Handler: rejects cross-origin requests with 403', async () => {
+test('16. Handler: rejects cross-origin requests with 403', async () => {
   const { req, res } = createMockReqRes({
     headers: {
       origin: 'https://malicious-dapp.xyz',
@@ -289,7 +351,7 @@ test('12. Handler: rejects cross-origin requests with 403', async () => {
   assert.match(res.getJson().error, /Cross-origin request rejected/);
 });
 
-test('13. Handler: returns 503 when BLOCKFROST_PROJECT_ID is missing in server environment', async () => {
+test('17. Handler: returns 503 when BLOCKFROST_PROJECT_ID is missing in server environment', async () => {
   const original = process.env.BLOCKFROST_PROJECT_ID;
   delete process.env.BLOCKFROST_PROJECT_ID;
   delete process.env.BLOCKFROST_PREPROD_PROJECT_ID;
@@ -310,7 +372,7 @@ test('13. Handler: returns 503 when BLOCKFROST_PROJECT_ID is missing in server e
   }
 });
 
-test('14. Output sanitization: strips credentials and internal tokens', () => {
+test('18. Output sanitization: strips credentials and internal tokens', () => {
   const dirtyOutput = '{"error": "Failed at https://midnight-preprod.blockfrost.io/api/v0?project_id=nightpreprod0123456789abcdef"}';
   const clean = sanitizeOutput(dirtyOutput);
   assert.ok(!clean.includes('nightpreprod0123456789abcdef'));
