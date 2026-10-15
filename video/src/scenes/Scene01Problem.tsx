@@ -15,29 +15,15 @@ export const Scene01Problem: React.FC = () => {
   const frame = useCurrentFrame();
 
   // -------------------------------------------------------------
-  // Camera & Background Progression
-  // - Frames 0–645: Editorial warm off-white (#F4F1EA)
-  // - Frames 645–715: Smooth editorial-to-Midnight indigo transition (#11152D)
-  // - Controlled 5% camera push-in across scene (1.0 -> 1.05)
+  // One visual foundation across the film. A restrained 1.5% push adds life
+  // without turning the document evidence into a floating presentation.
   // -------------------------------------------------------------
-  const cameraZoom = interpolate(frame, [0, 790], [1.0, 1.05], {
+  const cameraZoom = interpolate(frame, [0, 790], [1.0, 1.015], {
     extrapolateLeft: 'clamp',
     extrapolateRight: 'clamp',
   });
 
-  const bgR = interpolate(frame, [645, 715], [244, 17], {
-    extrapolateLeft: 'clamp',
-    extrapolateRight: 'clamp',
-  });
-  const bgG = interpolate(frame, [645, 715], [241, 21], {
-    extrapolateLeft: 'clamp',
-    extrapolateRight: 'clamp',
-  });
-  const bgB = interpolate(frame, [645, 715], [234, 45], {
-    extrapolateLeft: 'clamp',
-    extrapolateRight: 'clamp',
-  });
-  const currentBg = `rgb(${Math.round(bgR)}, ${Math.round(bgG)}, ${Math.round(bgB)})`;
+  const currentBg = colors.midnight.bg;
 
   // -------------------------------------------------------------
   // 1. 0:00–0:02.1 (Frames 0–65): "29 MARCH 2024"
@@ -107,20 +93,17 @@ export const Scene01Problem: React.FC = () => {
         overflow: 'hidden',
       }}
     >
-      {/* Subtle cinematic paper vignette */}
+      {/* Shared Midnight depth field */}
       <div
         style={{
           position: 'absolute',
           inset: 0,
-          background:
-            frame < 645
-              ? 'radial-gradient(ellipse at 50% 50%, rgba(255, 255, 255, 0.4) 0%, rgba(220, 214, 200, 0.6) 100%)'
-              : 'radial-gradient(ellipse at 50% 50%, rgba(26, 33, 70, 0.4) 0%, rgba(11, 14, 32, 0.8) 100%)',
+          background: colors.midnight.bgGradient,
           pointerEvents: 'none',
         }}
       />
 
-      {/* Main Content Area with 5% Camera Push-in */}
+      {/* Main content with restrained documentary push-in */}
       <div
         style={{
           position: 'absolute',
@@ -657,7 +640,7 @@ export const Scene01Problem: React.FC = () => {
       </div>
 
       {/* Global Synchronized Captions (42px, max 2 lines, max 60% width) */}
-      <Caption segments={scene01Captions} bottom={84} />
+      <Caption segments={scene01Captions} />
     </AbsoluteFill>
   );
 };

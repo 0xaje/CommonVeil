@@ -11,7 +11,7 @@ interface CaptionProps {
 
 export const Caption: React.FC<CaptionProps> = ({
   segments,
-  bottom = 84, // Title-safe margin
+  bottom = 32,
 }) => {
   const frame = useCurrentFrame();
 
@@ -55,7 +55,7 @@ export const Caption: React.FC<CaptionProps> = ({
         display: 'flex',
         justifyContent: 'center',
         alignItems: 'center',
-        padding: '0 96px', // Title-safe horizontal margin
+        padding: '0 96px',
         pointerEvents: 'none',
         zIndex: 100,
         opacity,
@@ -65,10 +65,10 @@ export const Caption: React.FC<CaptionProps> = ({
         style={{
           background: colors.caption.bg,
           border: `1px solid ${colors.caption.border}`,
-          borderRadius: 12,
-          padding: '16px 36px',
+          borderRadius: 10,
+          padding: '11px 26px',
           boxShadow: colors.caption.shadow,
-          maxWidth: 1152, // Exactly 60% of 1920px frame
+          maxWidth: 1080,
           width: 'fit-content',
           textAlign: 'center',
         }}
@@ -77,8 +77,9 @@ export const Caption: React.FC<CaptionProps> = ({
           style={{
             ...typography.styles.caption,
             color: colors.caption.textPrimary,
-            fontSize: 42, // Meets 40-46px rule
-            lineHeight: 1.25,
+            fontSize: 36,
+            fontWeight: 500,
+            lineHeight: 1.28,
             display: '-webkit-box',
             WebkitLineClamp: 2, // Maximum 2 lines
             WebkitBoxOrient: 'vertical',

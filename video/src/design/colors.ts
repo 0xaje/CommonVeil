@@ -1,23 +1,24 @@
 export const colors = {
-  // Editorial Incident Palette (Scene 01)
+  // Incident-document palette (Scene 01). Scene 01 and Scene 02 deliberately
+  // share the same Midnight foundation so the film reads as one production.
+  // Evidence cards are elevated documents, not a separate white presentation.
   editorial: {
-    bg: '#F4F1EA',               // Warm off-white presentation background
-    surface: '#FFFFFF',          // Pure white source surfaces
-    surfaceSubtle: '#EDE8DE',    // Subtle secondary paper surface
-    border: 'rgba(28, 30, 36, 0.12)',
-    borderMedium: 'rgba(28, 30, 36, 0.24)',
-    shadow: '0 12px 36px rgba(28, 30, 36, 0.07)',
+    bg: '#11152D',
+    surface: '#181E3D',
+    surfaceSubtle: '#20284F',
+    border: 'rgba(148, 163, 184, 0.18)',
+    borderMedium: 'rgba(148, 163, 184, 0.30)',
+    shadow: '0 16px 44px rgba(0, 0, 0, 0.45)',
 
-    // Charcoal typography
-    textPrimary: '#1C1E24',
-    textSecondary: '#3C424E',
-    textMuted: '#68707E',
+    textPrimary: '#F8FAFC',
+    textSecondary: '#CBD5E1',
+    textMuted: '#94A3B8',
 
     // Restrained warning red
-    red: '#C53030',
-    redMuted: '#9B2C2C',
-    redBg: 'rgba(197, 48, 48, 0.08)',
-    redBorder: 'rgba(197, 48, 48, 0.28)',
+    red: '#F87171',
+    redMuted: '#EF4444',
+    redBg: 'rgba(239, 68, 68, 0.10)',
+    redBorder: 'rgba(248, 113, 113, 0.38)',
   },
 
   // Midnight Indigo Palette (Scene 02 & Cryptographic Solution)

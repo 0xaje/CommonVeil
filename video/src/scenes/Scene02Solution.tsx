@@ -14,12 +14,6 @@ import { scene02Captions } from '../narration/script';
 export const Scene02Solution: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // Controlled 5% camera push-in across the scene
-  const cameraZoom = interpolate(frame, [0, 955], [1.0, 1.05], {
-    extrapolateLeft: 'clamp',
-    extrapolateRight: 'clamp',
-  });
-
   // =============================================================
   // Phase 1: 0:00 - 0:06.0 (Frames 0 - 180) — The Direct Answer & Brand
   // =============================================================
@@ -104,27 +98,20 @@ export const Scene02Solution: React.FC = () => {
     { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
   );
 
-  // Camera scale within screenshot window
+  // Camera movement is isolated to the screenshot viewport. The surrounding
+  // composition never scales, so headings, panels and captions remain stable.
   const shotScale = interpolate(
     frame,
-    [535, 620, 640, 720, 740, 820, 840],
-    [1.0, 1.0, 1.65, 1.65, 1.55, 1.55, 1.0],
+    [535, 610, 645, 715, 750, 820, 865, 930],
+    [1.0, 1.0, 1.42, 1.42, 1.42, 1.42, 1.0, 1.0],
     { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
   );
 
-  // Camera translation (focus on bottom evaluation, then pan up to receipt import)
+  // Pan gently from the prerequisites to the verified unaffected result.
   const shotTranslateY = interpolate(
     frame,
-    [535, 620, 640, 720, 740, 820, 840],
-    [0, 0, -180, -180, -60, -60, 0],
-    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
-  );
-
-  // Callout overlay opacity (active during focused zoom)
-  const calloutOpacity = interpolate(
-    frame,
-    [640, 652, 720, 730],
-    [0, 1, 1, 0],
+    [535, 610, 645, 715, 750, 820, 865, 930],
+    [0, 0, -24, -24, -112, -112, 0, 0],
     { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
   );
 
@@ -146,13 +133,11 @@ export const Scene02Solution: React.FC = () => {
         }}
       />
 
-      {/* Main Content Area with 5% Camera Push-in */}
+      {/* Stable composition; only intentional child elements move. */}
       <div
         style={{
           position: 'absolute',
           inset: 0,
-          transform: `scale(${cameraZoom})`,
-          transformOrigin: '50% 50%',
         }}
       >
         {/* ======================================================== */}
@@ -168,7 +153,7 @@ export const Scene02Solution: React.FC = () => {
               justifyContent: 'center',
               alignItems: 'center',
               textAlign: 'center',
-              padding: '0 96px', // Title-safe margin
+              padding: '24px 80px 170px',
               opacity: heroOpacity,
             }}
           >
@@ -314,7 +299,7 @@ export const Scene02Solution: React.FC = () => {
             <h2
               style={{
                 ...typography.styles.primaryHeadline,
-                fontSize: 64, // Meets min 64px
+                fontSize: 54,
                 color: colors.midnight.textPrimary,
                 margin: '0 0 36px 0',
                 textAlign: 'center',
@@ -542,7 +527,7 @@ export const Scene02Solution: React.FC = () => {
                 ...typography.styles.primaryHeadline,
                 fontSize: 64, // Meets min 64px
                 color: colors.midnight.textPrimary,
-                margin: '0 0 28px 0',
+                margin: '0 0 20px 0',
                 textAlign: 'center',
               }}
             >
@@ -617,9 +602,11 @@ export const Scene02Solution: React.FC = () => {
                 >
                   <div
                     style={{
+                      position: 'absolute',
+                      inset: 0,
                       width: '100%',
                       height: '100%',
-                      transform: `scale(${shotScale}) translateY(${shotTranslateY}px)`,
+                      transform: `translate3d(0, ${shotTranslateY}px, 0) scale(${shotScale})`,
                       transformOrigin: '50% 50%',
                     }}
                   >
@@ -627,56 +614,18 @@ export const Scene02Solution: React.FC = () => {
                       src={staticFile('evidence/preprod-evaluation-clean.png')}
                       style={{
                         width: '100%',
-                        height: 'auto',
+                        height: '100%',
+                        objectFit: 'contain',
                         display: 'block',
                       }}
                     />
                   </div>
-
-                  {/* Concise Callout Overlay during zoom (Requirement 5) */}
-                  {calloutOpacity > 0 && (
-                    <div
-                      style={{
-                        position: 'absolute',
-                        bottom: 16,
-                        left: 16,
-                        right: 16,
-                        background: 'rgba(17, 21, 45, 0.95)',
-                        border: `2px solid ${colors.midnight.green}`,
-                        borderRadius: 8,
-                        padding: '12px 18px',
-                        boxShadow: '0 8px 24px rgba(0,0,0,0.6)',
-                        opacity: calloutOpacity,
-                      }}
-                    >
-                      <div
-                        style={{
-                          ...typography.styles.label,
-                          fontSize: 22, // Meets min 22px
-                          color: colors.midnight.green,
-                          marginBottom: 4,
-                        }}
-                      >
-                        VERIFIED UNAFFECTED STATUS
-                      </div>
-                      <div
-                        style={{
-                          ...typography.styles.bodyText,
-                          fontSize: 30, // Meets min 30px
-                          color: colors.midnight.textPrimary,
-                          lineHeight: 1.3,
-                        }}
-                      >
-                        Compact circuit verifies genuine host package state is outside affected release set.
-                      </div>
-                    </div>
-                  )}
                 </div>
 
                 <div
                   style={{
                     ...typography.styles.bodyText,
-                    fontSize: 30, // Meets min 30px
+                    fontSize: 24,
                     color: colors.midnight.textSecondary,
                     marginTop: 14,
                     lineHeight: 1.35,
@@ -796,7 +745,7 @@ export const Scene02Solution: React.FC = () => {
       </div>
 
       {/* Global Synchronized Captions (42px, max 2 lines, max 60% width) */}
-      <Caption segments={scene02Captions} bottom={84} />
+      <Caption segments={scene02Captions} />
     </AbsoluteFill>
   );
 };
