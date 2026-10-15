@@ -69,7 +69,23 @@ The master video mix (`public/audio/master-mix-scene01.mp3`) is processed throug
 5. **0:16.2–0:21.5 (Frames 488–645) — The Inventory Disclosure Risk**:
    - Editorial headline: `Answering could reveal their internal software inventory.`
 6. **0:21.5–0:26.33 (Frames 645–790) — The Zero-Knowledge Pivot**:
-   - The thesis statement: `What if exposure could be proven without revealing the inventory?` (holds cleanly for ~1.06s after narration finishes before cutting to Scene 02).
+   - The thesis statement: `What if exposure could be proven without revealing the inventory?` (holds cleanly for ~1.06s after narration finishes before cutting directly into Scene 02).
+
+---
+
+## Scene 02 Sequence Breakdown (0:26.33–0:58.17 / Frames 790–1745)
+
+1. **0:26.33–0:32.33 (Frames 790–970) — Direct Answer & CommonVeil Brand**:
+   - Immediate answer to the Scene 01 thesis question: *"This is CommonVeil: confidential vulnerability coordination built natively on Midnight."*
+   - Clean architectural display of the CommonVeil cryptographic shield mark and core Midnight Preprod credentials.
+2. **0:32.33–0:43.83 (Frames 970–1315) — Three-Party Separation Protocol**:
+   - Visual breakdown of the tripartite trust separation:
+     - **Registrar**: Admits opaque credentials & registers exact advisory/product/version tuples.
+     - **Certifier**: Commits salted inventory snapshots before disclosure policy activates.
+     - **Member**: Evaluates private inventory inside Compact circuits without disclosing package manifests.
+3. **0:43.83–0:58.17 (Frames 1315–1745) — Zero-Knowledge Verification on Midnight Preprod**:
+   - Clean crop of authentic Member evaluation from Midnight Preprod.
+   - Core Compact circuit guarantees: off-chain private inputs, advisory-scoped nullifiers to prevent duplicate counting, and verifiable public ledger counters.
 
 ---
 

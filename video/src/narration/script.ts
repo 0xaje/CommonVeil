@@ -42,3 +42,43 @@ export const scene01Captions: CaptionSegment[] = [
   },
 ];
 
+export const LOCKED_NARRATION_SCENE02 =
+  "This is CommonVeil: confidential vulnerability coordination built natively on Midnight. CommonVeil allows an organization to prove that a pre-certified software inventory contains an affected release—without publishing its identity, full package list, or internal endpoints. Zero-knowledge Compact circuits enforce policy matching on-chain, derive advisory-scoped nullifiers to prevent duplicate counting, and update public ecosystem counts while keeping private inventory strictly confidential.";
+
+export const scene02Captions: CaptionSegment[] = [
+  {
+    id: 's02-c01',
+    startFrame: 0,
+    endFrame: 175, // 0:00 - 0:05.8
+    text: 'This is CommonVeil: confidential vulnerability coordination',
+    secondaryText: 'built natively on Midnight.',
+  },
+  {
+    id: 's02-c02',
+    startFrame: 180,
+    endFrame: 380, // 0:06.0 - 0:12.6
+    text: 'CommonVeil allows an organization to prove that a pre-certified',
+    secondaryText: 'software inventory contains an affected release—',
+  },
+  {
+    id: 's02-c03',
+    startFrame: 385,
+    endFrame: 525, // 0:12.8 - 0:17.5
+    text: 'without publishing its identity, full package list, or internal endpoints.',
+  },
+  {
+    id: 's02-c04',
+    startFrame: 530,
+    endFrame: 765, // 0:17.6 - 0:25.5
+    text: 'Zero-knowledge Compact circuits enforce policy matching on-chain,',
+    secondaryText: 'and derive advisory-scoped nullifiers to prevent duplicate counting,',
+  },
+  {
+    id: 's02-c05',
+    startFrame: 770,
+    endFrame: 935, // 0:25.6 - 0:31.1
+    text: 'and update public ecosystem counts',
+    secondaryText: 'while keeping private inventory strictly confidential.',
+  },
+];
+
