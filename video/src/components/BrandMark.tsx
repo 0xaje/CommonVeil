@@ -27,26 +27,24 @@ export const BrandMark: React.FC<BrandMarkProps> = ({ opacity = 1 }) => {
           width="28"
           height="28"
           rx="6"
-          stroke={colors.border.subtle}
+          stroke={colors.midnight.border}
           strokeWidth="1.5"
           fill="rgba(4, 8, 20, 0.6)"
         />
         <path
           d="M8 11L16 6L24 11V18C24 22.5 16 26 16 26C16 26 8 22.5 8 18V11Z"
-          stroke={colors.midnightCyan.base}
+          stroke={colors.midnight.cyan}
           strokeWidth="1.5"
           strokeLinejoin="round"
         />
-        <circle cx="16" cy="15" r="2.5" fill={colors.midnightViolet.bright} />
+        <circle cx="16" cy="15" r="2.5" fill={colors.midnight.violet} />
       </svg>
 
       <span
         style={{
-          ...typography.styles.codeBadge,
-          fontSize: 14,
-          fontWeight: 600,
-          letterSpacing: '0.15em',
-          color: colors.text.muted,
+          ...typography.styles.label,
+          fontSize: 22,
+          color: colors.midnight.textMuted,
         }}
       >
         COMMONVEIL
@@ -54,3 +52,4 @@ export const BrandMark: React.FC<BrandMarkProps> = ({ opacity = 1 }) => {
     </div>
   );
 };
+

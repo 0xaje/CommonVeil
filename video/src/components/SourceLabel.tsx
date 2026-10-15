@@ -33,15 +33,15 @@ export const SourceLabel: React.FC<SourceLabelProps> = ({
         style={{
           width: 3,
           height: 14,
-          backgroundColor: colors.midnightViolet.bright,
+          backgroundColor: colors.midnight.violet,
           borderRadius: 1,
         }}
       />
       <span
         style={{
-          ...typography.styles.sourceLabel,
-          color: colors.text.dim,
-          fontSize: 12,
+          ...typography.styles.label,
+          color: colors.midnight.textMuted,
+          fontSize: 22,
           letterSpacing: '0.04em',
           textTransform: 'none',
         }}
@@ -51,3 +51,4 @@ export const SourceLabel: React.FC<SourceLabelProps> = ({
     </div>
   );
 };
+

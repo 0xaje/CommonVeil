@@ -11,20 +11,21 @@ interface CaptionProps {
 
 export const Caption: React.FC<CaptionProps> = ({
   segments,
-  bottom = 72,
+  bottom = 84, // Title-safe margin
 }) => {
   const frame = useCurrentFrame();
 
-  // Find active segment
+  // Find active segment by explicit start and end frame
   const activeSegment = segments.find(
     (s) => frame >= s.startFrame && frame <= s.endFrame
   );
 
+  // If no segment is currently active, render nothing (no lingering caption)
   if (!activeSegment) {
     return null;
   }
 
-  // Crisp phrase entrance & exit fade (3 frames / 0.1s)
+  // Complete phrase entrance & exit (clean 3-frame phrase fade, zero partial-word animation)
   const fadeInFrames = 3;
   const fadeOutFrames = 3;
 
@@ -54,46 +55,41 @@ export const Caption: React.FC<CaptionProps> = ({
         display: 'flex',
         justifyContent: 'center',
         alignItems: 'center',
-        padding: '0 80px',
+        padding: '0 96px', // Title-safe horizontal margin
         pointerEvents: 'none',
-        zIndex: 60,
+        zIndex: 100,
         opacity,
       }}
     >
       <div
         style={{
-          background: 'rgba(4, 8, 20, 0.92)',
-          border: `1px solid ${colors.border.subtle}`,
-          borderRadius: 8,
-          padding: '12px 28px',
-          backdropFilter: 'blur(12px)',
-          boxShadow: '0 8px 32px rgba(0, 0, 0, 0.65)',
-          maxWidth: 1250,
+          background: colors.caption.bg,
+          border: `1px solid ${colors.caption.border}`,
+          borderRadius: 12,
+          padding: '16px 36px',
+          boxShadow: colors.caption.shadow,
+          maxWidth: 1152, // Exactly 60% of 1920px frame
+          width: 'fit-content',
           textAlign: 'center',
         }}
       >
         <div
           style={{
             ...typography.styles.caption,
-            color: colors.text.primary,
-            lineHeight: 1.35,
+            color: colors.caption.textPrimary,
+            fontSize: 42, // Meets 40-46px rule
+            lineHeight: 1.25,
+            display: '-webkit-box',
+            WebkitLineClamp: 2, // Maximum 2 lines
+            WebkitBoxOrient: 'vertical',
+            overflow: 'hidden',
           }}
         >
           {activeSegment.text}
+          {activeSegment.secondaryText ? ` ${activeSegment.secondaryText}` : ''}
         </div>
-        {activeSegment.secondaryText && (
-          <div
-            style={{
-              ...typography.styles.caption,
-              color: colors.text.secondary,
-              marginTop: 4,
-              fontSize: 24,
-            }}
-          >
-            {activeSegment.secondaryText}
-          </div>
-        )}
       </div>
     </div>
   );
 };
+

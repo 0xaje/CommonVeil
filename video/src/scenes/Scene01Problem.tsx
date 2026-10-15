@@ -7,72 +7,70 @@ import {
   useCurrentFrame,
 } from 'remotion';
 import { Caption } from '../components/Caption';
-import { FilmGrain } from '../components/FilmGrain';
 import { colors } from '../design/colors';
-import { timing } from '../design/timing';
 import { typography } from '../design/typography';
 import { scene01Captions } from '../narration/script';
 
 export const Scene01Problem: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // Slow, deliberate documentary camera drift (1.000 -> 1.018 across 790 frames)
-  const cameraZoom = interpolate(frame, [0, 790], [1.0, 1.018], {
+  // -------------------------------------------------------------
+  // Camera & Background Progression
+  // - Frames 0–645: Editorial warm off-white (#F4F1EA)
+  // - Frames 645–715: Smooth editorial-to-Midnight indigo transition (#11152D)
+  // - Controlled 5% camera push-in across scene (1.0 -> 1.05)
+  // -------------------------------------------------------------
+  const cameraZoom = interpolate(frame, [0, 790], [1.0, 1.05], {
     extrapolateLeft: 'clamp',
     extrapolateRight: 'clamp',
   });
 
+  const bgR = interpolate(frame, [645, 715], [244, 17], {
+    extrapolateLeft: 'clamp',
+    extrapolateRight: 'clamp',
+  });
+  const bgG = interpolate(frame, [645, 715], [241, 21], {
+    extrapolateLeft: 'clamp',
+    extrapolateRight: 'clamp',
+  });
+  const bgB = interpolate(frame, [645, 715], [234, 45], {
+    extrapolateLeft: 'clamp',
+    extrapolateRight: 'clamp',
+  });
+  const currentBg = `rgb(${Math.round(bgR)}, ${Math.round(bgG)}, ${Math.round(bgB)})`;
+
   // -------------------------------------------------------------
-  // 1. 0:00–0:02 (Frames 0–60): Black screen with "29 MARCH 2024"
+  // 1. 0:00–0:02.1 (Frames 0–65): "29 MARCH 2024"
   // -------------------------------------------------------------
   const dateOpacity = interpolate(
     frame,
-    [0, 12, 48, 60],
+    [0, 12, 53, 65],
     [0, 1, 1, 0],
-    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
-  );
-  const dateTracking = interpolate(
-    frame,
-    [0, 60],
-    [0.18, 0.22],
     { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
   );
 
   // -------------------------------------------------------------
-  // 2. 0:02–0:07.5 (Frames 60–225): Authentic primary source advisories
+  // 2. 0:02.1–0:07.5 (Frames 65–228): Authentic primary source advisories
   // -------------------------------------------------------------
   const advisoriesOpacity = interpolate(
     frame,
-    [60, 72, 219, 225],
+    [65, 76, 222, 228],
     [0, 1, 1, 0],
-    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
-  );
-  const advisoriesDriftY = interpolate(
-    frame,
-    [60, 225],
-    [8, -8],
     { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
   );
 
   // -------------------------------------------------------------
-  // 3. 0:07.5–0:11.8 (Frames 225–354): Visually isolate releases "5.6.0" & "5.6.1"
+  // 3. 0:07.5–0:11.8 (Frames 228–354): Isolated releases "5.6.0" & "5.6.1"
   // -------------------------------------------------------------
   const releasesOpacity = interpolate(
     frame,
-    [225, 231, 348, 354],
+    [228, 235, 348, 354],
     [0, 1, 1, 0],
-    { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
-  );
-  const releasesScale = interpolate(
-    frame,
-    [225, 354],
-    [0.985, 1.015],
     { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
   );
 
   // -------------------------------------------------------------
   // 4. 0:11.8–0:16.2 (Frames 354–488): "Which organizations were exposed?"
-  // Clean 6-frame transition immediately following releases (no double exposure, no blank gap)
   // -------------------------------------------------------------
   const orgExposureOpacity = interpolate(
     frame,
@@ -93,36 +91,36 @@ export const Scene01Problem: React.FC = () => {
 
   // -------------------------------------------------------------
   // 6. 0:21.5–0:26.33 (Frames 645–790): "What if exposure could be proven..."
-  // Holds cleanly for ~1.06s after speech ends before transition into Scene 02
+  // Transition into Midnight indigo, holds cleanly before Scene 02 cut
   // -------------------------------------------------------------
   const zkPivotOpacity = interpolate(
     frame,
-    [645, 651, 790],
+    [645, 652, 790],
     [0, 1, 1],
     { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
   );
 
-
   return (
     <AbsoluteFill
       style={{
-        backgroundColor: '#05070d',
-        color: '#f8fafc',
+        backgroundColor: currentBg,
         overflow: 'hidden',
       }}
     >
-      {/* Subtle authentic documentary vignette */}
+      {/* Subtle cinematic paper vignette */}
       <div
         style={{
           position: 'absolute',
           inset: 0,
           background:
-            'radial-gradient(ellipse at 50% 50%, rgba(14, 20, 38, 0.4) 0%, rgba(4, 6, 14, 0.95) 100%)',
+            frame < 645
+              ? 'radial-gradient(ellipse at 50% 50%, rgba(255, 255, 255, 0.4) 0%, rgba(220, 214, 200, 0.6) 100%)'
+              : 'radial-gradient(ellipse at 50% 50%, rgba(26, 33, 70, 0.4) 0%, rgba(11, 14, 32, 0.8) 100%)',
           pointerEvents: 'none',
         }}
       />
 
-      {/* Main Content Area with Slow Cinematic Camera Movement */}
+      {/* Main Content Area with 5% Camera Push-in */}
       <div
         style={{
           position: 'absolute',
@@ -132,7 +130,7 @@ export const Scene01Problem: React.FC = () => {
         }}
       >
         {/* ======================================================== */}
-        {/* 1. 0:00–0:02: Black screen with "29 MARCH 2024"          */}
+        {/* 1. 0:00–0:02.1: Editorial "29 MARCH 2024"                 */}
         {/* ======================================================== */}
         {dateOpacity > 0 && (
           <div
@@ -148,10 +146,10 @@ export const Scene01Problem: React.FC = () => {
             <div
               style={{
                 fontFamily: typography.fontFamily.sans,
-                fontSize: 54,
-                fontWeight: 600,
-                letterSpacing: `${dateTracking}em`,
-                color: '#f8fafc',
+                fontSize: 68, // Meets min 64px
+                fontWeight: 700,
+                letterSpacing: '0.12em',
+                color: colors.editorial.textPrimary,
                 textTransform: 'uppercase',
               }}
             >
@@ -161,7 +159,7 @@ export const Scene01Problem: React.FC = () => {
         )}
 
         {/* ======================================================== */}
-        {/* 2. 0:02–0:07.3: Authentic primary source advisory montage*/}
+        {/* 2. 0:02.1–0:07.5: Authentic primary source advisory cards */}
         {/* ======================================================== */}
         {advisoriesOpacity > 0 && (
           <div
@@ -172,27 +170,27 @@ export const Scene01Problem: React.FC = () => {
               flexDirection: 'column',
               justifyContent: 'center',
               alignItems: 'center',
-              padding: '0 160px',
+              padding: '0 96px', // Title-safe margin
               opacity: advisoriesOpacity,
-              transform: `translateY(${advisoriesDriftY}px)`,
             }}
           >
             <div
               style={{
                 width: '100%',
-                maxWidth: 1260,
+                maxWidth: 1360,
                 display: 'flex',
                 flexDirection: 'column',
-                gap: 22,
+                gap: 18,
               }}
             >
               {/* Document 1: CISA Alert Official Header */}
               <div
                 style={{
-                  background: '#090d1a',
-                  border: '1px solid rgba(255, 255, 255, 0.12)',
-                  borderRadius: 2,
-                  padding: '24px 32px',
+                  background: colors.editorial.surface,
+                  border: `1px solid ${colors.editorial.border}`,
+                  borderRadius: 8,
+                  padding: '20px 32px',
+                  boxShadow: colors.editorial.shadow,
                 }}
               >
                 <div
@@ -200,28 +198,25 @@ export const Scene01Problem: React.FC = () => {
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'space-between',
-                    borderBottom: '1px solid rgba(255, 255, 255, 0.08)',
-                    paddingBottom: 10,
-                    marginBottom: 12,
+                    borderBottom: `1px solid ${colors.editorial.border}`,
+                    paddingBottom: 8,
+                    marginBottom: 10,
                   }}
                 >
                   <span
                     style={{
-                      fontFamily: typography.fontFamily.mono,
-                      fontSize: 12,
-                      fontWeight: 700,
-                      letterSpacing: '0.14em',
-                      color: '#94a3b8',
-                      textTransform: 'uppercase',
+                      ...typography.styles.label,
+                      color: colors.editorial.textMuted,
+                      fontSize: 22, // Meets min 22px
                     }}
                   >
                     CYBERSECURITY AND INFRASTRUCTURE SECURITY AGENCY // CISA
                   </span>
                   <span
                     style={{
-                      fontFamily: typography.fontFamily.mono,
-                      fontSize: 11,
-                      color: '#64748b',
+                      ...typography.styles.label,
+                      color: colors.editorial.red,
+                      fontSize: 22,
                     }}
                   >
                     ALERT AA24-089A | CVE-2024-3094
@@ -229,11 +224,11 @@ export const Scene01Problem: React.FC = () => {
                 </div>
                 <div
                   style={{
-                    fontFamily: typography.fontFamily.sans,
-                    fontSize: 27,
-                    fontWeight: 600,
-                    color: '#f8fafc',
-                    lineHeight: 1.3,
+                    ...typography.styles.secondaryHeadline,
+                    color: colors.editorial.textPrimary,
+                    fontSize: 48, // Meets min 48px
+                    fontWeight: 700,
+                    lineHeight: 1.2,
                   }}
                 >
                   Reported Supply Chain Compromise Affecting XZ Utils
@@ -243,10 +238,11 @@ export const Scene01Problem: React.FC = () => {
               {/* Document 2: Upstream Maintainer Notice (tukaani.org) */}
               <div
                 style={{
-                  background: '#090d1a',
-                  border: '1px solid rgba(255, 255, 255, 0.12)',
-                  borderRadius: 2,
-                  padding: '22px 32px',
+                  background: colors.editorial.surface,
+                  border: `1px solid ${colors.editorial.border}`,
+                  borderRadius: 8,
+                  padding: '18px 32px',
+                  boxShadow: colors.editorial.shadow,
                 }}
               >
                 <div
@@ -254,28 +250,25 @@ export const Scene01Problem: React.FC = () => {
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'space-between',
-                    borderBottom: '1px solid rgba(255, 255, 255, 0.08)',
+                    borderBottom: `1px solid ${colors.editorial.border}`,
                     paddingBottom: 8,
                     marginBottom: 10,
                   }}
                 >
                   <span
                     style={{
-                      fontFamily: typography.fontFamily.mono,
-                      fontSize: 12,
-                      fontWeight: 700,
-                      letterSpacing: '0.12em',
-                      color: '#94a3b8',
-                      textTransform: 'uppercase',
+                      ...typography.styles.label,
+                      color: colors.editorial.textMuted,
+                      fontSize: 22, // Meets min 22px
                     }}
                   >
                     UPSTREAM ADVISORY // TUKAANI.ORG (LASSE COLLIN)
                   </span>
                   <span
                     style={{
-                      fontFamily: typography.fontFamily.mono,
-                      fontSize: 11,
-                      color: '#64748b',
+                      ...typography.styles.label,
+                      color: colors.editorial.textSecondary,
+                      fontSize: 22,
                     }}
                   >
                     PRIMARY DISCLOSURE
@@ -283,11 +276,11 @@ export const Scene01Problem: React.FC = () => {
                 </div>
                 <div
                   style={{
-                    fontFamily: typography.fontFamily.sans,
-                    fontSize: 25,
-                    fontWeight: 500,
-                    color: '#f8fafc',
-                    lineHeight: 1.3,
+                    ...typography.styles.secondaryHeadline,
+                    color: colors.editorial.textPrimary,
+                    fontSize: 42,
+                    fontWeight: 600,
+                    lineHeight: 1.2,
                   }}
                 >
                   XZ Utils backdoor: Release tarballs of 5.6.0 and 5.6.1 contain compromised liblzma
@@ -297,10 +290,11 @@ export const Scene01Problem: React.FC = () => {
               {/* Document 3: Authentic Primary Source Crop from oss-security */}
               <div
                 style={{
-                  background: '#090d1a',
-                  border: '1px solid rgba(255, 255, 255, 0.16)',
-                  borderRadius: 2,
-                  padding: '16px 28px',
+                  background: colors.editorial.surface,
+                  border: `1px solid ${colors.editorial.borderMedium}`,
+                  borderRadius: 8,
+                  padding: '16px 32px',
+                  boxShadow: colors.editorial.shadow,
                 }}
               >
                 <div
@@ -308,28 +302,25 @@ export const Scene01Problem: React.FC = () => {
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'space-between',
-                    borderBottom: '1px solid rgba(255, 255, 255, 0.08)',
+                    borderBottom: `1px solid ${colors.editorial.border}`,
                     paddingBottom: 8,
                     marginBottom: 10,
                   }}
                 >
                   <span
                     style={{
-                      fontFamily: typography.fontFamily.mono,
-                      fontSize: 12,
-                      fontWeight: 700,
-                      letterSpacing: '0.12em',
-                      color: '#94a3b8',
-                      textTransform: 'uppercase',
+                      ...typography.styles.label,
+                      color: colors.editorial.textMuted,
+                      fontSize: 22, // Meets min 22px
                     }}
                   >
                     AUTHENTIC PRIMARY RECORD // OSS-SECURITY (ANDRES FREUND)
                   </span>
                   <span
                     style={{
-                      fontFamily: typography.fontFamily.mono,
-                      fontSize: 11,
-                      color: '#38bdf8',
+                      ...typography.styles.label,
+                      color: '#2563EB',
+                      fontSize: 22,
                     }}
                   >
                     openwall.com/lists/oss-security/2024/03/29/4
@@ -337,11 +328,11 @@ export const Scene01Problem: React.FC = () => {
                 </div>
                 <div
                   style={{
-                    borderRadius: 2,
+                    borderRadius: 4,
                     overflow: 'hidden',
-                    border: '1px solid rgba(255, 255, 255, 0.08)',
+                    border: `1px solid ${colors.editorial.border}`,
                     display: 'flex',
-                    backgroundColor: '#141720',
+                    backgroundColor: '#1E232F',
                   }}
                 >
                   <Img
@@ -349,7 +340,7 @@ export const Scene01Problem: React.FC = () => {
                     style={{
                       width: '100%',
                       height: 'auto',
-                      maxHeight: 125,
+                      maxHeight: 120,
                       objectFit: 'contain',
                       objectPosition: 'left center',
                     }}
@@ -361,7 +352,7 @@ export const Scene01Problem: React.FC = () => {
         )}
 
         {/* ======================================================== */}
-        {/* 3. 0:07.3–0:12: Visually isolate releases "5.6.0" & "5.6.1"*/}
+        {/* 3. 0:07.5–0:11.8: Visually isolate releases "5.6.0" & "5.6.1" */}
         {/* ======================================================== */}
         {releasesOpacity > 0 && (
           <div
@@ -372,19 +363,16 @@ export const Scene01Problem: React.FC = () => {
               flexDirection: 'column',
               justifyContent: 'center',
               alignItems: 'center',
+              padding: '0 96px',
               opacity: releasesOpacity,
-              transform: `scale(${releasesScale})`,
             }}
           >
             <div
               style={{
-                fontFamily: typography.fontFamily.mono,
-                fontSize: 13,
-                color: '#94a3b8',
-                letterSpacing: '0.2em',
+                ...typography.styles.labelLarge,
+                color: colors.editorial.textMuted,
+                fontSize: 24, // Meets min 22px
                 marginBottom: 28,
-                fontWeight: 600,
-                textTransform: 'uppercase',
               }}
             >
               UPSTREAM RELEASE ARTIFACTS
@@ -400,19 +388,20 @@ export const Scene01Problem: React.FC = () => {
             >
               <div
                 style={{
-                  background: '#090d1a',
-                  border: '1px solid rgba(255, 255, 255, 0.2)',
-                  borderRadius: 4,
-                  padding: '24px 44px',
+                  background: colors.editorial.surface,
+                  border: `1px solid ${colors.editorial.border}`,
+                  borderRadius: 12,
+                  padding: '28px 56px',
                   textAlign: 'center',
+                  boxShadow: colors.editorial.shadow,
                 }}
               >
                 <div
                   style={{
                     fontFamily: typography.fontFamily.mono,
-                    fontSize: 78,
+                    fontSize: 84, // Meets min 64px
                     fontWeight: 700,
-                    color: '#f8fafc',
+                    color: colors.editorial.textPrimary,
                     letterSpacing: '-0.02em',
                   }}
                 >
@@ -420,9 +409,9 @@ export const Scene01Problem: React.FC = () => {
                 </div>
                 <div
                   style={{
-                    fontFamily: typography.fontFamily.mono,
-                    fontSize: 13,
-                    color: '#94a3b8',
+                    ...typography.styles.label,
+                    color: colors.editorial.textMuted,
+                    fontSize: 22, // Meets min 22px
                     marginTop: 8,
                   }}
                 >
@@ -433,8 +422,8 @@ export const Scene01Problem: React.FC = () => {
               <span
                 style={{
                   fontFamily: typography.fontFamily.sans,
-                  fontSize: 40,
-                  color: '#64748b',
+                  fontSize: 48,
+                  color: colors.editorial.textMuted,
                   fontWeight: 300,
                 }}
               >
@@ -443,19 +432,20 @@ export const Scene01Problem: React.FC = () => {
 
               <div
                 style={{
-                  background: '#090d1a',
-                  border: '1px solid rgba(255, 255, 255, 0.2)',
-                  borderRadius: 4,
-                  padding: '24px 44px',
+                  background: colors.editorial.surface,
+                  border: `1px solid ${colors.editorial.border}`,
+                  borderRadius: 12,
+                  padding: '28px 56px',
                   textAlign: 'center',
+                  boxShadow: colors.editorial.shadow,
                 }}
               >
                 <div
                   style={{
                     fontFamily: typography.fontFamily.mono,
-                    fontSize: 78,
+                    fontSize: 84, // Meets min 64px
                     fontWeight: 700,
-                    color: '#f8fafc',
+                    color: colors.editorial.textPrimary,
                     letterSpacing: '-0.02em',
                   }}
                 >
@@ -463,9 +453,9 @@ export const Scene01Problem: React.FC = () => {
                 </div>
                 <div
                   style={{
-                    fontFamily: typography.fontFamily.mono,
-                    fontSize: 13,
-                    color: '#94a3b8',
+                    ...typography.styles.label,
+                    color: colors.editorial.textMuted,
+                    fontSize: 22, // Meets min 22px
                     marginTop: 8,
                   }}
                 >
@@ -476,21 +466,22 @@ export const Scene01Problem: React.FC = () => {
 
             <div
               style={{
-                fontFamily: typography.fontFamily.sans,
-                fontSize: 22,
-                color: '#cbd5e1',
+                ...typography.styles.bodyLarge,
+                fontSize: 32, // Meets min 30px
+                color: colors.editorial.textSecondary,
                 textAlign: 'center',
+                fontWeight: 500,
               }}
             >
               Both upstream releases contained hidden, multi-stage exploit code.
             </div>
             <div
               style={{
-                fontFamily: typography.fontFamily.mono,
-                fontSize: 14,
-                color: '#ef4444',
-                marginTop: 14,
-                letterSpacing: '0.08em',
+                ...typography.styles.label,
+                fontSize: 22, // Meets min 22px
+                color: colors.editorial.red,
+                marginTop: 16,
+                letterSpacing: '0.1em',
               }}
             >
               CRITICAL VULNERABILITY // CVE-2024-3094
@@ -499,7 +490,7 @@ export const Scene01Problem: React.FC = () => {
         )}
 
         {/* ======================================================== */}
-        {/* 4. 0:12–0:16.5: "Which organizations were exposed?"       */}
+        {/* 4. 0:11.8–0:16.2: "Which organizations were exposed?"     */}
         {/* ======================================================== */}
         {orgExposureOpacity > 0 && (
           <div
@@ -510,20 +501,17 @@ export const Scene01Problem: React.FC = () => {
               flexDirection: 'column',
               justifyContent: 'center',
               alignItems: 'center',
-              padding: '0 180px',
+              padding: '0 96px', // Title-safe margin
               textAlign: 'center',
               opacity: orgExposureOpacity,
             }}
           >
             <div
               style={{
-                fontFamily: typography.fontFamily.mono,
-                fontSize: 13,
-                color: '#94a3b8',
-                letterSpacing: '0.2em',
+                ...typography.styles.labelLarge,
+                fontSize: 24, // Meets min 22px
+                color: colors.editorial.textMuted,
                 marginBottom: 24,
-                fontWeight: 600,
-                textTransform: 'uppercase',
               }}
             >
               INCIDENT RESPONSE
@@ -531,13 +519,11 @@ export const Scene01Problem: React.FC = () => {
 
             <h1
               style={{
-                fontFamily: typography.fontFamily.sans,
-                fontSize: 64,
-                fontWeight: 700,
-                letterSpacing: '-0.025em',
-                color: '#f8fafc',
+                ...typography.styles.primaryHeadline,
+                fontSize: 68, // Meets min 64px
+                color: colors.editorial.textPrimary,
                 lineHeight: 1.2,
-                maxWidth: 1200,
+                maxWidth: 1300,
                 margin: 0,
               }}
             >
@@ -546,11 +532,11 @@ export const Scene01Problem: React.FC = () => {
 
             <p
               style={{
-                fontFamily: typography.fontFamily.sans,
-                fontSize: 24,
-                color: '#94a3b8',
+                ...typography.styles.bodyText,
+                fontSize: 30, // Meets min 30px
+                color: colors.editorial.textSecondary,
                 lineHeight: 1.5,
-                maxWidth: 960,
+                maxWidth: 1080,
                 marginTop: 28,
               }}
             >
@@ -561,7 +547,7 @@ export const Scene01Problem: React.FC = () => {
         )}
 
         {/* ======================================================== */}
-        {/* 5. 0:16.5–0:21.8: "Answering could reveal their internal.."*/}
+        {/* 5. 0:16.2–0:21.5: "Answering could reveal their internal.."*/}
         {/* ======================================================== */}
         {inventoryRiskOpacity > 0 && (
           <div
@@ -572,20 +558,17 @@ export const Scene01Problem: React.FC = () => {
               flexDirection: 'column',
               justifyContent: 'center',
               alignItems: 'center',
-              padding: '0 180px',
+              padding: '0 96px', // Title-safe margin
               textAlign: 'center',
               opacity: inventoryRiskOpacity,
             }}
           >
             <div
               style={{
-                fontFamily: typography.fontFamily.mono,
-                fontSize: 13,
-                color: '#ef4444',
-                letterSpacing: '0.2em',
+                ...typography.styles.labelLarge,
+                fontSize: 24, // Meets min 22px
+                color: colors.editorial.red,
                 marginBottom: 24,
-                fontWeight: 600,
-                textTransform: 'uppercase',
               }}
             >
               THE DISCLOSURE DILEMMA
@@ -593,13 +576,11 @@ export const Scene01Problem: React.FC = () => {
 
             <h1
               style={{
-                fontFamily: typography.fontFamily.sans,
-                fontSize: 58,
-                fontWeight: 700,
-                letterSpacing: '-0.025em',
-                color: '#f8fafc',
+                ...typography.styles.primaryHeadline,
+                fontSize: 64, // Meets min 64px
+                color: colors.editorial.textPrimary,
                 lineHeight: 1.2,
-                maxWidth: 1250,
+                maxWidth: 1300,
                 margin: 0,
               }}
             >
@@ -608,11 +589,11 @@ export const Scene01Problem: React.FC = () => {
 
             <p
               style={{
-                fontFamily: typography.fontFamily.sans,
-                fontSize: 23,
-                color: '#cbd5e1',
+                ...typography.styles.bodyText,
+                fontSize: 30, // Meets min 30px
+                color: colors.editorial.textSecondary,
                 lineHeight: 1.5,
-                maxWidth: 980,
+                maxWidth: 1080,
                 marginTop: 28,
               }}
             >
@@ -623,7 +604,8 @@ export const Scene01Problem: React.FC = () => {
         )}
 
         {/* ======================================================== */}
-        {/* 6. 0:21.8–0:28: "What if exposure could be proven..."     */}
+        {/* 6. 0:21.5–0:26.33: "What if exposure could be proven..."  */}
+        {/* Smooth transition into Midnight Indigo (#11152D)          */}
         {/* ======================================================== */}
         {zkPivotOpacity > 0 && (
           <div
@@ -634,20 +616,17 @@ export const Scene01Problem: React.FC = () => {
               flexDirection: 'column',
               justifyContent: 'center',
               alignItems: 'center',
-              padding: '0 160px',
+              padding: '0 96px', // Title-safe margin
               textAlign: 'center',
               opacity: zkPivotOpacity,
             }}
           >
             <div
               style={{
-                fontFamily: typography.fontFamily.mono,
-                fontSize: 13,
-                color: colors.midnightCyan.base,
-                letterSpacing: '0.22em',
+                ...typography.styles.labelLarge,
+                fontSize: 24, // Meets min 22px
+                color: colors.midnight.cyan,
                 marginBottom: 28,
-                fontWeight: 600,
-                textTransform: 'uppercase',
               }}
             >
               THE ZERO-KNOWLEDGE QUESTION
@@ -655,13 +634,11 @@ export const Scene01Problem: React.FC = () => {
 
             <h1
               style={{
-                fontFamily: typography.fontFamily.sans,
-                fontSize: 60,
-                fontWeight: 700,
-                letterSpacing: '-0.025em',
-                color: '#f8fafc',
+                ...typography.styles.primaryHeadline,
+                fontSize: 68, // Meets min 64px
+                color: colors.midnight.textPrimary,
                 lineHeight: 1.25,
-                maxWidth: 1300,
+                maxWidth: 1360,
                 margin: 0,
               }}
             >
@@ -669,7 +646,7 @@ export const Scene01Problem: React.FC = () => {
               <br />
               <span
                 style={{
-                  color: colors.midnightCyan.base,
+                  color: colors.midnight.cyan,
                 }}
               >
                 without revealing the inventory?
@@ -679,11 +656,9 @@ export const Scene01Problem: React.FC = () => {
         )}
       </div>
 
-      {/* Synchronized Documented Captions */}
-      <Caption segments={scene01Captions} bottom={64} />
-
-      {/* Overlay Subtle Documentary Film Grain */}
-      <FilmGrain opacity={0.02} />
+      {/* Global Synchronized Captions (42px, max 2 lines, max 60% width) */}
+      <Caption segments={scene01Captions} bottom={84} />
     </AbsoluteFill>
   );
 };
+

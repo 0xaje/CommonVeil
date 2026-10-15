@@ -8,6 +8,7 @@
     "render:draft": "remotion render CommonVeilBuildathonFilm out/commonveil-draft.mp4 --scale=0.5",
     "render:final": "remotion render CommonVeilBuildathonFilm out/commonveil-final.mp4",
     "render:scene01": "remotion render CommonVeilBuildathonFilm out/scene01.mp4 --frames=0-599",
+    "validate:captions": "npx tsx src/narration/validateCaptions.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

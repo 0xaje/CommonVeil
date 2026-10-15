@@ -41,9 +41,9 @@ export const TimelineGuide: React.FC<TimelineGuideProps> = ({
       <div style={{ textAlign: 'right' }}>
         <div
           style={{
-            ...typography.styles.sourceLabel,
-            fontSize: 10,
-            color: colors.text.dim,
+            ...typography.styles.label,
+            fontSize: 22,
+            color: colors.midnight.textMuted,
             letterSpacing: '0.12em',
           }}
         >
@@ -52,9 +52,9 @@ export const TimelineGuide: React.FC<TimelineGuideProps> = ({
         {showTimecode && (
           <div
             style={{
-              ...typography.styles.timestamp,
-              fontSize: 13,
-              color: colors.midnightCyan.base,
+              ...typography.styles.label,
+              fontSize: 22,
+              color: colors.midnight.cyan,
               marginTop: 2,
             }}
           >
@@ -81,11 +81,11 @@ export const TimelineGuide: React.FC<TimelineGuideProps> = ({
             left: 0,
             bottom: 0,
             width: `${progress * 100}%`,
-            backgroundColor: colors.midnightCyan.base,
-            boxShadow: `0 0 6px ${colors.midnightCyan.glow}`,
+            backgroundColor: colors.midnight.cyan,
           }}
         />
       </div>
     </div>
   );
 };
+
