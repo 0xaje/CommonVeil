@@ -8,9 +8,9 @@ This directory contains the isolated Remotion production workspace for the offic
 - **Resolution**: 1920 × 1080 (Full HD, 16:9)
 - **Frame Rate**: 30 fps
 - **Target Final Duration**: 180 seconds (5400 frames)
-- **Current Milestone**: Rebuilt Scene 01 — Documentary Problem Opening (600 frames / 20.0 seconds)
-- **Visual Aesthetic**: Mature investigative documentary, large editorial typography, real authoritative incident evidence before abstraction, restrained Midnight navy palette (`#040814`), with violet (`#7952f5`), cyan (`#00e5ff`), and danger accents (`#ef4444`).
-- **Audio Profile**: Contains mixed audio stream (spoken narration + low-frequency original documentary ambient drone).
+- **Current Milestone**: Scene 01 — Documentary Problem Opening (840 frames / 28.0 seconds)
+- **Visual Aesthetic**: Mature investigative documentary, authentic primary incident records, large editorial typography, monochrome architectural layout on dark background (`#05070d`), zero artificial glassmorphism, zero neon glows, zero AI-slop graphics.
+- **Audio Profile**: Dual-stream master mix with a warm, natural male documentary voiceover (spoken at 100% natural, un-sped human cadence) over an originally synthesized sub-bass tension drone.
 
 ---
 
@@ -30,50 +30,51 @@ All on-screen statements and headline treatments derive strictly from official, 
    - **Publication Date**: March 29, 2024 (Updated March 30, 2024)
    - **URL**: `https://tukaani.org/xz-backdoor/`
 
-3. **Red Hat Security Advisory**:
-   - **Title**: *Urgent security alert for Fedora 40 and Fedora Rawhide users regarding CVE-2024-3094*
-   - **Publisher**: Red Hat Product Security
-   - **Publication Date**: March 29, 2024
-   - **Severity**: CVSS 10.0 (Critical)
-   - **URL**: `https://www.redhat.com/en/blog/urgent-security-alert-fedora-40-and-fedora-rawhide-users`
-
-4. **oss-security Public Disclosure**:
+3. **oss-security Public Disclosure**:
    - **Title**: *backdoor in upstream xz/liblzma leading to ssh server compromise*
    - **Reporter**: Andres Freund
    - **Date**: Fri, 29 Mar 2024 16:51:30 CEST
    - **URL**: `https://www.openwall.com/lists/oss-security/2024/03/29/4`
 
+4. **Red Hat Security Advisory (CVE-2024-3094)**:
+   - **Title**: *Urgent security alert for Fedora 40 and Fedora Rawhide users regarding CVE-2024-3094*
+   - **Publisher**: Red Hat Product Security (CVSS 10.0 Critical)
+   - **Publication Date**: March 29, 2024
+   - **URL**: `https://www.redhat.com/en/blog/urgent-security-alert-fedora-40-and-fedora-rawhide-users`
+
 ---
 
 ## Audio Assets, Origins & Licensing
 
-The video output includes a dual-stream audio mix:
+The video output includes a dual-stream master audio mix:
 
 1. **Narration Audio (`public/audio/narration-scene01.mp3`)**:
-   - **Text**: *"On March 29, 2024, XZ Utils releases 5.6.0 and 5.6.1 were revealed to contain a backdoor. Response teams faced an urgent question: who was exposed? But answering publicly could reveal the exact software inside an organization. What if exposure could be proven without revealing the inventory?"*
-   - **Origin**: Synthesized using Google Text-to-Speech (`gTTS` 2.5.4, English UK dialect) and time-aligned with `ffmpeg` `atempo` processing to synchronize with each editorial phase.
-   - **Licence**: Open source tool / original synthetic voice generation for demonstration and review.
+   - **Voice**: Natural male documentary voice (`en-US-AndrewNeural`), warm, authoritative, and conversational.
+   - **Pacing**: Spoken at **100% natural, unhurried cadence with zero artificial speedup** across all four sentences.
+   - **Exact Spoken Script**:
+     *"On March 29, 2024, XZ Utils releases 5.6.0 and 5.6.1 were revealed to contain a backdoor. Response teams faced an urgent question: who was exposed? But answering publicly could reveal the exact software inside an organization. What if exposure could be proven without revealing the inventory?"*
+   - **Licence**: Generated for demonstration and review via Microsoft Neural Voice services.
 
-2. **Ambient Tension Drone (`public/audio/ambient-tension.mp3`)**:
-   - **Origin**: 100% originally synthesized mathematical drone created via FFmpeg multi-sine wave generation (55 Hz fundamental + 110 Hz overtone, low-pass filtered at 280 Hz to prevent voice clash, with subtle amplitude modulation).
-   - **Licence**: Dedicated to the Public Domain (CC0 / MIT). Completely free of external copyright or commercial sample restrictions.
+2. **Ambient Tension Music (`public/audio/ambient-tension.mp3`)**:
+   - **Origin**: 100% originally synthesized 55 Hz fundamental / 110 Hz overtone sub-bass drone bed (low-pass filtered at 280 Hz to ensure narration remains prominently audible).
+   - **Licence**: Dedicated to the Public Domain (CC0 / MIT). Completely free of third-party copyright restrictions.
 
 ---
 
-## Scene 01 Sequence Breakdown (0:00–0:20)
+## Scene 01 Sequence Breakdown (0:00–0:28 / 840 frames)
 
-1. **0:00–0:02 (Frames 0–60) — Date Opening**:
-   - Black screen fading in with stark, spaced editorial typography: `29 MARCH 2024`.
-2. **0:02–0:07 (Frames 60–210) — Authentic Advisory Headline Montage**:
-   - Real, attributed incident cards: CISA Alert `CVE-2024-3094`, Tukaani Project upstream disclosure by Lasse Collin, and Red Hat Product Security critical advisory.
-3. **0:07–0:11 (Frames 210–330) — Visually Isolate Affected Releases**:
-   - Massive editorial isolation of releases `5.6.0` & `5.6.1` with upstream release attribution.
-4. **0:11–0:15 (Frames 330–450) — The Coordination Problem**:
-   - Large editorial headline: `Which organizations were exposed?` with context on global Linux server compromise.
-5. **0:15–0:18 (Frames 450–540) — The Inventory Disclosure Risk**:
-   - Large editorial headline: `Answering could reveal their internal software inventory.`
-6. **0:18–0:20 (Frames 540–600) — The Zero-Knowledge Pivot**:
-   - Core thesis statement: `What if exposure could be proven without revealing the inventory?` (holds through frame 600 into Scene 02).
+1. **0:00–0:02 (Frames 0–60) — Date Title Card**:
+   - Stark black screen fading into clean, tracked editorial typography: `29 MARCH 2024` with quiet documentary tension.
+2. **0:02–0:07.3 (Frames 60–220) — Primary Source Incident Records**:
+   - Verbatim primary source headline cards: CISA Alert `CVE-2024-3094`, Tukaani Project upstream maintainer advisory (Lasse Collin), and oss-security mailing list disclosure by Andres Freund.
+3. **0:07.3–0:12.0 (Frames 220–360) — Visually Isolate Affected Releases**:
+   - Clean, architectural isolation of upstream release packages `xz-5.6.0.tar.gz` and `xz-5.6.1.tar.gz` with verified cryptographic metadata.
+4. **0:12.0–0:16.5 (Frames 360–495) — The Coordination Problem**:
+   - Editorial headline: `Which organizations were exposed?` with global Linux server context.
+5. **0:16.5–0:21.8 (Frames 495–654) — The Inventory Disclosure Risk**:
+   - Editorial headline: `Answering could reveal their internal software inventory.`
+6. **0:21.8–0:28.0 (Frames 654–840) — The Zero-Knowledge Pivot**:
+   - The thesis statement: `What if exposure could be proven without revealing the inventory?` (holds cleanly before cut to Scene 02).
 
 ---
 

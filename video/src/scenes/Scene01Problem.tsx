@@ -14,8 +14,8 @@ import { scene01Captions } from '../narration/script';
 export const Scene01Problem: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // Slow, cinematic documentary camera drift (1.000 -> 1.025)
-  const cameraZoom = interpolate(frame, [0, 600], [1.0, 1.025], {
+  // Slow, deliberate documentary camera drift (1.000 -> 1.018 across 840 frames)
+  const cameraZoom = interpolate(frame, [0, 840], [1.0, 1.018], {
     extrapolateLeft: 'clamp',
     extrapolateRight: 'clamp',
   });
@@ -25,75 +25,75 @@ export const Scene01Problem: React.FC = () => {
   // -------------------------------------------------------------
   const dateOpacity = interpolate(
     frame,
-    [0, 10, 48, 60],
+    [0, 12, 48, 60],
     [0, 1, 1, 0],
     { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
   );
   const dateTracking = interpolate(
     frame,
     [0, 60],
-    [0.18, 0.24],
+    [0.18, 0.22],
     { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
   );
 
   // -------------------------------------------------------------
-  // 2. 0:02–0:07 (Frames 60–210): Authentic advisory headline montage
+  // 2. 0:02–0:07.3 (Frames 60–220): Authentic primary source advisories
   // -------------------------------------------------------------
   const advisoriesOpacity = interpolate(
     frame,
-    [60, 72, 198, 210],
+    [60, 75, 205, 220],
     [0, 1, 1, 0],
     { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
   );
   const advisoriesDriftY = interpolate(
     frame,
-    [60, 210],
-    [10, -10],
+    [60, 220],
+    [8, -8],
     { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
   );
 
   // -------------------------------------------------------------
-  // 3. 0:07–0:11 (Frames 210–330): Visually isolate releases "5.6.0" and "5.6.1"
+  // 3. 0:07.3–0:12 (Frames 220–360): Visually isolate releases "5.6.0" & "5.6.1"
   // -------------------------------------------------------------
   const releasesOpacity = interpolate(
     frame,
-    [210, 222, 318, 330],
+    [220, 235, 345, 360],
     [0, 1, 1, 0],
     { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
   );
   const releasesScale = interpolate(
     frame,
-    [210, 330],
-    [0.98, 1.02],
+    [220, 360],
+    [0.985, 1.015],
     { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
   );
 
   // -------------------------------------------------------------
-  // 4. 0:11–0:15 (Frames 330–450): "Which organizations were exposed?"
+  // 4. 0:12–0:16.5 (Frames 360–495): "Which organizations were exposed?"
   // -------------------------------------------------------------
   const orgExposureOpacity = interpolate(
     frame,
-    [330, 342, 438, 450],
+    [360, 375, 480, 495],
     [0, 1, 1, 0],
     { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
   );
 
   // -------------------------------------------------------------
-  // 5. 0:15–0:18 (Frames 450–540): "Answering could reveal their internal software inventory."
+  // 5. 0:16.5–0:21.8 (Frames 495–654): "Answering could reveal their internal..."
   // -------------------------------------------------------------
   const inventoryRiskOpacity = interpolate(
     frame,
-    [450, 462, 528, 540],
+    [495, 510, 638, 654],
     [0, 1, 1, 0],
     { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
   );
 
   // -------------------------------------------------------------
-  // 6. 0:18–0:20 (Frames 540–600): "What if exposure could be proven without revealing the inventory?"
+  // 6. 0:21.8–0:28 (Frames 654–840): "What if exposure could be proven..."
   // -------------------------------------------------------------
   const zkPivotOpacity = interpolate(
     frame,
-    [540, 552, 600],
+    [654, 670, 840],
     [0, 1, 1],
     { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
   );
@@ -101,23 +101,23 @@ export const Scene01Problem: React.FC = () => {
   return (
     <AbsoluteFill
       style={{
-        backgroundColor: '#040814',
-        color: colors.text.primary,
+        backgroundColor: '#05070d',
+        color: '#f8fafc',
         overflow: 'hidden',
       }}
     >
-      {/* Subtle background documentary vignetting */}
+      {/* Subtle authentic documentary vignette */}
       <div
         style={{
           position: 'absolute',
           inset: 0,
           background:
-            'radial-gradient(circle at 50% 50%, rgba(10, 18, 42, 0.45) 0%, rgba(4, 8, 20, 0.95) 100%)',
+            'radial-gradient(ellipse at 50% 50%, rgba(14, 20, 38, 0.4) 0%, rgba(4, 6, 14, 0.95) 100%)',
           pointerEvents: 'none',
         }}
       />
 
-      {/* Main Content Container with Slow Cinematic Zoom */}
+      {/* Main Content Area with Slow Cinematic Camera Movement */}
       <div
         style={{
           position: 'absolute',
@@ -143,10 +143,10 @@ export const Scene01Problem: React.FC = () => {
             <div
               style={{
                 fontFamily: typography.fontFamily.sans,
-                fontSize: 60,
+                fontSize: 54,
                 fontWeight: 600,
                 letterSpacing: `${dateTracking}em`,
-                color: colors.text.primary,
+                color: '#f8fafc',
                 textTransform: 'uppercase',
               }}
             >
@@ -156,7 +156,7 @@ export const Scene01Problem: React.FC = () => {
         )}
 
         {/* ======================================================== */}
-        {/* 2. 0:02–0:07: Authentic advisory headline montage        */}
+        {/* 2. 0:02–0:07.3: Authentic primary source advisory montage*/}
         {/* ======================================================== */}
         {advisoriesOpacity > 0 && (
           <div
@@ -175,21 +175,19 @@ export const Scene01Problem: React.FC = () => {
             <div
               style={{
                 width: '100%',
-                maxWidth: 1300,
+                maxWidth: 1260,
                 display: 'flex',
                 flexDirection: 'column',
-                gap: 24,
+                gap: 22,
               }}
             >
-              {/* CISA Alert Card */}
+              {/* Document 1: CISA Alert Official Header */}
               <div
                 style={{
-                  background: 'rgba(9, 14, 30, 0.92)',
-                  border: '1px solid rgba(148, 163, 184, 0.2)',
-                  borderLeft: `4px solid ${colors.danger.alert}`,
+                  background: '#090d1a',
+                  border: '1px solid rgba(255, 255, 255, 0.12)',
+                  borderRadius: 2,
                   padding: '24px 32px',
-                  borderRadius: 4,
-                  boxShadow: '0 12px 32px rgba(0, 0, 0, 0.6)',
                 }}
               >
                 <div
@@ -197,52 +195,53 @@ export const Scene01Problem: React.FC = () => {
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'space-between',
-                    marginBottom: 10,
+                    borderBottom: '1px solid rgba(255, 255, 255, 0.08)',
+                    paddingBottom: 10,
+                    marginBottom: 12,
                   }}
                 >
                   <span
                     style={{
-                      ...typography.styles.sourceLabel,
+                      fontFamily: typography.fontFamily.mono,
                       fontSize: 12,
-                      color: colors.danger.base,
-                      letterSpacing: '0.12em',
                       fontWeight: 700,
+                      letterSpacing: '0.14em',
+                      color: '#94a3b8',
+                      textTransform: 'uppercase',
                     }}
                   >
-                    CYBERSECURITY & INFRASTRUCTURE SECURITY AGENCY // CISA
+                    CYBERSECURITY AND INFRASTRUCTURE SECURITY AGENCY // CISA
                   </span>
                   <span
                     style={{
-                      ...typography.styles.sourceLabel,
+                      fontFamily: typography.fontFamily.mono,
                       fontSize: 11,
-                      color: colors.text.dim,
+                      color: '#64748b',
                     }}
                   >
-                    RELEASED: MARCH 29, 2024
+                    ALERT AA24-089A | CVE-2024-3094
                   </span>
                 </div>
                 <div
                   style={{
                     fontFamily: typography.fontFamily.sans,
-                    fontSize: 28,
+                    fontSize: 27,
                     fontWeight: 600,
-                    color: colors.text.primary,
+                    color: '#f8fafc',
                     lineHeight: 1.3,
                   }}
                 >
-                  Alert: Reported Supply Chain Compromise Affecting XZ Utils (CVE-2024-3094)
+                  Reported Supply Chain Compromise Affecting XZ Utils
                 </div>
               </div>
 
-              {/* Upstream Maintainer Disclosure Card (tukaani.org) */}
+              {/* Document 2: Upstream Maintainer Notice (tukaani.org) */}
               <div
                 style={{
-                  background: 'rgba(9, 14, 30, 0.92)',
-                  border: '1px solid rgba(148, 163, 184, 0.2)',
-                  borderLeft: `4px solid ${colors.midnightViolet.bright}`,
+                  background: '#090d1a',
+                  border: '1px solid rgba(255, 255, 255, 0.12)',
+                  borderRadius: 2,
                   padding: '22px 32px',
-                  borderRadius: 4,
-                  boxShadow: '0 12px 32px rgba(0, 0, 0, 0.6)',
                 }}
               >
                 <div
@@ -250,25 +249,28 @@ export const Scene01Problem: React.FC = () => {
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'space-between',
-                    marginBottom: 8,
+                    borderBottom: '1px solid rgba(255, 255, 255, 0.08)',
+                    paddingBottom: 8,
+                    marginBottom: 10,
                   }}
                 >
                   <span
                     style={{
-                      ...typography.styles.sourceLabel,
+                      fontFamily: typography.fontFamily.mono,
                       fontSize: 12,
-                      color: colors.midnightViolet.bright,
-                      letterSpacing: '0.12em',
                       fontWeight: 700,
+                      letterSpacing: '0.12em',
+                      color: '#94a3b8',
+                      textTransform: 'uppercase',
                     }}
                   >
-                    UPSTREAM MAINTAINER ADVISORY // TUKAANI.ORG (LASSE COLLIN)
+                    UPSTREAM ADVISORY // TUKAANI.ORG (LASSE COLLIN)
                   </span>
                   <span
                     style={{
-                      ...typography.styles.sourceLabel,
+                      fontFamily: typography.fontFamily.mono,
                       fontSize: 11,
-                      color: colors.text.dim,
+                      color: '#64748b',
                     }}
                   >
                     PRIMARY DISCLOSURE
@@ -277,9 +279,9 @@ export const Scene01Problem: React.FC = () => {
                 <div
                   style={{
                     fontFamily: typography.fontFamily.sans,
-                    fontSize: 26,
+                    fontSize: 25,
                     fontWeight: 500,
-                    color: colors.text.primary,
+                    color: '#f8fafc',
                     lineHeight: 1.3,
                   }}
                 >
@@ -287,15 +289,13 @@ export const Scene01Problem: React.FC = () => {
                 </div>
               </div>
 
-              {/* Red Hat Product Security Card */}
+              {/* Document 3: oss-security Public Disclosure */}
               <div
                 style={{
-                  background: 'rgba(9, 14, 30, 0.92)',
-                  border: '1px solid rgba(148, 163, 184, 0.2)',
-                  borderLeft: `4px solid ${colors.midnightCyan.base}`,
+                  background: '#090d1a',
+                  border: '1px solid rgba(255, 255, 255, 0.12)',
+                  borderRadius: 2,
                   padding: '20px 32px',
-                  borderRadius: 4,
-                  boxShadow: '0 12px 32px rgba(0, 0, 0, 0.6)',
                 }}
               >
                 <div
@@ -303,40 +303,43 @@ export const Scene01Problem: React.FC = () => {
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'space-between',
-                    marginBottom: 8,
+                    borderBottom: '1px solid rgba(255, 255, 255, 0.08)',
+                    paddingBottom: 8,
+                    marginBottom: 10,
                   }}
                 >
                   <span
                     style={{
-                      ...typography.styles.sourceLabel,
+                      fontFamily: typography.fontFamily.mono,
                       fontSize: 12,
-                      color: colors.midnightCyan.base,
-                      letterSpacing: '0.12em',
                       fontWeight: 700,
+                      letterSpacing: '0.12em',
+                      color: '#94a3b8',
+                      textTransform: 'uppercase',
                     }}
                   >
-                    RED HAT PRODUCT SECURITY
+                    OSS-SECURITY // OPENWALL MAILING LIST
                   </span>
                   <span
                     style={{
-                      ...typography.styles.sourceLabel,
+                      fontFamily: typography.fontFamily.mono,
                       fontSize: 11,
-                      color: colors.text.dim,
+                      color: '#64748b',
                     }}
                   >
-                    CVSS 10.0 // CRITICAL
+                    ANDRES FREUND // 29 MAR 2024
                   </span>
                 </div>
                 <div
                   style={{
                     fontFamily: typography.fontFamily.sans,
-                    fontSize: 24,
+                    fontSize: 23,
                     fontWeight: 500,
-                    color: colors.text.primary,
+                    color: '#f8fafc',
                     lineHeight: 1.3,
                   }}
                 >
-                  Urgent security alert: Malicious code injection in upstream XZ Utils builds
+                  backdoor in upstream xz/liblzma leading to ssh server compromise
                 </div>
               </div>
             </div>
@@ -344,7 +347,7 @@ export const Scene01Problem: React.FC = () => {
         )}
 
         {/* ======================================================== */}
-        {/* 3. 0:07–0:11: Visually isolate releases "5.6.0" & "5.6.1"*/}
+        {/* 3. 0:07.3–0:12: Visually isolate releases "5.6.0" & "5.6.1"*/}
         {/* ======================================================== */}
         {releasesOpacity > 0 && (
           <div
@@ -361,47 +364,63 @@ export const Scene01Problem: React.FC = () => {
           >
             <div
               style={{
-                ...typography.styles.sourceLabel,
-                fontSize: 14,
-                color: colors.danger.base,
+                fontFamily: typography.fontFamily.mono,
+                fontSize: 13,
+                color: '#94a3b8',
                 letterSpacing: '0.2em',
-                marginBottom: 24,
-                fontWeight: 700,
+                marginBottom: 28,
+                fontWeight: 600,
+                textTransform: 'uppercase',
               }}
             >
-              COMPROMISED UPSTREAM RELEASES
+              UPSTREAM RELEASE ARTIFACTS
             </div>
 
             <div
               style={{
                 display: 'flex',
                 alignItems: 'center',
-                gap: 60,
-                marginBottom: 32,
+                gap: 48,
+                marginBottom: 36,
               }}
             >
               <div
                 style={{
-                  fontFamily: typography.fontFamily.mono,
-                  fontSize: 104,
-                  fontWeight: 700,
-                  color: colors.text.primary,
-                  letterSpacing: '-0.02em',
-                  padding: '12px 36px',
-                  background: 'rgba(239, 68, 68, 0.08)',
-                  border: `1.5px solid ${colors.danger.alert}`,
-                  borderRadius: 6,
-                  boxShadow: '0 0 40px rgba(239, 68, 68, 0.2)',
+                  background: '#090d1a',
+                  border: '1px solid rgba(255, 255, 255, 0.2)',
+                  borderRadius: 4,
+                  padding: '24px 44px',
+                  textAlign: 'center',
                 }}
               >
-                5.6.0
+                <div
+                  style={{
+                    fontFamily: typography.fontFamily.mono,
+                    fontSize: 78,
+                    fontWeight: 700,
+                    color: '#f8fafc',
+                    letterSpacing: '-0.02em',
+                  }}
+                >
+                  5.6.0
+                </div>
+                <div
+                  style={{
+                    fontFamily: typography.fontFamily.mono,
+                    fontSize: 13,
+                    color: '#94a3b8',
+                    marginTop: 8,
+                  }}
+                >
+                  xz-5.6.0.tar.gz
+                </div>
               </div>
 
               <span
                 style={{
                   fontFamily: typography.fontFamily.sans,
-                  fontSize: 48,
-                  color: colors.text.dim,
+                  fontSize: 40,
+                  color: '#64748b',
                   fontWeight: 300,
                 }}
               >
@@ -410,19 +429,34 @@ export const Scene01Problem: React.FC = () => {
 
               <div
                 style={{
-                  fontFamily: typography.fontFamily.mono,
-                  fontSize: 104,
-                  fontWeight: 700,
-                  color: colors.text.primary,
-                  letterSpacing: '-0.02em',
-                  padding: '12px 36px',
-                  background: 'rgba(239, 68, 68, 0.08)',
-                  border: `1.5px solid ${colors.danger.alert}`,
-                  borderRadius: 6,
-                  boxShadow: '0 0 40px rgba(239, 68, 68, 0.2)',
+                  background: '#090d1a',
+                  border: '1px solid rgba(255, 255, 255, 0.2)',
+                  borderRadius: 4,
+                  padding: '24px 44px',
+                  textAlign: 'center',
                 }}
               >
-                5.6.1
+                <div
+                  style={{
+                    fontFamily: typography.fontFamily.mono,
+                    fontSize: 78,
+                    fontWeight: 700,
+                    color: '#f8fafc',
+                    letterSpacing: '-0.02em',
+                  }}
+                >
+                  5.6.1
+                </div>
+                <div
+                  style={{
+                    fontFamily: typography.fontFamily.mono,
+                    fontSize: 13,
+                    color: '#94a3b8',
+                    marginTop: 8,
+                  }}
+                >
+                  xz-5.6.1.tar.gz
+                </div>
               </div>
             </div>
 
@@ -430,28 +464,28 @@ export const Scene01Problem: React.FC = () => {
               style={{
                 fontFamily: typography.fontFamily.sans,
                 fontSize: 22,
-                color: colors.text.muted,
-                letterSpacing: '0.04em',
+                color: '#cbd5e1',
                 textAlign: 'center',
               }}
             >
-              XZ Utils upstream source tarballs modified with hidden backdoor
+              Both upstream releases contained hidden, multi-stage exploit code.
             </div>
             <div
               style={{
-                ...typography.styles.codeBadge,
-                fontSize: 16,
-                color: colors.danger.base,
-                marginTop: 12,
+                fontFamily: typography.fontFamily.mono,
+                fontSize: 14,
+                color: '#ef4444',
+                marginTop: 14,
+                letterSpacing: '0.08em',
               }}
             >
-              CVE-2024-3094
+              CRITICAL VULNERABILITY // CVE-2024-3094
             </div>
           </div>
         )}
 
         {/* ======================================================== */}
-        {/* 4. 0:11–0:15: "Which organizations were exposed?"         */}
+        {/* 4. 0:12–0:16.5: "Which organizations were exposed?"       */}
         {/* ======================================================== */}
         {orgExposureOpacity > 0 && (
           <div
@@ -469,12 +503,13 @@ export const Scene01Problem: React.FC = () => {
           >
             <div
               style={{
-                ...typography.styles.sourceLabel,
-                fontSize: 14,
-                color: colors.midnightCyan.base,
+                fontFamily: typography.fontFamily.mono,
+                fontSize: 13,
+                color: '#94a3b8',
                 letterSpacing: '0.2em',
                 marginBottom: 24,
-                fontWeight: 700,
+                fontWeight: 600,
+                textTransform: 'uppercase',
               }}
             >
               INCIDENT RESPONSE
@@ -486,7 +521,7 @@ export const Scene01Problem: React.FC = () => {
                 fontSize: 64,
                 fontWeight: 700,
                 letterSpacing: '-0.025em',
-                color: colors.text.primary,
+                color: '#f8fafc',
                 lineHeight: 1.2,
                 maxWidth: 1200,
                 margin: 0,
@@ -499,8 +534,8 @@ export const Scene01Problem: React.FC = () => {
               style={{
                 fontFamily: typography.fontFamily.sans,
                 fontSize: 24,
-                color: colors.text.muted,
-                lineHeight: 1.45,
+                color: '#94a3b8',
+                lineHeight: 1.5,
                 maxWidth: 960,
                 marginTop: 28,
               }}
@@ -512,7 +547,7 @@ export const Scene01Problem: React.FC = () => {
         )}
 
         {/* ======================================================== */}
-        {/* 5. 0:15–0:18: "Answering could reveal their internal..."  */}
+        {/* 5. 0:16.5–0:21.8: "Answering could reveal their internal.."*/}
         {/* ======================================================== */}
         {inventoryRiskOpacity > 0 && (
           <div
@@ -530,15 +565,16 @@ export const Scene01Problem: React.FC = () => {
           >
             <div
               style={{
-                ...typography.styles.sourceLabel,
-                fontSize: 14,
-                color: colors.danger.base,
+                fontFamily: typography.fontFamily.mono,
+                fontSize: 13,
+                color: '#ef4444',
                 letterSpacing: '0.2em',
                 marginBottom: 24,
-                fontWeight: 700,
+                fontWeight: 600,
+                textTransform: 'uppercase',
               }}
             >
-              THE DISCLOSURE RISK
+              THE DISCLOSURE DILEMMA
             </div>
 
             <h1
@@ -547,7 +583,7 @@ export const Scene01Problem: React.FC = () => {
                 fontSize: 58,
                 fontWeight: 700,
                 letterSpacing: '-0.025em',
-                color: colors.text.primary,
+                color: '#f8fafc',
                 lineHeight: 1.2,
                 maxWidth: 1250,
                 margin: 0,
@@ -559,22 +595,21 @@ export const Scene01Problem: React.FC = () => {
             <p
               style={{
                 fontFamily: typography.fontFamily.sans,
-                fontSize: 24,
-                color: colors.danger.base,
-                lineHeight: 1.45,
+                fontSize: 23,
+                color: '#cbd5e1',
+                lineHeight: 1.5,
                 maxWidth: 980,
                 marginTop: 28,
-                fontWeight: 500,
               }}
             >
-              Publicly disclosing package manifests hands adversaries an exact roadmap
-              of vulnerable servers and endpoints.
+              Publicly disclosing dependency manifests hands adversaries an exact map
+              of vulnerable endpoints.
             </p>
           </div>
         )}
 
         {/* ======================================================== */}
-        {/* 6. 0:18–0:20: "What if exposure could be proven..."      */}
+        {/* 6. 0:21.8–0:28: "What if exposure could be proven..."     */}
         {/* ======================================================== */}
         {zkPivotOpacity > 0 && (
           <div
@@ -592,12 +627,13 @@ export const Scene01Problem: React.FC = () => {
           >
             <div
               style={{
-                ...typography.styles.sourceLabel,
-                fontSize: 14,
+                fontFamily: typography.fontFamily.mono,
+                fontSize: 13,
                 color: colors.midnightCyan.base,
                 letterSpacing: '0.22em',
                 marginBottom: 28,
-                fontWeight: 700,
+                fontWeight: 600,
+                textTransform: 'uppercase',
               }}
             >
               THE ZERO-KNOWLEDGE QUESTION
@@ -609,8 +645,8 @@ export const Scene01Problem: React.FC = () => {
                 fontSize: 60,
                 fontWeight: 700,
                 letterSpacing: '-0.025em',
-                color: colors.text.primary,
-                lineHeight: 1.2,
+                color: '#f8fafc',
+                lineHeight: 1.25,
                 maxWidth: 1300,
                 margin: 0,
               }}
@@ -620,7 +656,6 @@ export const Scene01Problem: React.FC = () => {
               <span
                 style={{
                   color: colors.midnightCyan.base,
-                  textShadow: '0 0 35px rgba(0, 229, 255, 0.4)',
                 }}
               >
                 without revealing the inventory?
@@ -634,7 +669,7 @@ export const Scene01Problem: React.FC = () => {
       <Caption segments={scene01Captions} bottom={64} />
 
       {/* Overlay Subtle Documentary Film Grain */}
-      <FilmGrain opacity={0.025} />
+      <FilmGrain opacity={0.02} />
     </AbsoluteFill>
   );
 };
