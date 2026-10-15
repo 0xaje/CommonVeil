@@ -1,7 +1,9 @@
 import React from 'react';
 import {
   AbsoluteFill,
+  Img,
   interpolate,
+  staticFile,
   useCurrentFrame,
 } from 'remotion';
 import { Caption } from '../components/Caption';
@@ -14,8 +16,8 @@ import { scene01Captions } from '../narration/script';
 export const Scene01Problem: React.FC = () => {
   const frame = useCurrentFrame();
 
-  // Slow, deliberate documentary camera drift (1.000 -> 1.018 across 840 frames)
-  const cameraZoom = interpolate(frame, [0, 840], [1.0, 1.018], {
+  // Slow, deliberate documentary camera drift (1.000 -> 1.018 across 790 frames)
+  const cameraZoom = interpolate(frame, [0, 790], [1.0, 1.018], {
     extrapolateLeft: 'clamp',
     extrapolateRight: 'clamp',
   });
@@ -37,66 +39,69 @@ export const Scene01Problem: React.FC = () => {
   );
 
   // -------------------------------------------------------------
-  // 2. 0:02–0:07.3 (Frames 60–220): Authentic primary source advisories
+  // 2. 0:02–0:07.5 (Frames 60–225): Authentic primary source advisories
   // -------------------------------------------------------------
   const advisoriesOpacity = interpolate(
     frame,
-    [60, 75, 205, 220],
+    [60, 72, 219, 225],
     [0, 1, 1, 0],
     { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
   );
   const advisoriesDriftY = interpolate(
     frame,
-    [60, 220],
+    [60, 225],
     [8, -8],
     { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
   );
 
   // -------------------------------------------------------------
-  // 3. 0:07.3–0:12 (Frames 220–360): Visually isolate releases "5.6.0" & "5.6.1"
+  // 3. 0:07.5–0:11.8 (Frames 225–354): Visually isolate releases "5.6.0" & "5.6.1"
   // -------------------------------------------------------------
   const releasesOpacity = interpolate(
     frame,
-    [220, 235, 345, 360],
+    [225, 231, 348, 354],
     [0, 1, 1, 0],
     { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
   );
   const releasesScale = interpolate(
     frame,
-    [220, 360],
+    [225, 354],
     [0.985, 1.015],
     { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
   );
 
   // -------------------------------------------------------------
-  // 4. 0:12–0:16.5 (Frames 360–495): "Which organizations were exposed?"
+  // 4. 0:11.8–0:16.2 (Frames 354–488): "Which organizations were exposed?"
+  // Clean 6-frame transition immediately following releases (no double exposure, no blank gap)
   // -------------------------------------------------------------
   const orgExposureOpacity = interpolate(
     frame,
-    [360, 375, 480, 495],
+    [354, 360, 482, 488],
     [0, 1, 1, 0],
     { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
   );
 
   // -------------------------------------------------------------
-  // 5. 0:16.5–0:21.8 (Frames 495–654): "Answering could reveal their internal..."
+  // 5. 0:16.2–0:21.5 (Frames 488–645): "Answering could reveal their internal..."
   // -------------------------------------------------------------
   const inventoryRiskOpacity = interpolate(
     frame,
-    [495, 510, 638, 654],
+    [488, 494, 639, 645],
     [0, 1, 1, 0],
     { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
   );
 
   // -------------------------------------------------------------
-  // 6. 0:21.8–0:28 (Frames 654–840): "What if exposure could be proven..."
+  // 6. 0:21.5–0:26.33 (Frames 645–790): "What if exposure could be proven..."
+  // Holds cleanly for ~1.06s after speech ends before transition into Scene 02
   // -------------------------------------------------------------
   const zkPivotOpacity = interpolate(
     frame,
-    [654, 670, 840],
+    [645, 651, 790],
     [0, 1, 1],
     { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
   );
+
 
   return (
     <AbsoluteFill
@@ -289,13 +294,13 @@ export const Scene01Problem: React.FC = () => {
                 </div>
               </div>
 
-              {/* Document 3: oss-security Public Disclosure */}
+              {/* Document 3: Authentic Primary Source Crop from oss-security */}
               <div
                 style={{
                   background: '#090d1a',
-                  border: '1px solid rgba(255, 255, 255, 0.12)',
+                  border: '1px solid rgba(255, 255, 255, 0.16)',
                   borderRadius: 2,
-                  padding: '20px 32px',
+                  padding: '16px 28px',
                 }}
               >
                 <div
@@ -318,28 +323,37 @@ export const Scene01Problem: React.FC = () => {
                       textTransform: 'uppercase',
                     }}
                   >
-                    OSS-SECURITY // OPENWALL MAILING LIST
+                    AUTHENTIC PRIMARY RECORD // OSS-SECURITY (ANDRES FREUND)
                   </span>
                   <span
                     style={{
                       fontFamily: typography.fontFamily.mono,
                       fontSize: 11,
-                      color: '#64748b',
+                      color: '#38bdf8',
                     }}
                   >
-                    ANDRES FREUND // 29 MAR 2024
+                    openwall.com/lists/oss-security/2024/03/29/4
                   </span>
                 </div>
                 <div
                   style={{
-                    fontFamily: typography.fontFamily.sans,
-                    fontSize: 23,
-                    fontWeight: 500,
-                    color: '#f8fafc',
-                    lineHeight: 1.3,
+                    borderRadius: 2,
+                    overflow: 'hidden',
+                    border: '1px solid rgba(255, 255, 255, 0.08)',
+                    display: 'flex',
+                    backgroundColor: '#141720',
                   }}
                 >
-                  backdoor in upstream xz/liblzma leading to ssh server compromise
+                  <Img
+                    src={staticFile('evidence/oss-security-disclosure-crop.png')}
+                    style={{
+                      width: '100%',
+                      height: 'auto',
+                      maxHeight: 125,
+                      objectFit: 'contain',
+                      objectPosition: 'left center',
+                    }}
+                  />
                 </div>
               </div>
             </div>

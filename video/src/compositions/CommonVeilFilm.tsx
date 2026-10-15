@@ -12,25 +12,14 @@ export const CommonVeilFilm: React.FC<CommonVeilFilmProps> = ({
 }) => {
   return (
     <AbsoluteFill style={{ backgroundColor: '#040814' }}>
-      {/* Audio Layer: Documentary Narration & Ambient Tension Bed */}
+      {/* Audio Layer: Mastered Stereo Documentary Mix (-16 LUFS, -1.5 dBTP) */}
       {enableAudio && (
-        <>
-          {/* Synchronized 20s Narration Track */}
-          <Sequence from={0} durationInFrames={timing.scene01DurationFrames}>
-            <Audio
-              src={staticFile('audio/narration-scene01.mp3')}
-              volume={1.0}
-            />
-          </Sequence>
-
-          {/* Restrained Sub-Bass Ambient Tension Bed */}
-          <Sequence from={0} durationInFrames={timing.scene01DurationFrames}>
-            <Audio
-              src={staticFile('audio/ambient-tension.mp3')}
-              volume={0.25}
-            />
-          </Sequence>
-        </>
+        <Sequence from={0} durationInFrames={timing.scene01DurationFrames}>
+          <Audio
+            src={staticFile('audio/master-mix-scene01.mp3')}
+            volume={1.0}
+          />
+        </Sequence>
       )}
 
       {/* ======================================================== */}

@@ -24,9 +24,9 @@ export const Caption: React.FC<CaptionProps> = ({
     return null;
   }
 
-  // Smooth entrance & exit fade (deterministic)
-  const fadeInFrames = 6;
-  const fadeOutFrames = 6;
+  // Crisp phrase entrance & exit fade (3 frames / 0.1s)
+  const fadeInFrames = 3;
+  const fadeOutFrames = 3;
 
   const opacityIn = interpolate(
     frame,
@@ -54,7 +54,7 @@ export const Caption: React.FC<CaptionProps> = ({
         display: 'flex',
         justifyContent: 'center',
         alignItems: 'center',
-        padding: '0 120px',
+        padding: '0 80px',
         pointerEvents: 'none',
         zIndex: 60,
         opacity,
@@ -62,13 +62,13 @@ export const Caption: React.FC<CaptionProps> = ({
     >
       <div
         style={{
-          background: 'rgba(4, 8, 20, 0.88)',
+          background: 'rgba(4, 8, 20, 0.92)',
           border: `1px solid ${colors.border.subtle}`,
           borderRadius: 8,
           padding: '12px 28px',
           backdropFilter: 'blur(12px)',
           boxShadow: '0 8px 32px rgba(0, 0, 0, 0.65)',
-          maxWidth: 1100,
+          maxWidth: 1250,
           textAlign: 'center',
         }}
       >
