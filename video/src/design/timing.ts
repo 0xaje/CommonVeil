@@ -10,24 +10,34 @@ export const timing = {
     endFrame: 600,
     durationFrames: 600,
 
-    // Phase 1: 0:00 - 0:03 (Frames 0 - 90)
-    // Hidden dependency reveals deep in Linux supply chain
-    phase1Start: 0,
-    phase1End: 90,
+    // Phase 1: 0:00 - 0:02 (Frames 0 - 60)
+    // Black screen with "29 MARCH 2024"
+    dateStart: 0,
+    dateEnd: 60,
 
-    // Phase 2: 0:03 - 0:08 (Frames 90 - 240)
-    // Affected releases: CVE-2024-3094 warning state & advisory
-    phase2Start: 90,
-    phase2End: 240,
+    // Phase 2: 0:02 - 0:07 (Frames 60 - 210)
+    // Authentic advisory headline montage (CISA, tukaani.org, Red Hat)
+    advisoriesStart: 60,
+    advisoriesEnd: 210,
 
-    // Phase 3: 0:08 - 0:14 (Frames 240 - 420)
-    // Coordination problem: signal propagating to anonymous institutions
-    phase3Start: 240,
-    phase3End: 420,
+    // Phase 3: 0:07 - 0:11 (Frames 210 - 330)
+    // Visually isolate releases "5.6.0" and "5.6.1"
+    isolateReleasesStart: 210,
+    isolateReleasesEnd: 330,
 
-    // Phase 4: 0:14 - 0:20 (Frames 420 - 600)
-    // Privacy dilemma: two stark choices + resolution statement
-    phase4Start: 420,
-    phase4End: 600,
+    // Phase 4: 0:11 - 0:15 (Frames 330 - 450)
+    // "Which organizations were exposed?"
+    orgExposureStart: 330,
+    orgExposureEnd: 450,
+
+    // Phase 5: 0:15 - 0:18 (Frames 450 - 540)
+    // "Answering could reveal their internal software inventory."
+    inventoryRiskStart: 450,
+    inventoryRiskEnd: 540,
+
+    // Phase 6: 0:18 - 0:20 (Frames 540 - 600)
+    // "What if exposure could be proven without revealing the inventory?"
+    zkPivotStart: 540,
+    zkPivotEnd: 600,
   },
 } as const;
