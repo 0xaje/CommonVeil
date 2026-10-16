@@ -1,6 +1,6 @@
 # Midnight Buildathon submission draft
 
-> Status: working submission copy. Replace every bracketed placeholder with a verified public value before submitting. Do not invent a link, user, transaction, metric, or partnership.
+> Status: final submission copy with verified public repository, application, and demonstration links. Team registration and the signed-in AKINDO form must still be confirmed personally by the entrant.
 
 ## Project
 
@@ -121,6 +121,8 @@ npm run --silent scan:json > inventory-report.json
 
 The verification pipeline checks the required tools, compiles all four Compact circuits, runs the automated suites, type-checks the application, and builds the production bundle. Local automated tests are not presented as live-network evidence; Preprod claims are documented separately.
 
+Final submission preparation on 2026-10-16 completed a clean dependency install, 254 passing tests (6 MJS and 248 TypeScript), the production security pre-check, TypeScript validation, and the Vite production build. The four checked-in Compact artifact sets also passed exact manifest and SHA-256 integrity validation.
+
 ## Judge path
 
 1. Read the 30-second protocol view in the main README.
@@ -143,8 +145,8 @@ The verification pipeline checks the required tools, compiles all four Compact c
 ## Submission links
 
 - Repository: https://github.com/0xaje/CommonVeil
-- Demo application: **[PENDING — add verified public URL or state local-only]**
-- Demo video: **[PENDING — add public judge-accessible URL]**
+- Demo application: https://common-veil.vercel.app
+- Demo video: https://youtu.be/YMqgvKZ37mo
 - Pitch deck: https://github.com/0xaje/CommonVeil/blob/main/docs/pitch/CommonVeil-Midnight-Buildathon-Deck.pptx
 - Architecture: [architecture.md](architecture.md)
 - Evidence: [evidence.md](evidence.md)
@@ -156,8 +158,8 @@ The verification pipeline checks the required tools, compiles all four Compact c
 
 ## Final form checks
 
-- [ ] Repository topic `midnightntwrk` is visible.
-- [ ] Apache 2.0 license is visible.
+- [x] Repository topic `midnightntwrk` is visible.
+- [x] Apache 2.0 license is visible.
 - [ ] Deck and video permissions allow anonymous viewing.
 - [ ] Current-wave progress is pasted without unsupported claims.
 - [ ] Deadline and timezone are confirmed from the live signed-in form.
