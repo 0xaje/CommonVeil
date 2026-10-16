@@ -1,10 +1,26 @@
-# CommonVeil
+<h1 align="center">CommonVeil</h1>
 
-### Confidential vulnerability exposure coordination on Midnight
+<p align="center"><strong>Confidential vulnerability exposure coordination on Midnight</strong></p>
+
+<p align="center">
+  <a href="https://common-veil.vercel.app"><strong>Launch the application</strong></a>
+  ·
+  <a href="https://youtu.be/YMqgvKZ37mo"><strong>Watch the demo</strong></a>
+  ·
+  <a href="docs/demo-runbook.md"><strong>Judge runbook</strong></a>
+</p>
+
+<p align="center">
+  <a href="https://youtu.be/YMqgvKZ37mo">
+    <img src="https://img.youtube.com/vi/YMqgvKZ37mo/maxresdefault.jpg" width="860" alt="Watch the CommonVeil Buildathon demonstration on YouTube">
+  </a>
+</p>
+
+<p align="center"><a href="https://youtu.be/YMqgvKZ37mo"><strong>▶ Watch the 2:13 CommonVeil Buildathon demo</strong></a></p>
 
 CommonVeil lets an organization prove that a previously certified private software inventory contains a registrar-approved affected release—without publishing the organization’s identity, complete inventory, or exact installed version.
 
-Built with Compact and the Midnight JavaScript SDK for Midnight Preprod.
+Built with Compact and the Midnight JavaScript SDK for Midnight Preprod. Try the [public application](https://common-veil.vercel.app) or watch the [complete demonstration](https://youtu.be/YMqgvKZ37mo).
 
 [Protocol architecture](docs/architecture.md) · [Preprod evidence](docs/evidence.md) · [Judge runbook](docs/demo-runbook.md) · [Threat model](docs/threat-model.md) · [Milestone status](docs/status.md)
 
@@ -305,7 +321,7 @@ For assumptions, adversaries, residual risks, and non-goals, read the [threat mo
 - Extend the deliberately narrow exact-release policy to reviewed version-range semantics.
 - Add continuous end-to-end monitoring across wallet, prover, indexer, and network upgrades.
 - Complete an isolated genuinely affected-host Preprod run without weakening the existing honesty boundary.
-- Publish the final demonstration video and submission presentation.
+- Complete an independently governed production pilot with authenticated scanner evidence and monitored infrastructure.
 
 ## Documentation
 
@@ -317,6 +333,8 @@ For assumptions, adversaries, residual risks, and non-goals, read the [threat mo
 - [Judge demonstration runbook](docs/demo-runbook.md)
 - [Measured milestone history](docs/status.md)
 - [Buildathon pitch deck](docs/pitch/CommonVeil-Midnight-Buildathon-Deck.pptx)
+- [Buildathon demonstration video](https://youtu.be/YMqgvKZ37mo)
+- [Public CommonVeil application](https://common-veil.vercel.app)
 - [Buildathon submission draft](docs/buildathon-submission.md)
 - [Submission checklist](docs/submission-checklist.md)
 
