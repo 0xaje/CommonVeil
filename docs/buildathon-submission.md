@@ -1,6 +1,6 @@
 # Midnight Buildathon submission draft
 
-> Status: final submission copy with verified public repository, application, and demonstration links. Team registration and the signed-in AKINDO form must still be confirmed personally by the entrant.
+> Status: final submission copy with verified public repository, application, demonstration links, and solo-builder identity. The signed-in AKINDO form must still be reviewed and submitted personally by the entrant.
 
 ## Project
 
@@ -154,7 +154,8 @@ Final submission preparation on 2026-10-16 completed a clean dependency install,
 
 ## Team
 
-- **[PENDING — entrant name, role, and individually registered team members]**
+- **Aje Oluwaseun Isaac** — Founder, Product & Protocol Engineer, and Solo Builder
+- **Team composition:** Solo project; no additional team members.
 
 ## Final form checks
 
