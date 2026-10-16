@@ -1,32 +1,38 @@
 <h1 align="center">CommonVeil</h1>
 
-<p align="center"><strong>Confidential vulnerability exposure coordination on Midnight</strong></p>
+<p align="center"><strong>Prove vulnerability exposure. Keep software inventory private.</strong></p>
 
 <p align="center">
-  <a href="https://common-veil.vercel.app"><strong>Launch the application</strong></a>
-  ·
-  <a href="https://youtu.be/YMqgvKZ37mo"><strong>Watch the demo</strong></a>
-  ·
-  <a href="docs/demo-runbook.md"><strong>Judge runbook</strong></a>
+  CommonVeil coordinates confidential vulnerability reporting with Compact circuits on Midnight Preprod—without publishing an organization's identity, complete inventory, or exact installed version.
+</p>
+
+<p align="center">
+  <a href="https://common-veil.vercel.app"><img alt="Launch CommonVeil" src="https://img.shields.io/badge/LAUNCH_APP-LIVE-16a34a?style=for-the-badge&logo=vercel&logoColor=white"></a>
+  <a href="https://youtu.be/YMqgvKZ37mo"><img alt="Watch the demo" src="https://img.shields.io/badge/WATCH_DEMO-YOUTUBE-ff0000?style=for-the-badge&logo=youtube&logoColor=white"></a>
+  <a href="https://midnight.network"><img alt="Midnight Preprod" src="https://img.shields.io/badge/MIDNIGHT-PREPROD-6d5dfc?style=for-the-badge"></a>
+</p>
+
+<p align="center">
+  <img alt="Compact circuits" src="https://img.shields.io/badge/COMPACT-4_CIRCUITS-0891b2?style=flat-square">
+  <img alt="Tests passing" src="https://img.shields.io/badge/TESTS-254_PASSING-16a34a?style=flat-square">
+  <a href="LICENSE"><img alt="Apache 2.0 license" src="https://img.shields.io/badge/LICENSE-APACHE--2.0-d97706?style=flat-square"></a>
+</p>
+
+<p align="center">
+  <a href="docs/architecture.md">Architecture</a> ·
+  <a href="docs/evidence.md">Preprod evidence</a> ·
+  <a href="docs/threat-model.md">Threat model</a> ·
+  <a href="docs/demo-runbook.md">Judge runbook</a> ·
+  <a href="docs/buildathon-submission.md">Submission brief</a>
 </p>
 
 <p align="center">
   <a href="https://youtu.be/YMqgvKZ37mo">
-    <img src="https://img.youtube.com/vi/YMqgvKZ37mo/maxresdefault.jpg" width="860" alt="Watch the CommonVeil Buildathon demonstration on YouTube">
+    <img src="https://img.youtube.com/vi/YMqgvKZ37mo/maxresdefault.jpg" width="860" alt="Watch the 2:13 CommonVeil Buildathon demonstration on YouTube">
   </a>
 </p>
 
-<p align="center"><a href="https://youtu.be/YMqgvKZ37mo"><strong>▶ Watch the 2:13 CommonVeil Buildathon demo</strong></a></p>
-
-CommonVeil lets an organization prove that a previously certified private software inventory contains a registrar-approved affected release—without publishing the organization’s identity, complete inventory, or exact installed version.
-
-Built with Compact and the Midnight JavaScript SDK for Midnight Preprod. Try the [public application](https://common-veil.vercel.app) or watch the [complete demonstration](https://youtu.be/YMqgvKZ37mo).
-
-[Protocol architecture](docs/architecture.md) · [Preprod evidence](docs/evidence.md) · [Judge runbook](docs/demo-runbook.md) · [Threat model](docs/threat-model.md) · [Milestone status](docs/status.md)
-
 > **Operational status:** The multi-role workflow has been exercised on Midnight Preprod through deployment, Member admission, pre-policy inventory certification, policy activation, encrypted evidence handoff, and final private evaluation. A genuine host running XZ Utils 5.2.5 was correctly classified as outside the registered 5.6.0 affected-release policy, so CommonVeil requested no attestation transaction.
-
-![CommonVeil Member workspace showing the honest unaffected evaluation](docs/evidence/live-preprod-2026-10-14/04-unaffected-evaluation.png)
 
 ## The problem
 
@@ -162,6 +168,8 @@ Final public state recorded `accepted = 1`, one used nullifier, and no published
 | Result | Unaffected; no attestation requested or submitted |
 
 The negative result is intentional and important: CommonVeil did not change the observed version or manufacture a positive exposure claim for the demonstration. The [full evidence manifest](docs/evidence/live-preprod-2026-10-14/README.md) records what was captured and explicitly marks identifiers that were not retained.
+
+![CommonVeil Member workspace showing the honest unaffected evaluation](docs/evidence/live-preprod-2026-10-14/04-unaffected-evaluation.png)
 
 ## Technology
 
