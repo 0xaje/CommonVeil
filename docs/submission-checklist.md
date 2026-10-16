@@ -10,7 +10,7 @@ This checklist tracks the requirements shown on the official AKINDO Buildathon p
 - [x] At least one Compact contract compiles; CommonVeil contains four state-changing circuits.
 - [x] Midnight functionality is material to the product rather than a superficial integration.
 - [x] Midnight-related code is licensed under Apache License 2.0.
-- [ ] Add the required `midnightntwrk` GitHub repository topic.
+- [x] Add the required `midnightntwrk` GitHub repository topic.
 - [ ] Confirm every team member has registered individually.
 - [ ] Confirm the final team contains no more than five members.
 - [ ] Confirm eligibility and sanctions requirements for every entrant and connected wallet.
@@ -23,8 +23,8 @@ This checklist tracks the requirements shown on the official AKINDO Buildathon p
 - [x] Genuine Midnight Preprod evidence separated from local tests.
 - [x] Current-wave progress narrative: [Buildathon submission draft](buildathon-submission.md).
 - [x] Final slide deck is stored publicly in `docs/pitch/`; perform the final human content review before submission.
-- [ ] Final demo/video pitch with a public judge-accessible URL.
-- [ ] Public application URL, if the team can host the wallet-enabled build safely.
+- [x] Final demo/video pitch with a public judge-accessible URL: https://youtu.be/YMqgvKZ37mo.
+- [x] Public application URL: https://common-veil.vercel.app.
 - [ ] Final AKINDO project description and current-wave progress fields.
 - [ ] Final team names and roles.
 - [ ] Submit personally through AKINDO; do not use automated entry tools.
@@ -32,12 +32,12 @@ This checklist tracks the requirements shown on the official AKINDO Buildathon p
 
 ## Repository verification
 
-- [ ] Run `npm ci` from a clean checkout.
+- [x] Run `npm ci` from a clean checkout.
 - [ ] Run `npm run verify`.
-- [ ] Run `git diff --check`.
-- [ ] Confirm no `.env`, Blockfrost token, wallet secret, passphrase, private role package, or private inventory file is tracked.
+- [x] Run `git diff --check`.
+- [x] Confirm no `.env`, Blockfrost token, wallet secret, passphrase, private role package, or private inventory file is tracked.
 - [ ] Confirm the README’s deck, video, and application links resolve without sign-in.
-- [ ] Confirm the repository topic `midnightntwrk` is visible publicly.
+- [x] Confirm the repository topic `midnightntwrk` is visible publicly.
 
 ## Genuine evidence review
 
@@ -89,14 +89,14 @@ This checklist tracks the requirements shown on the official AKINDO Buildathon p
 
 - [x] Compact behavior, packages, providers, scanner, and UI state machines have regression coverage.
 - [x] Genuine live evidence is not substituted with mocks.
-- [ ] Record the final clean verification output and exact test count used in the submission.
+- [x] Record the final clean verification output and exact test count used in the submission: 254 tests passed (6 MJS + 248 TypeScript), followed by a successful production build on 2026-10-16.
 - [ ] Record the final application version/commit SHA in the deck and video description.
 
 ### Communication and marketing
 
 - [x] Professional Midnight-focused README.
 - [x] Final pitch deck created and stored in the public repository.
-- [ ] Final demo video.
+- [x] Final demo video.
 - [ ] One public educational post explaining the privacy problem and Midnight design.
 - [ ] Optional Midnight community/Discord progress post that links the public repository.
 
